@@ -5,6 +5,8 @@
 #include <ESPmDNS.h>
 #include <ESP32Ping.h>
 #include <HTTPClient.h>
+#include <Preferences.h>
+#include <esp_mac.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <WiFiUdp.h>
@@ -24,9 +26,8 @@ constexpr unsigned long kBooshFailsafeTimeoutMs = 5000;
 constexpr unsigned long kBooshFailsafeNoteMs = 3000;
 constexpr unsigned long kPingTimeoutMs = 5000;
 constexpr unsigned long kDisplayCycleMs = 3000;
-constexpr const char *kPylonId = "PYLON0";
-constexpr const char *kPylonDescription = "Center striker";
-constexpr const char *kPylonMdnsHost = "PYLON0";
+constexpr const char *kPylonIdDefaultPrefix = "PYLON";
+constexpr const char *kPylonDescriptionDefault = "unspecified";
 constexpr const char *kRegistryBaseUrlPrimary = "http://rpiboosh.local:5000";
 constexpr const char *kRegistryBaseUrlFallback = "";
 constexpr const char *kRegistryAnnouncePath = "/api/pylons/announce";
@@ -49,6 +50,15 @@ bool registry_announced = false;
 unsigned long registry_last_success_ms = 0;
 unsigned long registry_next_attempt_ms = 0;
 uint8_t registry_consecutive_failures = 0;
+String pylon_id;
+String pylon_mdns_host;
+String pylon_description;
+String serial_cli_line;
+
+constexpr const char *kPrefsNamespace = "pylon_cfg";
+constexpr const char *kPrefsKeyId = "id";
+constexpr const char *kPrefsKeyHost = "host";
+constexpr const char *kPrefsKeyDesc = "desc";
 
 void SetDisplayInverted(bool inverted) {
   if (display_inverted == inverted) {
@@ -100,6 +110,284 @@ String JsonEscape(const String &input) {
   return out;
 }
 
+String ToLowerAscii(String value) {
+  for (size_t i = 0; i < value.length(); ++i) {
+    const char c = value.charAt(i);
+    if (c >= 'A' && c <= 'Z') {
+      value.setCharAt(i, static_cast<char>(c + ('a' - 'A')));
+    }
+  }
+  return value;
+}
+
+String BuildDefaultPylonId() {
+  uint8_t mac[6] = {0, 0, 0, 0, 0, 0};
+  esp_read_mac(mac, ESP_MAC_WIFI_STA);
+  char id[16];
+  // Use LSBs of STA Wi-Fi MAC for deterministic per-device default ID.
+  snprintf(id, sizeof(id), "%s%02X%02X", kPylonIdDefaultPrefix, mac[4], mac[5]);
+  return String(id);
+}
+
+String NormalizeMdnsHost(String host) {
+  host.trim();
+  if (host.length() == 0) {
+    return host;
+  }
+  String lower = ToLowerAscii(host);
+  if (lower.endsWith(".local")) {
+    host = host.substring(0, host.length() - 6);
+  }
+  host.trim();
+  return host;
+}
+
+bool IsValidMdnsHost(const String &host) {
+  if (host.length() == 0 || host.length() > 63) {
+    return false;
+  }
+  if (host.charAt(0) == '-' || host.charAt(host.length() - 1) == '-') {
+    return false;
+  }
+  for (size_t i = 0; i < host.length(); ++i) {
+    const char c = host.charAt(i);
+    const bool is_alpha = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+    const bool is_digit = (c >= '0' && c <= '9');
+    if (!(is_alpha || is_digit || c == '-')) {
+      return false;
+    }
+  }
+  return true;
+}
+
+String NormalizePylonId(String id) {
+  id.trim();
+  if (id.length() > 64) {
+    id = id.substring(0, 64);
+  }
+  return id;
+}
+
+bool SavePylonConfig() {
+  Preferences prefs;
+  if (!prefs.begin(kPrefsNamespace, false)) {
+    Serial.println("[CFG] failed to open Preferences namespace for write");
+    return false;
+  }
+  prefs.putString(kPrefsKeyId, pylon_id);
+  prefs.putString(kPrefsKeyHost, pylon_mdns_host);
+  prefs.putString(kPrefsKeyDesc, pylon_description);
+  prefs.end();
+  return true;
+}
+
+bool ClearPylonConfigNvs() {
+  Preferences prefs;
+  if (!prefs.begin(kPrefsNamespace, false)) {
+    Serial.println("[CFG] failed to open Preferences namespace for clear");
+    return false;
+  }
+  prefs.clear();
+  prefs.end();
+  Serial.println("[CFG] NVS namespace cleared.");
+  return true;
+}
+
+void ScheduleRegistryRefreshNow() {
+  registry_announced = false;
+  registry_next_attempt_ms = millis();
+  registry_consecutive_failures = 0;
+}
+
+void PrintPylonConfig() {
+  Serial.println("[CFG] current values:");
+  Serial.print("  id: ");
+  Serial.println(pylon_id);
+  Serial.print("  host: ");
+  Serial.println(pylon_mdns_host);
+  Serial.print("  desc: ");
+  Serial.println(pylon_description);
+}
+
+void LoadPylonConfig() {
+  Preferences prefs;
+  if (!prefs.begin(kPrefsNamespace, false)) {
+    Serial.println("[CFG] failed to open Preferences namespace");
+    pylon_id = BuildDefaultPylonId();
+    pylon_mdns_host = pylon_id;
+    pylon_description = kPylonDescriptionDefault;
+    return;
+  }
+
+  String stored_id = NormalizePylonId(prefs.getString(kPrefsKeyId, ""));
+  String stored_host = NormalizeMdnsHost(prefs.getString(kPrefsKeyHost, ""));
+  String stored_desc = prefs.getString(kPrefsKeyDesc, "");
+  stored_desc.trim();
+
+  const bool unprogrammed = stored_id.length() == 0;
+  if (unprogrammed) {
+    pylon_id = BuildDefaultPylonId();
+    pylon_mdns_host = pylon_id;
+    pylon_description = kPylonDescriptionDefault;
+    prefs.putString(kPrefsKeyId, pylon_id);
+    prefs.putString(kPrefsKeyHost, pylon_mdns_host);
+    prefs.putString(kPrefsKeyDesc, pylon_description);
+    Serial.println("[CFG] Preferences unprogrammed, wrote defaults.");
+  } else {
+    pylon_id = stored_id;
+    if (stored_host.length() == 0) {
+      stored_host = pylon_id;
+    }
+    if (!IsValidMdnsHost(stored_host)) {
+      stored_host = pylon_id;
+      Serial.println("[CFG] Stored host invalid, using ID as host.");
+    }
+    pylon_mdns_host = stored_host;
+    pylon_description = stored_desc.length() > 0 ? stored_desc : String(kPylonDescriptionDefault);
+  }
+
+  prefs.end();
+  PrintPylonConfig();
+}
+
+void RestartMdnsIfConnected() {
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+  MDNS.end();
+  if (MDNS.begin(pylon_mdns_host.c_str())) {
+    Serial.print("[CFG] mDNS updated: ");
+    Serial.print(pylon_mdns_host);
+    Serial.println(".local");
+  } else {
+    Serial.println("[CFG] mDNS update failed.");
+  }
+}
+
+void PrintCliHelp() {
+  Serial.println("[CLI] commands:");
+  Serial.println("  help");
+  Serial.println("  show");
+  Serial.println("  set id <value>");
+  Serial.println("  set host <value>");
+  Serial.println("  set desc <value>");
+  Serial.println("  set node <value>   (sets both id and host)");
+  Serial.println("  clear nvs          (erase saved id/host/desc)");
+}
+
+void HandleCliCommand(const String &input_line) {
+  String line = input_line;
+  line.trim();
+  if (line.length() == 0) {
+    return;
+  }
+
+  if (line.equalsIgnoreCase("help")) {
+    PrintCliHelp();
+    return;
+  }
+  if (line.equalsIgnoreCase("show")) {
+    PrintPylonConfig();
+    return;
+  }
+  if (line.equalsIgnoreCase("clear nvs")) {
+    if (!ClearPylonConfigNvs()) {
+      return;
+    }
+    LoadPylonConfig();
+    RestartMdnsIfConnected();
+    ScheduleRegistryRefreshNow();
+    return;
+  }
+  if (!line.startsWith("set ")) {
+    Serial.println("[CLI] unknown command. type 'help'");
+    return;
+  }
+
+  String rest = line.substring(4);
+  rest.trim();
+  const int sep = rest.indexOf(' ');
+  if (sep <= 0) {
+    Serial.println("[CLI] invalid set command");
+    return;
+  }
+  String field = ToLowerAscii(rest.substring(0, sep));
+  String value = rest.substring(sep + 1);
+  value.trim();
+  if (value.length() == 0) {
+    Serial.println("[CLI] value cannot be empty");
+    return;
+  }
+
+  bool changed = false;
+  if (field == "id") {
+    const String new_id = NormalizePylonId(value);
+    if (new_id.length() == 0) {
+      Serial.println("[CLI] invalid id");
+      return;
+    }
+    pylon_id = new_id;
+    changed = true;
+    Serial.print("[CLI] id set: ");
+    Serial.println(pylon_id);
+  } else if (field == "host" || field == "mdns") {
+    const String new_host = NormalizeMdnsHost(value);
+    if (!IsValidMdnsHost(new_host)) {
+      Serial.println("[CLI] invalid host; allowed: letters, digits, '-' (1..63 chars)");
+      return;
+    }
+    pylon_mdns_host = new_host;
+    changed = true;
+    Serial.print("[CLI] host set: ");
+    Serial.println(pylon_mdns_host);
+  } else if (field == "desc" || field == "description") {
+    pylon_description = value;
+    changed = true;
+    Serial.print("[CLI] desc set: ");
+    Serial.println(pylon_description);
+  } else if (field == "node") {
+    const String new_id = NormalizePylonId(value);
+    const String new_host = NormalizeMdnsHost(value);
+    if (new_id.length() == 0 || !IsValidMdnsHost(new_host)) {
+      Serial.println("[CLI] invalid node value");
+      return;
+    }
+    pylon_id = new_id;
+    pylon_mdns_host = new_host;
+    changed = true;
+    Serial.print("[CLI] node set (id+host): ");
+    Serial.println(pylon_id);
+  } else {
+    Serial.println("[CLI] unknown set field. use id|host|desc|node");
+    return;
+  }
+
+  if (!changed) {
+    return;
+  }
+  if (!SavePylonConfig()) {
+    Serial.println("[CFG] failed to persist config");
+    return;
+  }
+  RestartMdnsIfConnected();
+  ScheduleRegistryRefreshNow();
+  PrintPylonConfig();
+}
+
+void PollSerialCli() {
+  while (Serial.available() > 0) {
+    const char c = static_cast<char>(Serial.read());
+    if (c == '\r' || c == '\n') {
+      HandleCliCommand(serial_cli_line);
+      serial_cli_line = "";
+      continue;
+    }
+    if (serial_cli_line.length() < 192) {
+      serial_cli_line += c;
+    }
+  }
+}
+
 unsigned long RegistryBackoffMs(uint8_t failureCount) {
   if (failureCount == 0) {
     return 0;
@@ -113,13 +401,13 @@ unsigned long RegistryBackoffMs(uint8_t failureCount) {
 }
 
 String BuildRegistryPayload() {
-  const String hostname = String(kPylonMdnsHost) + ".local";
+  const String hostname = pylon_mdns_host + ".local";
   const String ip = WiFi.localIP().toString();
   String payload;
   payload.reserve(320);
   payload += "{";
-  payload += "\"pylon_id\":\"" + JsonEscape(String(kPylonId)) + "\",";
-  payload += "\"description\":\"" + JsonEscape(String(kPylonDescription)) + "\",";
+  payload += "\"pylon_id\":\"" + JsonEscape(pylon_id) + "\",";
+  payload += "\"description\":\"" + JsonEscape(pylon_description) + "\",";
   payload += "\"hostname\":\"" + JsonEscape(hostname) + "\",";
   payload += "\"ip\":\"" + JsonEscape(ip) + "\",";
   payload += "\"osc_port\":" + String(kOscPort) + ",";
@@ -373,6 +661,20 @@ void ShowWifiMetricsPage(uint8_t page, unsigned long connected_since_ms, uint8_t
   display.display();
 }
 
+void ShowNodeConfigPage() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println("NODE CONFIG");
+  display.print("ID: ");
+  display.println(TrimForDisplay(pylon_id, 14));
+  display.print("DESC:");
+  display.setCursor(0, 24);
+  display.println(TrimForDisplay(pylon_description, 21));
+  display.display();
+}
+
 void ApplyBooshState(float v0, float v1, float v2) {
   const float kOnThreshold = 0.5f;
   const float kOffThreshold = 0.5f;
@@ -394,6 +696,9 @@ void setup() {
   while (!Serial && (millis() - serialStart) < 2000) {
     delay(10);
   }
+  serial_cli_line.reserve(192);
+  LoadPylonConfig();
+  PrintCliHelp();
 
   Wire.begin(kI2cSda, kI2cScl);
   if (!display.begin(SSD1306_SWITCHCAPVCC, kOledAddress)) {
@@ -456,9 +761,9 @@ void setup() {
     Serial.println(WiFi.localIP());
     ShowStatus("WiFi connected", WiFi.localIP().toString());
 
-    if (MDNS.begin(kPylonMdnsHost)) {
+    if (MDNS.begin(pylon_mdns_host.c_str())) {
       Serial.print("mDNS: ");
-      Serial.print(kPylonMdnsHost);
+      Serial.print(pylon_mdns_host);
       Serial.println(".local");
     } else {
       Serial.println("mDNS init failed.");
@@ -602,6 +907,8 @@ void loop() {
   static unsigned long lastDisplayMs = 0;
   static uint8_t displayPage = 0;
 
+  PollSerialCli();
+
   if (WiFi.status() != WL_CONNECTED) {
     if (wasConnected) {
       wasConnected = false;
@@ -687,15 +994,17 @@ void loop() {
       lastDisplayMs = now;
     } else if (now - lastDisplayMs >= kDisplayCycleMs) {
       lastDisplayMs = now;
-      displayPage = static_cast<uint8_t>((displayPage + 1) % 3);
+      displayPage = static_cast<uint8_t>((displayPage + 1) % 4);
     }
 
     if (displayPage == 0) {
       ShowPingStats("RPIBOOSH", stats, lastOk, lastPingSuccessMs, now);
     } else if (displayPage == 1) {
       ShowWifiMetricsPage(0, wifi_connected_since_ms, last_disconnect_reason);
-    } else {
+    } else if (displayPage == 2) {
       ShowWifiMetricsPage(1, wifi_connected_since_ms, last_disconnect_reason);
+    } else {
+      ShowNodeConfigPage();
     }
   }
 

@@ -1,0 +1,17 @@
+Windows Registry Editor Version 5.00
+
+[HKEY_CURRENT_USER\Software\SimonTatham\PuTTY\Sessions\pylons_com16]
+"Present"=dword:00000001
+"Protocol"="serial"
+"HostName"=""
+"SerialLine"="COM16"
+"SerialSpeed"=dword:0001c200
+"SerialDataBits"=dword:00000008
+"SerialStopHalfbits"=dword:00000002
+"SerialParity"=dword:00000000
+"SerialFlowControl"=dword:00000000
+"LocalEcho"=dword:00000001
+"LocalEdit"=dword:00000000
+"LFImpliesCR"=dword:00000001
+"CRImpliesLF"=dword:00000000
+"WinTitle"="PYLON COM16 Monitor"
