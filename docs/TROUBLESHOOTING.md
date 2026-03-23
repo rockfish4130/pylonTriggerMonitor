@@ -29,4 +29,12 @@
 ## BooshMain Turns Off Unexpectedly
 - The firmware has a 5 second failsafe after ON if OFF is not received.
 - Look for the Serial log: `Failsafe: BooshMain timeout -> forcing OFF.`
-*** End Patch
+
+## Registry Announce / Heartbeat Failing
+- Look for serial logs prefixed with `[REG]`.
+- Confirm RPI endpoint is reachable: `http://rpiboosh.local:5000`.
+- If mDNS does not resolve `rpiboosh.local`, set `kRegistryBaseUrlFallback` in `src/main.cpp` to a fixed IP URL.
+- Confirm RPI service path availability:
+  - `POST /api/pylons/announce`
+  - `POST /api/pylons/heartbeat`
+- Verify Wi-Fi remains connected long enough for retries.

@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <ESP32Ping.h>
+#include <HTTPClient.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <WiFiUdp.h>
@@ -23,6 +24,17 @@ constexpr unsigned long kBooshFailsafeTimeoutMs = 5000;
 constexpr unsigned long kBooshFailsafeNoteMs = 3000;
 constexpr unsigned long kPingTimeoutMs = 5000;
 constexpr unsigned long kDisplayCycleMs = 3000;
+constexpr const char *kPylonId = "PYLON0";
+constexpr const char *kPylonDescription = "Center striker";
+constexpr const char *kPylonMdnsHost = "PYLON0";
+constexpr const char *kRegistryBaseUrlPrimary = "http://rpiboosh.local:5000";
+constexpr const char *kRegistryBaseUrlFallback = "";
+constexpr const char *kRegistryAnnouncePath = "/api/pylons/announce";
+constexpr const char *kRegistryHeartbeatPath = "/api/pylons/heartbeat";
+constexpr uint16_t kRegistryTtlSec = 30;
+constexpr unsigned long kRegistryHeartbeatIntervalMs = 10000;
+constexpr uint16_t kRegistryHttpTimeoutMs = 800;
+constexpr const char *kFirmwareVersion = "pylons " __DATE__ " " __TIME__;
 
 Adafruit_SSD1306 display(kScreenWidth, kScreenHeight, &Wire, kOledReset);
 WiFiUDP oscUdp;
@@ -33,6 +45,10 @@ unsigned long boosh_failsafe_note_until_ms = 0;
 unsigned long wifi_connected_since_ms = 0;
 uint8_t last_disconnect_reason = WIFI_REASON_UNSPECIFIED;
 bool wifi_has_ip = false;
+bool registry_announced = false;
+unsigned long registry_last_success_ms = 0;
+unsigned long registry_next_attempt_ms = 0;
+uint8_t registry_consecutive_failures = 0;
 
 void SetDisplayInverted(bool inverted) {
   if (display_inverted == inverted) {
@@ -59,6 +75,136 @@ String TrimForDisplay(const String &input, size_t maxChars) {
     return input;
   }
   return input.substring(0, maxChars);
+}
+
+String JsonEscape(const String &input) {
+  String out;
+  out.reserve(input.length() + 8);
+  for (size_t i = 0; i < input.length(); ++i) {
+    const char c = input.charAt(i);
+    if (c == '\\' || c == '"') {
+      out += '\\';
+      out += c;
+      continue;
+    }
+    if (c == '\n') {
+      out += "\\n";
+      continue;
+    }
+    if (c == '\r') {
+      out += "\\r";
+      continue;
+    }
+    out += c;
+  }
+  return out;
+}
+
+unsigned long RegistryBackoffMs(uint8_t failureCount) {
+  if (failureCount == 0) {
+    return 0;
+  }
+  uint8_t shift = failureCount > 5 ? 5 : static_cast<uint8_t>(failureCount - 1);
+  unsigned long backoff = 1000UL << shift;  // 1s,2s,4s,8s,16s,32s
+  if (backoff > 30000UL) {
+    backoff = 30000UL;
+  }
+  return backoff;
+}
+
+String BuildRegistryPayload() {
+  const String hostname = String(kPylonMdnsHost) + ".local";
+  const String ip = WiFi.localIP().toString();
+  String payload;
+  payload.reserve(320);
+  payload += "{";
+  payload += "\"pylon_id\":\"" + JsonEscape(String(kPylonId)) + "\",";
+  payload += "\"description\":\"" + JsonEscape(String(kPylonDescription)) + "\",";
+  payload += "\"hostname\":\"" + JsonEscape(hostname) + "\",";
+  payload += "\"ip\":\"" + JsonEscape(ip) + "\",";
+  payload += "\"osc_port\":" + String(kOscPort) + ",";
+  payload += "\"osc_paths\":[\"/rpiboosh/BooshMain\"],";
+  payload += "\"roles\":[\"boosh_main\"],";
+  payload += "\"fw_version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
+  payload += "\"ttl_sec\":" + String(kRegistryTtlSec);
+  payload += "}";
+  return payload;
+}
+
+bool PostRegistryToBase(const char *baseUrl, const char *path, const String &payload, const char *kind) {
+  if (baseUrl == nullptr || baseUrl[0] == '\0') {
+    return false;
+  }
+  WiFiClient client;
+  HTTPClient http;
+  const String url = String(baseUrl) + String(path);
+  if (!http.begin(client, url)) {
+    Serial.print("[REG] begin failed: ");
+    Serial.println(url);
+    return false;
+  }
+  http.setConnectTimeout(kRegistryHttpTimeoutMs);
+  http.setTimeout(kRegistryHttpTimeoutMs);
+  http.addHeader("Content-Type", "application/json");
+  const int statusCode = http.POST(payload);
+  const bool ok = statusCode >= 200 && statusCode < 300;
+  Serial.print("[REG] ");
+  Serial.print(kind);
+  Serial.print(" ");
+  Serial.print(url);
+  Serial.print(" -> ");
+  Serial.println(statusCode);
+  http.end();
+  return ok;
+}
+
+bool PostRegistry(bool heartbeat) {
+  if (WiFi.status() != WL_CONNECTED) {
+    return false;
+  }
+  const char *path = heartbeat ? kRegistryHeartbeatPath : kRegistryAnnouncePath;
+  const char *kind = heartbeat ? "heartbeat" : "announce";
+  const String payload = BuildRegistryPayload();
+
+  if (PostRegistryToBase(kRegistryBaseUrlPrimary, path, payload, kind)) {
+    return true;
+  }
+  if (kRegistryBaseUrlFallback[0] != '\0') {
+    if (PostRegistryToBase(kRegistryBaseUrlFallback, path, payload, kind)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void HandleRegistry(unsigned long now) {
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+  const bool shouldAnnounce = !registry_announced;
+  const bool shouldHeartbeat =
+      registry_announced && (now - registry_last_success_ms >= kRegistryHeartbeatIntervalMs);
+  if (!shouldAnnounce && !shouldHeartbeat) {
+    return;
+  }
+  if (now < registry_next_attempt_ms) {
+    return;
+  }
+  const bool ok = PostRegistry(!shouldAnnounce);
+  if (ok) {
+    registry_announced = true;
+    registry_last_success_ms = now;
+    registry_next_attempt_ms = now + kRegistryHeartbeatIntervalMs;
+    registry_consecutive_failures = 0;
+    Serial.println("[REG] post success");
+  } else {
+    registry_consecutive_failures = static_cast<uint8_t>(registry_consecutive_failures + 1);
+    const unsigned long backoffMs = RegistryBackoffMs(registry_consecutive_failures);
+    registry_next_attempt_ms = now + backoffMs;
+    Serial.print("[REG] post failed, retry in ");
+    Serial.print(backoffMs);
+    Serial.println("ms");
+  }
 }
 
 const char *WifiDisconnectReasonToString(uint8_t reason) {
@@ -310,8 +456,10 @@ void setup() {
     Serial.println(WiFi.localIP());
     ShowStatus("WiFi connected", WiFi.localIP().toString());
 
-    if (MDNS.begin("PYLON0")) {
-      Serial.println("mDNS: PYLON0.local");
+    if (MDNS.begin(kPylonMdnsHost)) {
+      Serial.print("mDNS: ");
+      Serial.print(kPylonMdnsHost);
+      Serial.println(".local");
     } else {
       Serial.println("mDNS init failed.");
     }
@@ -443,6 +591,7 @@ void PollOsc() {
 void loop() {
   static const char *kTargetHost = "RPIBOOSH";
   static const char *kTargetHostMdns = "RPIBOOSH.local";
+  static bool wasConnected = false;
   static IPAddress targetIp;
   static bool hasIp = false;
   static unsigned long lastResolveMs = 0;
@@ -454,6 +603,14 @@ void loop() {
   static uint8_t displayPage = 0;
 
   if (WiFi.status() != WL_CONNECTED) {
+    if (wasConnected) {
+      wasConnected = false;
+      hasIp = false;
+      registry_announced = false;
+      registry_next_attempt_ms = 0;
+      registry_consecutive_failures = 0;
+      Serial.println("WiFi disconnected: registry state reset.");
+    }
     ShowStatus("WiFi lost", "Reconnecting");
     delay(1000);
     return;
@@ -461,6 +618,14 @@ void loop() {
 
   PollOsc();
   const unsigned long now = millis();
+  if (!wasConnected) {
+    wasConnected = true;
+    registry_announced = false;
+    registry_next_attempt_ms = now;
+    registry_consecutive_failures = 0;
+    Serial.println("WiFi connected: scheduling registry announce.");
+  }
+  HandleRegistry(now);
   if (!wifi_has_ip && wifi_connected_since_ms == 0) {
     wifi_connected_since_ms = now;
   }

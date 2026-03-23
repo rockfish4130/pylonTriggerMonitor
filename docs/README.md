@@ -18,6 +18,7 @@ At runtime the firmware:
 6. Applies a failsafe: if ON is received and OFF is not seen within 5 seconds, it forces OFF.
 7. Cycles OLED pages with Wi-Fi debug metrics and ping timeout status.
 8. Tracks Wi-Fi disconnect reason and uptime since last connect for field debugging.
+9. Announces this node to RPIBOOSH PYLON registry API and sends periodic heartbeats.
 
 ## Requirements
 - PlatformIO (VS Code extension or CLI)
@@ -56,6 +57,26 @@ Prototype proxy behavior:
 
 If ON is received and OFF does not arrive within 5 seconds, the device forces OFF and logs a failsafe note to Serial and the OLED.
 
+## PYLON Registry API
+The device posts presence metadata to RPIBOOSH:
+- `POST /api/pylons/announce` after Wi-Fi connect/reconnect
+- `POST /api/pylons/heartbeat` every 10 seconds
+
+Default metadata includes:
+- `pylon_id` (stable string)
+- `description` (human-readable string)
+- `hostname` (`<mdns>.local`)
+- `ip`
+- `osc_port` (`8000`)
+- `osc_paths` (`/rpiboosh/BooshMain`)
+- `roles` (`boosh_main`)
+- `fw_version`
+- `ttl_sec` (`30`)
+
+See:
+- `docs/PYLON_REGISTRY.md`
+
 ## Docs
 - `docs/SETUP.md`: Toolchain, build, and flashing.
 - `docs/DISPLAY.md`: OLED details and usage.
+- `docs/PYLON_REGISTRY.md`: Registry API integration details.
