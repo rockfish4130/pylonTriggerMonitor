@@ -1,0 +1,208 @@
+(kicad_sch
+	(version 20231120)
+	(generator "eeschema")
+	(generator_version "8.0")
+	(uuid "f3653ac0-a28a-4ee8-bcf5-236139001455")
+	(paper "A4")
+	(title_block
+		(title "BOOSH REMOTE RECEIVER")
+		(date "2026-03-10")
+		(company "MSW")
+	)
+	(lib_symbols)
+	(sheet
+		(at 44.45 92.71)
+		(size 12.7 3.81)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "6657731a-46b5-42dc-8611-bac46a2b6e5c")
+		(property "Sheetname" "POWER"
+			(at 44.45 91.9984 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "POWER.kicad_sch"
+			(at 44.45 97.1046 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "boosh_remote_reciver"
+				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455"
+					(page "6")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 44.45 50.8)
+		(size 12.7 3.81)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "91617d0d-6f07-4f47-baaa-678bb3c8f5f7")
+		(property "Sheetname" "ESP32_MCU"
+			(at 44.45 50.0884 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "ESP32_MCU.kicad_sch"
+			(at 44.45 55.1946 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "boosh_remote_reciver"
+				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455"
+					(page "2")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 44.45 60.96)
+		(size 12.7 3.81)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "a54607f4-b6e0-4e44-9873-c16ace68b07d")
+		(property "Sheetname" "PROX_SENSE_LEVEL_SHIFT"
+			(at 44.45 60.2484 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "PROX_SENSE_LEVEL_SHIFT.kicad_sch"
+			(at 44.45 65.3546 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "boosh_remote_reciver"
+				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455"
+					(page "3")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 44.45 82.55)
+		(size 12.7 3.81)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "abf3116a-5807-45c2-900d-76b411163732")
+		(property "Sheetname" "BOOSH_TRIGGER"
+			(at 44.45 81.8384 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "BOOSH_TRIGGER.kicad_sch"
+			(at 44.45 86.9446 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "boosh_remote_reciver"
+				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455"
+					(page "5")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 44.45 102.87)
+		(size 12.7 3.81)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "d08cb7b6-6190-46a9-b97e-3e5f70878a10")
+		(property "Sheetname" "CONNECTORS"
+			(at 44.45 102.1584 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "CONNECTORS.kicad_sch"
+			(at 44.45 107.2646 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "boosh_remote_reciver"
+				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455"
+					(page "7")
+				)
+			)
+		)
+	)
+	(sheet_instances
+		(path "/"
+			(page "1")
+		)
+	)
+)
