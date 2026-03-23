@@ -11,11 +11,13 @@ At boot the firmware:
 
 At runtime the firmware:
 1. Listens for OSC on UDP port `8000` at `/rpiboosh/BooshMain`.
-2. Inverts the OLED display when BooshMain is ON.
-3. Pings `RPIBOOSH` once per second and shows ping status/stats on the OLED.
-4. Applies a failsafe: if ON is received and OFF is not seen within 5 seconds, it forces OFF.
-5. Cycles OLED pages with Wi-Fi debug metrics and ping timeout status.
-6. Tracks Wi-Fi disconnect reason and uptime since last connect for field debugging.
+2. Uses OLED inversion as a prototype proxy for the boosher solenoid state.
+3. Inverted display means solenoid open / fire ON.
+4. Normal display means solenoid closed / fire OFF.
+5. Pings `RPIBOOSH` once per second and shows ping status/stats on the OLED.
+6. Applies a failsafe: if ON is received and OFF is not seen within 5 seconds, it forces OFF.
+7. Cycles OLED pages with Wi-Fi debug metrics and ping timeout status.
+8. Tracks Wi-Fi disconnect reason and uptime since last connect for field debugging.
 
 ## Requirements
 - PlatformIO (VS Code extension or CLI)
@@ -47,6 +49,10 @@ pio device monitor
 The device listens for OSC messages on `/rpiboosh/BooshMain` with 3 float arguments.
 - ON: `[1.0, 0.0, 0.0]`
 - OFF: `[0.0, 0.0, 0.0]`
+
+Prototype proxy behavior:
+- Inverted display = solenoid open / fire ON
+- Normal display = solenoid closed / fire OFF
 
 If ON is received and OFF does not arrive within 5 seconds, the device forces OFF and logs a failsafe note to Serial and the OLED.
 

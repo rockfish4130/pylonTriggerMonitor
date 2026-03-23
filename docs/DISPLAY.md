@@ -47,5 +47,10 @@ Wi-Fi debug page B:
 - Wi-Fi pages include `UP` (seconds since connected) and `RSN` (last disconnect reason).
 
 ## BooshMain Visuals
+Display inversion is a prototype proxy for triggering the boosher solenoid.
+
 When OSC `/rpiboosh/BooshMain` is ON (`[1, 0, 0]`), the OLED is inverted.
+- Inverted display = solenoid open / fire ON
+
 When OFF (`[0, 0, 0]`), the OLED returns to normal.
+- Normal display = solenoid closed / fire OFF
