@@ -26,6 +26,7 @@ constexpr unsigned long kBooshFailsafeTimeoutMs = 5000;
 constexpr unsigned long kBooshFailsafeNoteMs = 3000;
 constexpr unsigned long kPingTimeoutMs = 5000;
 constexpr unsigned long kDisplayCycleMs = 3000;
+constexpr const char *kPingTargetHost = "RPIBOOSH";
 constexpr const char *kPylonIdDefaultPrefix = "PYLON";
 constexpr const char *kPylonDescriptionDefault = "unspecified";
 constexpr const char *kRegistryBaseUrlPrimary = "http://rpiboosh.local:5000";
@@ -54,6 +55,13 @@ String pylon_id;
 String pylon_mdns_host;
 String pylon_description;
 String serial_cli_line;
+bool telemetry_ping_last_ok = false;
+bool telemetry_ping_has_data = false;
+uint32_t telemetry_ping_last_ms = 0;
+uint32_t telemetry_ping_min_ms = 0;
+uint32_t telemetry_ping_max_ms = 0;
+uint32_t telemetry_ping_avg_ms = 0;
+uint32_t telemetry_ping_count = 0;
 
 constexpr const char *kPrefsNamespace = "pylon_cfg";
 constexpr const char *kPrefsKeyId = "id";
@@ -403,8 +411,9 @@ unsigned long RegistryBackoffMs(uint8_t failureCount) {
 String BuildRegistryPayload() {
   const String hostname = pylon_mdns_host + ".local";
   const String ip = WiFi.localIP().toString();
+  const long wifi_rssi_dbm = WiFi.RSSI();
   String payload;
-  payload.reserve(320);
+  payload.reserve(520);
   payload += "{";
   payload += "\"pylon_id\":\"" + JsonEscape(pylon_id) + "\",";
   payload += "\"description\":\"" + JsonEscape(pylon_description) + "\",";
@@ -414,7 +423,20 @@ String BuildRegistryPayload() {
   payload += "\"osc_paths\":[\"/rpiboosh/BooshMain\"],";
   payload += "\"roles\":[\"boosh_main\"],";
   payload += "\"fw_version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
-  payload += "\"ttl_sec\":" + String(kRegistryTtlSec);
+  payload += "\"ttl_sec\":" + String(kRegistryTtlSec) + ",";
+  payload += "\"telemetry\":{";
+  payload += "\"wifi_rssi_dbm\":" + String(wifi_rssi_dbm) + ",";
+  payload += "\"ping_target\":\"" + JsonEscape(String(kPingTargetHost)) + "\",";
+  payload += "\"ping\":{";
+  payload += "\"last_ms\":" + String(telemetry_ping_last_ms) + ",";
+  payload += "\"min_ms\":" + String(telemetry_ping_min_ms) + ",";
+  payload += "\"max_ms\":" + String(telemetry_ping_max_ms) + ",";
+  payload += "\"avg_ms\":" + String(telemetry_ping_avg_ms) + ",";
+  payload += "\"count\":" + String(telemetry_ping_count) + ",";
+  payload += "\"last_ok\":" + String(telemetry_ping_last_ok ? "true" : "false");
+  payload += "},";
+  payload += "\"uptime_s\":" + String(static_cast<uint32_t>(millis() / 1000));
+  payload += "}";
   payload += "}";
   return payload;
 }
@@ -894,7 +916,7 @@ void PollOsc() {
 }
 
 void loop() {
-  static const char *kTargetHost = "RPIBOOSH";
+  static const char *kTargetHost = kPingTargetHost;
   static const char *kTargetHostMdns = "RPIBOOSH.local";
   static bool wasConnected = false;
   static IPAddress targetIp;
@@ -966,6 +988,7 @@ void loop() {
   if (now - lastPingMs >= 1000) {
     lastPingMs = now;
     lastOk = Ping.ping(targetIp, 1);
+    telemetry_ping_last_ok = lastOk;
     if (lastOk) {
       uint32_t lastMs = static_cast<uint32_t>(Ping.averageTime());
       stats.last_ms = lastMs;
@@ -986,6 +1009,12 @@ void loop() {
     } else {
       Serial.println("Ping failed.");
     }
+    telemetry_ping_has_data = stats.has_data();
+    telemetry_ping_last_ms = stats.last_ms;
+    telemetry_ping_count = stats.count;
+    telemetry_ping_avg_ms = stats.avg_ms();
+    telemetry_ping_min_ms = telemetry_ping_has_data ? stats.min_ms : 0;
+    telemetry_ping_max_ms = telemetry_ping_has_data ? stats.max_ms : 0;
   }
 
   if (boosh_failsafe_note_until_ms == 0 || now >= boosh_failsafe_note_until_ms) {

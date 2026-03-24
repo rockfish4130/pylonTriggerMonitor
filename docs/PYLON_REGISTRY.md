@@ -33,15 +33,27 @@ Every announce/heartbeat currently includes:
   "osc_paths": ["/rpiboosh/BooshMain"],
   "roles": ["boosh_main"],
   "fw_version": "pylons ...",
-  "ttl_sec": 30
+  "ttl_sec": 30,
+  "telemetry": {
+    "wifi_rssi_dbm": -58,
+    "ping_target": "RPIBOOSH",
+    "ping": {
+      "last_ms": 7,
+      "min_ms": 2,
+      "max_ms": 17,
+      "avg_ms": 6,
+      "count": 143,
+      "last_ok": true
+    },
+    "uptime_s": 9123
+  }
 }
 ```
 
 ## Config Knobs (`src/main.cpp`)
 
-- `kPylonId`
-- `kPylonDescription`
-- `kPylonMdnsHost`
+- `kPylonIdDefaultPrefix`
+- `kPylonDescriptionDefault`
 - `kRegistryBaseUrlPrimary`
 - `kRegistryBaseUrlFallback`
 - `kRegistryAnnouncePath`
@@ -50,6 +62,13 @@ Every announce/heartbeat currently includes:
 - `kRegistryHeartbeatIntervalMs`
 - `kRegistryHttpTimeoutMs`
 - `kFirmwareVersion`
+
+Runtime identity (`id`, `host`, `desc`) is persisted in NVS and can be changed via serial CLI:
+- `set id <value>`
+- `set host <value>`
+- `set desc <value>`
+- `set node <value>`
+- `clear nvs`
 
 ## Validation
 
