@@ -28,6 +28,7 @@
 - Confirm UDP port `8000` is open and the target IP is the device IP.
 - Verify address is `/rpiboosh/BooshMain` with 3 float args.
 - ON is `[1, 0, 0]`, OFF is `[0, 0, 0]`.
+- On the WEMOS S2 Pico, test the same path locally with the `0`/BOOT button: press for ON, release for OFF.
 
 ## BooshMain Turns Off Unexpectedly
 - The firmware has a 5 second failsafe after ON if OFF is not received.

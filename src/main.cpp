@@ -17,6 +17,7 @@
 constexpr int kI2cSda = 8;
 constexpr int kI2cScl = 9;
 constexpr int kOledReset = 18;
+constexpr int kDevBoardButtonPin = 0;
 constexpr uint8_t kOledAddress = 0x3C;
 constexpr int kScreenWidth = 128;
 constexpr int kScreenHeight = 32;
@@ -716,6 +717,24 @@ void ApplyBooshState(float v0, float v1, float v2) {
   }
 }
 
+void PollDevBoardButton() {
+  static bool lastPressed = false;
+  const bool pressed = digitalRead(kDevBoardButtonPin) == LOW;
+  if (pressed == lastPressed) {
+    return;
+  }
+
+  lastPressed = pressed;
+  if (pressed) {
+    Serial.println("Dev board button 0 pressed -> BooshMain ON");
+    ApplyBooshState(1.0f, 0.0f, 0.0f);
+    return;
+  }
+
+  Serial.println("Dev board button 0 released -> BooshMain OFF");
+  ApplyBooshState(0.0f, 0.0f, 0.0f);
+}
+
 void setup() {
   USB.begin();
   Serial.begin(115200);
@@ -726,6 +745,7 @@ void setup() {
   serial_cli_line.reserve(192);
   LoadPylonConfig();
   PrintCliHelp();
+  pinMode(kDevBoardButtonPin, INPUT_PULLUP);
 
   Serial.println("Boot: init I2C");
   Wire.begin(kI2cSda, kI2cScl);
@@ -943,6 +963,7 @@ void loop() {
   static uint8_t displayPage = 0;
 
   PollSerialCli();
+  PollDevBoardButton();
 
   if (WiFi.status() != WL_CONNECTED) {
     if (wasConnected) {
