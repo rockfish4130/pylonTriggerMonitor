@@ -4,8 +4,10 @@
 - Use a known data-capable USB-C cable.
 - Try a different USB port.
 - Check that the board appears in your device list.
+- On normal boot, the firmware should enumerate a serial COM port automatically.
 - If auto-reset fails, manually enter bootloader:
   - Hold `0`, tap `RST`, release `0`, then start upload.
+- If the serial COM port does not reappear after flashing, tap `RST` once for a normal reboot.
 
 ## OLED Is Blank
 - Confirm the board is the WEMOS/LOLIN S2 Pico (128x32 SSD1306).
@@ -19,7 +21,8 @@
 
 ## Serial Output Missing
 - Confirm baud is `115200`.
-- Ensure `ARDUINO_USB_CDC_ON_BOOT=1` and `ARDUINO_USB_MODE=1` are set in `platformio.ini`.
+- Ensure `ARDUINO_USB_CDC_ON_BOOT=1` and `ARDUINO_USB_MODE=0` are set in `platformio.ini`.
+- Watch for boot markers such as `Boot: OLED ready`, `Boot: WiFi STA mode`, and `WiFi scan...` to identify where startup stops.
 
 ## OSC Not Responding
 - Confirm UDP port `8000` is open and the target IP is the device IP.

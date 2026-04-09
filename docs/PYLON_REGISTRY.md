@@ -16,8 +16,9 @@ Paths:
 
 1. On Wi-Fi connect (boot or reconnect), firmware posts an `announce`.
 2. After a successful announce, firmware posts `heartbeat` every 10 seconds.
-3. If a post fails, firmware retries with exponential backoff capped to 30 seconds.
-4. Posting uses short HTTP timeout to avoid disrupting OSC receive loop.
+3. If ping to `RPIBOOSH` fails and later recovers, firmware posts a fresh `announce`.
+4. If a post fails, firmware retries with exponential backoff capped to 30 seconds.
+5. Posting uses short HTTP timeout to avoid disrupting OSC receive loop.
 
 ## Payload
 

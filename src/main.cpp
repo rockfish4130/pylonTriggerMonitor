@@ -88,6 +88,11 @@ void ShowStatus(const String &line1, const String &line2 = "") {
   display.display();
 }
 
+void LogBootStep(const char *message, const String &detail = "") {
+  Serial.println(message);
+  ShowStatus(message, detail);
+}
+
 String TrimForDisplay(const String &input, size_t maxChars) {
   if (input.length() <= maxChars) {
     return input;
@@ -722,14 +727,17 @@ void setup() {
   LoadPylonConfig();
   PrintCliHelp();
 
+  Serial.println("Boot: init I2C");
   Wire.begin(kI2cSda, kI2cScl);
+  Serial.println("Boot: init OLED");
   if (!display.begin(SSD1306_SWITCHCAPVCC, kOledAddress)) {
     Serial.println("SSD1306 init failed.");
   } else {
     display.invertDisplay(false);
-    ShowStatus("WEMOS S2 Pico", "Booting...");
+    LogBootStep("Boot: OLED ready", "WEMOS S2 Pico");
   }
 
+  Serial.println("Boot: register WiFi events");
   WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
     switch (event) {
       case ARDUINO_EVENT_WIFI_STA_GOT_IP:
@@ -746,13 +754,17 @@ void setup() {
     }
   });
 
+  LogBootStep("Boot: WiFi STA mode");
+  WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
-  WiFi.disconnect(true, true);
+  WiFi.setSleep(false);
+  WiFi.disconnect(false, false);
   delay(100);
 
-  Serial.println("Scanning for WiFi...");
-  ShowStatus("WiFi scan...", "");
-  int networkCount = WiFi.scanNetworks();
+  LogBootStep("WiFi scan...");
+  int networkCount = WiFi.scanNetworks(false, true);
+  Serial.print("WiFi scan count: ");
+  Serial.println(networkCount);
   bool hasLowLatency = false;
   for (int i = 0; i < networkCount; ++i) {
     String ssid = WiFi.SSID(i);
@@ -919,6 +931,7 @@ void loop() {
   static const char *kTargetHost = kPingTargetHost;
   static const char *kTargetHostMdns = "RPIBOOSH.local";
   static bool wasConnected = false;
+  static bool pingWasDown = false;
   static IPAddress targetIp;
   static bool hasIp = false;
   static unsigned long lastResolveMs = 0;
@@ -934,6 +947,7 @@ void loop() {
   if (WiFi.status() != WL_CONNECTED) {
     if (wasConnected) {
       wasConnected = false;
+      pingWasDown = false;
       hasIp = false;
       registry_announced = false;
       registry_next_attempt_ms = 0;
@@ -1006,7 +1020,15 @@ void loop() {
       Serial.print(" ");
       Serial.print(lastMs);
       Serial.println("ms");
+      if (pingWasDown) {
+        pingWasDown = false;
+        registry_announced = false;
+        registry_next_attempt_ms = now;
+        registry_consecutive_failures = 0;
+        Serial.println("Ping restored: scheduling registry announce.");
+      }
     } else {
+      pingWasDown = true;
       Serial.println("Ping failed.");
     }
     telemetry_ping_has_data = stats.has_data();
