@@ -15,14 +15,17 @@ At boot the firmware:
 At runtime the firmware:
 1. Listens for OSC on UDP port `8000` at `/rpiboosh/BooshMain`.
 2. Treats the dev-board `0`/BOOT button (`GPIO0`) as a local BooshMain trigger.
-3. Uses OLED inversion as a prototype proxy for the boosher solenoid state.
-4. Inverted display means solenoid open / fire ON.
-5. Normal display means solenoid closed / fire OFF.
-6. Pings `RPIBOOSH` once per second and shows ping status/stats on the OLED.
-7. Applies a failsafe: if ON is received and OFF is not seen within 5 seconds, it forces OFF.
-8. Cycles OLED pages with Wi-Fi debug metrics and ping timeout status.
-9. Tracks Wi-Fi disconnect reason and uptime since last connect for field debugging.
-10. Announces this node to RPIBOOSH PYLON registry API and sends periodic heartbeats.
+3. Serves an HTTP control/status page on port `80`.
+4. Exposes REST APIs for telemetry, console log access, and solenoid hold control.
+5. Uses OLED inversion as a prototype proxy for the boosher solenoid state.
+6. Inverted display means solenoid open / fire ON.
+7. Normal display means solenoid closed / fire OFF.
+8. Counts total trigger events for the current boot session.
+9. Pings `RPIBOOSH` once per second and shows ping status/stats on the OLED.
+10. Applies a failsafe: if ON is received and OFF is not seen within 5 seconds, it forces OFF.
+11. Cycles OLED pages with Wi-Fi debug metrics, node stats, firmware version, and ping timeout status.
+12. Tracks Wi-Fi disconnect reason and uptime since last connect for field debugging.
+13. Announces this node to RPIBOOSH PYLON registry API and sends periodic heartbeats.
 
 ## Requirements
 - PlatformIO (VS Code extension or CLI)
@@ -65,6 +68,23 @@ Prototype proxy behavior:
 
 If ON is received and OFF does not arrive within 5 seconds, the device forces OFF and logs a failsafe note to Serial and the OLED.
 
+Web control behavior:
+- `POST /api/solenoid/on`: open solenoid immediately
+- `POST /api/solenoid/off`: close solenoid immediately
+- `POST /api/solenoid/trigger`: compatibility alias for `on`
+- The browser UI button is press-and-hold. Loss of focus, page hide, pointer cancel, or release is treated as OFF.
+
+## HTTP Interface
+The device exposes a small web UI on `http://<ip>/` and `http://<mdns>.local/`.
+
+Endpoints:
+- `GET /`: control/status web UI
+- `GET /api/telemetry`: current telemetry payload plus OLED page text
+- `GET /api/logs`: mirrored serial console text buffer
+- `POST /api/solenoid/on`: solenoid ON
+- `POST /api/solenoid/off`: solenoid OFF
+- `POST /api/solenoid/trigger`: compatibility alias for ON
+
 ## PYLON Registry API
 The device posts presence metadata to RPIBOOSH:
 - `POST /api/pylons/announce` after Wi-Fi connect/reconnect
@@ -79,9 +99,13 @@ Default metadata includes:
 - `osc_paths` (`/rpiboosh/BooshMain`)
 - `roles` (`boosh_main`)
 - `fw_version`
+- `firmware_version` / `version` / `fw_semver`
 - `ttl_sec` (`30`)
 - `telemetry.ipv4` / `telemetry.mdns_hostname` legacy compatibility aliases
+- `telemetry.uptime` / `telemetry.uptime_hms`
+- `telemetry.trigger_event_count` / `telemetry.solenoid_active`
 - `telemetry.ping.target/sent/recv/lost/last_ms/min_ms/max_ms/avg_ms/count/last_ok`
+- `telemetry.ping.since_ok` / `telemetry.ping.since_ok_s`
 
 Compatibility note:
 - The current announce/heartbeat payload is the legacy baseline for deployed nodes.
@@ -96,3 +120,7 @@ See:
 - `docs/SETUP.md`: Toolchain, build, and flashing.
 - `docs/DISPLAY.md`: OLED details and usage.
 - `docs/PYLON_REGISTRY.md`: Registry API integration details.
+
+## Firmware Version
+Current firmware version format:
+- `0.0.1 <DATE> <TIME>`

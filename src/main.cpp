@@ -6,6 +6,7 @@
 #include <ESP32Ping.h>
 #include <HTTPClient.h>
 #include <Preferences.h>
+#include <WebServer.h>
 #include <esp_mac.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -37,11 +38,17 @@ constexpr const char *kRegistryHeartbeatPath = "/api/pylons/heartbeat";
 constexpr uint16_t kRegistryTtlSec = 30;
 constexpr unsigned long kRegistryHeartbeatIntervalMs = 10000;
 constexpr uint16_t kRegistryHttpTimeoutMs = 800;
-constexpr const char *kFirmwareVersion = "pylons " __DATE__ " " __TIME__;
+constexpr const char *kFirmwareSemver = "0.0.1";
+constexpr const char *kFirmwareBuildDate = __DATE__;
+constexpr const char *kFirmwareBuildTime = __TIME__;
+constexpr const char *kFirmwareVersion = "0.0.1 " __DATE__ " " __TIME__;
+constexpr size_t kWebLogBufferMaxChars = 8192;
 
 Adafruit_SSD1306 display(kScreenWidth, kScreenHeight, &Wire, kOledReset);
 WiFiUDP oscUdp;
+WebServer webServer(80);
 bool display_inverted = false;
+bool web_server_started = false;
 bool boosh_failsafe_armed = false;
 unsigned long boosh_failsafe_start_ms = 0;
 unsigned long boosh_failsafe_note_until_ms = 0;
@@ -65,11 +72,83 @@ uint32_t telemetry_ping_min_ms = 0;
 uint32_t telemetry_ping_max_ms = 0;
 uint32_t telemetry_ping_avg_ms = 0;
 uint32_t telemetry_ping_count = 0;
+uint32_t trigger_event_count = 0;
+bool current_ping_last_ok = false;
+unsigned long last_ping_success_ms = 0;
+String target_ip_string = "";
+String web_log_text;
+String web_log_partial_line;
 
 constexpr const char *kPrefsNamespace = "pylon_cfg";
 constexpr const char *kPrefsKeyId = "id";
 constexpr const char *kPrefsKeyHost = "host";
 constexpr const char *kPrefsKeyDesc = "desc";
+
+void AppendWebLogLine(const String &line) {
+  web_log_text += line;
+  web_log_text += '\n';
+
+  while (web_log_text.length() > kWebLogBufferMaxChars) {
+    const int newline = web_log_text.indexOf('\n');
+    if (newline < 0) {
+      web_log_text = web_log_text.substring(web_log_text.length() - kWebLogBufferMaxChars);
+      break;
+    }
+    web_log_text.remove(0, newline + 1);
+  }
+}
+
+void AppendWebLogChar(char c) {
+  if (c == '\r') {
+    return;
+  }
+  if (c == '\n') {
+    AppendWebLogLine(web_log_partial_line);
+    web_log_partial_line = "";
+    return;
+  }
+  if (web_log_partial_line.length() < 256) {
+    web_log_partial_line += c;
+  }
+}
+
+class ConsoleMirror : public Print {
+ public:
+  size_t write(uint8_t c) override {
+    Serial.write(c);
+    AppendWebLogChar(static_cast<char>(c));
+    return 1;
+  }
+
+  size_t write(const uint8_t *buffer, size_t size) override {
+    Serial.write(buffer, size);
+    for (size_t i = 0; i < size; ++i) {
+      AppendWebLogChar(static_cast<char>(buffer[i]));
+    }
+    return size;
+  }
+};
+
+ConsoleMirror Console;
+
+struct DisplayPageLines {
+  String line1;
+  String line2;
+  String line3;
+  String line4;
+};
+
+void RenderDisplayPage(const DisplayPageLines &page) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println(page.line1);
+  display.println(page.line2);
+  display.println(page.line3);
+  display.println(page.line4);
+  display.display();
+}
 
 void SetDisplayInverted(bool inverted) {
   if (display_inverted == inverted) {
@@ -92,7 +171,7 @@ void ShowStatus(const String &line1, const String &line2 = "") {
 }
 
 void LogBootStep(const char *message, const String &detail = "") {
-  Serial.println(message);
+  Console.println(message);
   ShowStatus(message, detail);
 }
 
@@ -101,6 +180,16 @@ String TrimForDisplay(const String &input, size_t maxChars) {
     return input;
   }
   return input.substring(0, maxChars);
+}
+
+String FormatDurationHms(uint32_t totalSeconds) {
+  const uint32_t hours = totalSeconds / 3600;
+  const uint32_t minutes = (totalSeconds % 3600) / 60;
+  const uint32_t seconds = totalSeconds % 60;
+  char buffer[20];
+  snprintf(buffer, sizeof(buffer), "%02lu:%02lu:%02lu", static_cast<unsigned long>(hours),
+           static_cast<unsigned long>(minutes), static_cast<unsigned long>(seconds));
+  return String(buffer);
 }
 
 String JsonEscape(const String &input) {
@@ -187,7 +276,7 @@ String NormalizePylonId(String id) {
 bool SavePylonConfig() {
   Preferences prefs;
   if (!prefs.begin(kPrefsNamespace, false)) {
-    Serial.println("[CFG] failed to open Preferences namespace for write");
+    Console.println("[CFG] failed to open Preferences namespace for write");
     return false;
   }
   prefs.putString(kPrefsKeyId, pylon_id);
@@ -200,12 +289,12 @@ bool SavePylonConfig() {
 bool ClearPylonConfigNvs() {
   Preferences prefs;
   if (!prefs.begin(kPrefsNamespace, false)) {
-    Serial.println("[CFG] failed to open Preferences namespace for clear");
+    Console.println("[CFG] failed to open Preferences namespace for clear");
     return false;
   }
   prefs.clear();
   prefs.end();
-  Serial.println("[CFG] NVS namespace cleared.");
+  Console.println("[CFG] NVS namespace cleared.");
   return true;
 }
 
@@ -216,19 +305,19 @@ void ScheduleRegistryRefreshNow() {
 }
 
 void PrintPylonConfig() {
-  Serial.println("[CFG] current values:");
-  Serial.print("  id: ");
-  Serial.println(pylon_id);
-  Serial.print("  host: ");
-  Serial.println(pylon_mdns_host);
-  Serial.print("  desc: ");
-  Serial.println(pylon_description);
+  Console.println("[CFG] current values:");
+  Console.print("  id: ");
+  Console.println(pylon_id);
+  Console.print("  host: ");
+  Console.println(pylon_mdns_host);
+  Console.print("  desc: ");
+  Console.println(pylon_description);
 }
 
 void LoadPylonConfig() {
   Preferences prefs;
   if (!prefs.begin(kPrefsNamespace, false)) {
-    Serial.println("[CFG] failed to open Preferences namespace");
+    Console.println("[CFG] failed to open Preferences namespace");
     pylon_id = BuildDefaultPylonId();
     pylon_mdns_host = pylon_id;
     pylon_description = kPylonDescriptionDefault;
@@ -248,7 +337,7 @@ void LoadPylonConfig() {
     prefs.putString(kPrefsKeyId, pylon_id);
     prefs.putString(kPrefsKeyHost, pylon_mdns_host);
     prefs.putString(kPrefsKeyDesc, pylon_description);
-    Serial.println("[CFG] Preferences unprogrammed, wrote defaults.");
+    Console.println("[CFG] Preferences unprogrammed, wrote defaults.");
   } else {
     pylon_id = stored_id;
     if (stored_host.length() == 0) {
@@ -256,7 +345,7 @@ void LoadPylonConfig() {
     }
     if (!IsValidMdnsHost(stored_host)) {
       stored_host = pylon_id;
-      Serial.println("[CFG] Stored host invalid, using ID as host.");
+      Console.println("[CFG] Stored host invalid, using ID as host.");
     }
     pylon_mdns_host = stored_host;
     pylon_description = stored_desc.length() > 0 ? stored_desc : String(kPylonDescriptionDefault);
@@ -272,23 +361,23 @@ void RestartMdnsIfConnected() {
   }
   MDNS.end();
   if (MDNS.begin(pylon_mdns_host.c_str())) {
-    Serial.print("[CFG] mDNS updated: ");
-    Serial.print(pylon_mdns_host);
-    Serial.println(".local");
+    Console.print("[CFG] mDNS updated: ");
+    Console.print(pylon_mdns_host);
+    Console.println(".local");
   } else {
-    Serial.println("[CFG] mDNS update failed.");
+    Console.println("[CFG] mDNS update failed.");
   }
 }
 
 void PrintCliHelp() {
-  Serial.println("[CLI] commands:");
-  Serial.println("  help");
-  Serial.println("  show");
-  Serial.println("  set id <value>");
-  Serial.println("  set host <value>");
-  Serial.println("  set desc <value>");
-  Serial.println("  set node <value>   (sets both id and host)");
-  Serial.println("  clear nvs          (erase saved id/host/desc)");
+  Console.println("[CLI] commands:");
+  Console.println("  help");
+  Console.println("  show");
+  Console.println("  set id <value>");
+  Console.println("  set host <value>");
+  Console.println("  set desc <value>");
+  Console.println("  set node <value>   (sets both id and host)");
+  Console.println("  clear nvs          (erase saved id/host/desc)");
 }
 
 void HandleCliCommand(const String &input_line) {
@@ -316,7 +405,7 @@ void HandleCliCommand(const String &input_line) {
     return;
   }
   if (!line.startsWith("set ")) {
-    Serial.println("[CLI] unknown command. type 'help'");
+    Console.println("[CLI] unknown command. type 'help'");
     return;
   }
 
@@ -324,14 +413,14 @@ void HandleCliCommand(const String &input_line) {
   rest.trim();
   const int sep = rest.indexOf(' ');
   if (sep <= 0) {
-    Serial.println("[CLI] invalid set command");
+    Console.println("[CLI] invalid set command");
     return;
   }
   String field = ToLowerAscii(rest.substring(0, sep));
   String value = rest.substring(sep + 1);
   value.trim();
   if (value.length() == 0) {
-    Serial.println("[CLI] value cannot be empty");
+    Console.println("[CLI] value cannot be empty");
     return;
   }
 
@@ -339,42 +428,42 @@ void HandleCliCommand(const String &input_line) {
   if (field == "id") {
     const String new_id = NormalizePylonId(value);
     if (new_id.length() == 0) {
-      Serial.println("[CLI] invalid id");
+      Console.println("[CLI] invalid id");
       return;
     }
     pylon_id = new_id;
     changed = true;
-    Serial.print("[CLI] id set: ");
-    Serial.println(pylon_id);
+    Console.print("[CLI] id set: ");
+    Console.println(pylon_id);
   } else if (field == "host" || field == "mdns") {
     const String new_host = NormalizeMdnsHost(value);
     if (!IsValidMdnsHost(new_host)) {
-      Serial.println("[CLI] invalid host; allowed: letters, digits, '-' (1..63 chars)");
+      Console.println("[CLI] invalid host; allowed: letters, digits, '-' (1..63 chars)");
       return;
     }
     pylon_mdns_host = new_host;
     changed = true;
-    Serial.print("[CLI] host set: ");
-    Serial.println(pylon_mdns_host);
+    Console.print("[CLI] host set: ");
+    Console.println(pylon_mdns_host);
   } else if (field == "desc" || field == "description") {
     pylon_description = value;
     changed = true;
-    Serial.print("[CLI] desc set: ");
-    Serial.println(pylon_description);
+    Console.print("[CLI] desc set: ");
+    Console.println(pylon_description);
   } else if (field == "node") {
     const String new_id = NormalizePylonId(value);
     const String new_host = NormalizeMdnsHost(value);
     if (new_id.length() == 0 || !IsValidMdnsHost(new_host)) {
-      Serial.println("[CLI] invalid node value");
+      Console.println("[CLI] invalid node value");
       return;
     }
     pylon_id = new_id;
     pylon_mdns_host = new_host;
     changed = true;
-    Serial.print("[CLI] node set (id+host): ");
-    Serial.println(pylon_id);
+    Console.print("[CLI] node set (id+host): ");
+    Console.println(pylon_id);
   } else {
-    Serial.println("[CLI] unknown set field. use id|host|desc|node");
+    Console.println("[CLI] unknown set field. use id|host|desc|node");
     return;
   }
 
@@ -382,7 +471,7 @@ void HandleCliCommand(const String &input_line) {
     return;
   }
   if (!SavePylonConfig()) {
-    Serial.println("[CFG] failed to persist config");
+    Console.println("[CFG] failed to persist config");
     return;
   }
   RestartMdnsIfConnected();
@@ -431,14 +520,26 @@ String BuildRegistryPayload() {
   payload += "\"osc_paths\":[\"/rpiboosh/BooshMain\"],";
   payload += "\"roles\":[\"boosh_main\"],";
   payload += "\"fw_version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
+  payload += "\"firmware_version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
+  payload += "\"version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
+  payload += "\"fw_semver\":\"" + JsonEscape(String(kFirmwareSemver)) + "\",";
   payload += "\"ttl_sec\":" + String(kRegistryTtlSec) + ",";
   payload += "\"telemetry\":{";
   payload += "\"ipv4\":\"" + JsonEscape(ip) + "\",";
   payload += "\"mdns_hostname\":\"" + JsonEscape(hostname) + "\",";
   payload += "\"fw_version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
+  payload += "\"firmware_version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
+  payload += "\"version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
+  payload += "\"fw_semver\":\"" + JsonEscape(String(kFirmwareSemver)) + "\",";
+  payload += "\"fw_build_date\":\"" + JsonEscape(String(kFirmwareBuildDate)) + "\",";
+  payload += "\"fw_build_time\":\"" + JsonEscape(String(kFirmwareBuildTime)) + "\",";
   payload += "\"temperature_f\":\"N/A\",";
   payload += "\"wifi_rssi_dbm\":" + String(wifi_rssi_dbm) + ",";
   payload += "\"uptime_s\":" + String(static_cast<uint32_t>(millis() / 1000)) + ",";
+  payload += "\"uptime\":\"" + JsonEscape(FormatDurationHms(static_cast<uint32_t>(millis() / 1000))) + "\",";
+  payload += "\"uptime_hms\":\"" + JsonEscape(FormatDurationHms(static_cast<uint32_t>(millis() / 1000))) + "\",";
+  payload += "\"trigger_event_count\":" + String(trigger_event_count) + ",";
+  payload += "\"solenoid_active\":" + String(display_inverted ? "true" : "false") + ",";
   payload += "\"ping_target\":\"" + JsonEscape(String(kPingTargetHost)) + "\",";
   payload += "\"ping\":{";
   payload += "\"target\":\"" + JsonEscape(String(kPingTargetHost)) + "\",";
@@ -465,8 +566,8 @@ bool PostRegistryToBase(const char *baseUrl, const char *path, const String &pay
   HTTPClient http;
   const String url = String(baseUrl) + String(path);
   if (!http.begin(client, url)) {
-    Serial.print("[REG] begin failed: ");
-    Serial.println(url);
+    Console.print("[REG] begin failed: ");
+    Console.println(url);
     return false;
   }
   http.setConnectTimeout(kRegistryHttpTimeoutMs);
@@ -474,12 +575,12 @@ bool PostRegistryToBase(const char *baseUrl, const char *path, const String &pay
   http.addHeader("Content-Type", "application/json");
   const int statusCode = http.POST(payload);
   const bool ok = statusCode >= 200 && statusCode < 300;
-  Serial.print("[REG] ");
-  Serial.print(kind);
-  Serial.print(" ");
-  Serial.print(url);
-  Serial.print(" -> ");
-  Serial.println(statusCode);
+  Console.print("[REG] ");
+  Console.print(kind);
+  Console.print(" ");
+  Console.print(url);
+  Console.print(" -> ");
+  Console.println(statusCode);
   http.end();
   return ok;
 }
@@ -522,14 +623,14 @@ void HandleRegistry(unsigned long now) {
     registry_last_success_ms = now;
     registry_next_attempt_ms = now + kRegistryHeartbeatIntervalMs;
     registry_consecutive_failures = 0;
-    Serial.println("[REG] post success");
+    Console.println("[REG] post success");
   } else {
     registry_consecutive_failures = static_cast<uint8_t>(registry_consecutive_failures + 1);
     const unsigned long backoffMs = RegistryBackoffMs(registry_consecutive_failures);
     registry_next_attempt_ms = now + backoffMs;
-    Serial.print("[REG] post failed, retry in ");
-    Serial.print(backoffMs);
-    Serial.println("ms");
+    Console.print("[REG] post failed, retry in ");
+    Console.print(backoffMs);
+    Console.println("ms");
   }
 }
 
@@ -612,118 +713,387 @@ struct PingStats {
   uint32_t avg_ms() const { return count > 0 ? static_cast<uint32_t>(sum_ms / count) : 0; }
 };
 
-void ShowPingStats(const String &host, const PingStats &stats, bool last_ok,
-                   unsigned long last_success_ms, unsigned long now_ms) {
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
+DisplayPageLines BuildPingPageLines(const String &host, const PingStats &stats, bool last_ok,
+                                    unsigned long last_success_ms, unsigned long now_ms) {
+  DisplayPageLines page;
   bool has_success = last_success_ms > 0;
   unsigned long since_success_ms = has_success ? (now_ms - last_success_ms) : 0;
   bool timing_out =
       (has_success && since_success_ms >= kPingTimeoutMs) || (!has_success && now_ms >= kPingTimeoutMs);
-  display.print(host);
-  display.println(timing_out ? " TIMEOUT" : (last_ok ? " OK" : " FAIL"));
+  page.line1 = host + (timing_out ? " TIMEOUT" : (last_ok ? " OK" : " FAIL"));
 
   if (stats.has_data()) {
-    display.print("last ");
-    display.print(stats.last_ms);
-    display.println("ms");
+    page.line2 = "last " + String(stats.last_ms) + "ms";
   } else {
-    display.println("last --");
+    page.line2 = "last --";
   }
 
   if (has_success) {
-    display.print("since ok ");
-    display.print(static_cast<uint32_t>(since_success_ms / 1000));
-    display.println("s");
+    page.line3 = "since " + FormatDurationHms(static_cast<uint32_t>(since_success_ms / 1000));
   } else {
-    display.println("since ok never");
+    page.line3 = "since --:--:--";
   }
 
   if (stats.has_data()) {
-    display.print("min ");
-    display.print(stats.min_ms);
-    display.print(" max ");
-    display.print(stats.max_ms);
-    display.println("ms");
+    page.line4 = "min " + String(stats.min_ms) + " max " + String(stats.max_ms) + "ms";
   } else {
-    display.println("");
+    page.line4 = "";
   }
+  return page;
+}
 
-  display.display();
+void ShowPingStats(const String &host, const PingStats &stats, bool last_ok,
+                   unsigned long last_success_ms, unsigned long now_ms) {
+  RenderDisplayPage(BuildPingPageLines(host, stats, last_ok, last_success_ms, now_ms));
+}
+
+DisplayPageLines BuildWifiMetricsPageLines(uint8_t page, unsigned long connected_since_ms,
+                                           uint8_t disconnect_reason) {
+  DisplayPageLines lines;
+  if (page == 0) {
+    String ssid = TrimForDisplay(WiFi.SSID(), 20);
+    lines.line1 = "WiFi " + ssid;
+    lines.line2 = "RSSI " + String(WiFi.RSSI()) + "dBm";
+    lines.line3 = "IP " + WiFi.localIP().toString();
+    if (connected_since_ms > 0) {
+      lines.line4 = "UP " + FormatDurationHms(static_cast<uint32_t>((millis() - connected_since_ms) / 1000));
+    } else {
+      lines.line4 = "UP --:--:--";
+    }
+  } else {
+    lines.line1 = "RSN " + String(disconnect_reason) + " " + WifiDisconnectReasonToString(disconnect_reason);
+    lines.line2 = "SSID " + TrimForDisplay(WiFi.SSID(), 20);
+    lines.line3 = "RSSI " + String(WiFi.RSSI()) + "dBm";
+    lines.line4 = "IP " + WiFi.localIP().toString();
+  }
+  return lines;
 }
 
 void ShowWifiMetricsPage(uint8_t page, unsigned long connected_since_ms, uint8_t last_disconnect_reason) {
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
+  RenderDisplayPage(BuildWifiMetricsPageLines(page, connected_since_ms, last_disconnect_reason));
+}
 
-  if (page == 0) {
-    String ssid = TrimForDisplay(WiFi.SSID(), 20);
-    display.print("WiFi ");
-    display.println(ssid);
-
-    display.print("RSSI ");
-    display.print(WiFi.RSSI());
-    display.println("dBm");
-
-    display.print("IP ");
-    display.println(WiFi.localIP().toString());
-
-    display.print("UP ");
-    if (connected_since_ms > 0) {
-      display.print(static_cast<uint32_t>((millis() - connected_since_ms) / 1000));
-      display.println("s");
-    } else {
-      display.println("--");
-    }
-  } else {
-    display.print("RSN ");
-    display.print(last_disconnect_reason);
-    display.print(" ");
-    display.println(WifiDisconnectReasonToString(last_disconnect_reason));
-
-    display.print("SSID ");
-    display.println(TrimForDisplay(WiFi.SSID(), 20));
-
-    display.print("RSSI ");
-    display.print(WiFi.RSSI());
-    display.println("dBm");
-
-    display.print("IP ");
-    display.println(WiFi.localIP().toString());
-  }
-
-  display.display();
+DisplayPageLines BuildNodeConfigPageLines() {
+  DisplayPageLines page;
+  page.line1 = "NODE CONFIG";
+  page.line2 = "ID: " + TrimForDisplay(pylon_id, 14);
+  page.line3 = "TRIG: " + String(trigger_event_count);
+  page.line4 = "FW " + String(kFirmwareSemver);
+  return page;
 }
 
 void ShowNodeConfigPage() {
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println("NODE CONFIG");
-  display.print("ID: ");
-  display.println(TrimForDisplay(pylon_id, 14));
-  display.print("DESC:");
-  display.setCursor(0, 24);
-  display.println(TrimForDisplay(pylon_description, 21));
-  display.display();
+  RenderDisplayPage(BuildNodeConfigPageLines());
 }
 
-void ApplyBooshState(float value) {
-  const float kOnThreshold = 0.5f;
+DisplayPageLines BuildFirmwarePageLines() {
+  DisplayPageLines page;
+  page.line1 = "FIRMWARE";
+  page.line2 = "VER " + String(kFirmwareSemver);
+  page.line3 = String(kFirmwareBuildDate);
+  page.line4 = String(kFirmwareBuildTime);
+  return page;
+}
 
-  if (value > kOnThreshold) {
+void ShowFirmwarePage() {
+  RenderDisplayPage(BuildFirmwarePageLines());
+}
+
+void SetBooshActive(bool active, const char *source) {
+  if (active) {
+    if (!display_inverted) {
+      trigger_event_count += 1;
+      Console.print("[TRIG] ");
+      Console.print(source);
+      Console.print(" -> event #");
+      Console.println(trigger_event_count);
+    }
     SetDisplayInverted(true);
     boosh_failsafe_armed = true;
     boosh_failsafe_start_ms = millis();
-  } else {
-    SetDisplayInverted(false);
-    boosh_failsafe_armed = false;
+    return;
   }
+
+  if (display_inverted) {
+    Console.print("[TRIG] ");
+    Console.print(source);
+    Console.println(" -> OFF");
+  }
+  SetDisplayInverted(false);
+  boosh_failsafe_armed = false;
+}
+
+void ApplyBooshState(float value, const char *source = "state") {
+  const float kOnThreshold = 0.5f;
+  SetBooshActive(value > kOnThreshold, source);
+}
+
+String BuildDisplayPagesJson(unsigned long now_ms) {
+  PingStats stats;
+  stats.count = telemetry_ping_count;
+  stats.min_ms = telemetry_ping_has_data ? telemetry_ping_min_ms : UINT32_MAX;
+  stats.max_ms = telemetry_ping_max_ms;
+  stats.sum_ms = static_cast<uint64_t>(telemetry_ping_avg_ms) * telemetry_ping_count;
+  stats.last_ms = telemetry_ping_last_ms;
+
+  const DisplayPageLines ping = BuildPingPageLines("RPIBOOSH", stats, current_ping_last_ok, last_ping_success_ms, now_ms);
+  const DisplayPageLines wifiA = BuildWifiMetricsPageLines(0, wifi_connected_since_ms, last_disconnect_reason);
+  const DisplayPageLines wifiB = BuildWifiMetricsPageLines(1, wifi_connected_since_ms, last_disconnect_reason);
+  const DisplayPageLines node = BuildNodeConfigPageLines();
+  const DisplayPageLines firmware = BuildFirmwarePageLines();
+
+  auto encodePage = [](const DisplayPageLines &page) {
+    String out = "[";
+    out += "\"" + JsonEscape(page.line1) + "\",";
+    out += "\"" + JsonEscape(page.line2) + "\",";
+    out += "\"" + JsonEscape(page.line3) + "\",";
+    out += "\"" + JsonEscape(page.line4) + "\"";
+    out += "]";
+    return out;
+  };
+
+  String json;
+  json.reserve(512);
+  json += "\"display_pages\":{";
+  json += "\"ping\":" + encodePage(ping) + ",";
+  json += "\"wifi\":" + encodePage(wifiA) + ",";
+  json += "\"wifi_detail\":" + encodePage(wifiB) + ",";
+  json += "\"node\":" + encodePage(node) + ",";
+  json += "\"firmware\":" + encodePage(firmware);
+  json += "}";
+  return json;
+}
+
+String BuildTelemetryApiJson() {
+  const String hostname = pylon_mdns_host + ".local";
+  const String ip = WiFi.localIP().toString();
+  const long wifi_rssi_dbm = WiFi.RSSI();
+  const unsigned long now = millis();
+  String payload;
+  payload.reserve(1200);
+  payload += "{";
+  payload += "\"pylon_id\":\"" + JsonEscape(pylon_id) + "\",";
+  payload += "\"description\":\"" + JsonEscape(pylon_description) + "\",";
+  payload += "\"hostname\":\"" + JsonEscape(hostname) + "\",";
+  payload += "\"ip\":\"" + JsonEscape(ip) + "\",";
+  payload += "\"fw_version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
+  payload += "\"firmware_version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
+  payload += "\"version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
+  payload += "\"fw_semver\":\"" + JsonEscape(String(kFirmwareSemver)) + "\",";
+  payload += "\"fw_build_date\":\"" + JsonEscape(String(kFirmwareBuildDate)) + "\",";
+  payload += "\"fw_build_time\":\"" + JsonEscape(String(kFirmwareBuildTime)) + "\",";
+  payload += "\"uptime\":\"" + JsonEscape(FormatDurationHms(static_cast<uint32_t>(now / 1000))) + "\",";
+  payload += "\"uptime_hms\":\"" + JsonEscape(FormatDurationHms(static_cast<uint32_t>(now / 1000))) + "\",";
+  payload += "\"solenoid_active\":" + String(display_inverted ? "true" : "false") + ",";
+  payload += "\"trigger_event_count\":" + String(trigger_event_count) + ",";
+  payload += "\"target_ip\":\"" + JsonEscape(target_ip_string) + "\",";
+  payload += "\"telemetry\":{";
+  payload += "\"ipv4\":\"" + JsonEscape(ip) + "\",";
+  payload += "\"mdns_hostname\":\"" + JsonEscape(hostname) + "\",";
+  payload += "\"fw_version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
+  payload += "\"firmware_version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
+  payload += "\"version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
+  payload += "\"fw_semver\":\"" + JsonEscape(String(kFirmwareSemver)) + "\",";
+  payload += "\"fw_build_date\":\"" + JsonEscape(String(kFirmwareBuildDate)) + "\",";
+  payload += "\"fw_build_time\":\"" + JsonEscape(String(kFirmwareBuildTime)) + "\",";
+  payload += "\"temperature_f\":\"N/A\",";
+  payload += "\"wifi_rssi_dbm\":" + String(wifi_rssi_dbm) + ",";
+  payload += "\"uptime_s\":" + String(static_cast<uint32_t>(now / 1000)) + ",";
+  payload += "\"uptime\":\"" + JsonEscape(FormatDurationHms(static_cast<uint32_t>(now / 1000))) + "\",";
+  payload += "\"uptime_hms\":\"" + JsonEscape(FormatDurationHms(static_cast<uint32_t>(now / 1000))) + "\",";
+  payload += "\"ping_target\":\"" + JsonEscape(String(kPingTargetHost)) + "\",";
+  payload += "\"ping\":{";
+  payload += "\"target\":\"" + JsonEscape(String(kPingTargetHost)) + "\",";
+  payload += "\"sent\":" + String(telemetry_ping_sent) + ",";
+  payload += "\"recv\":" + String(telemetry_ping_count) + ",";
+  payload += "\"lost\":" + String(telemetry_ping_lost) + ",";
+  payload += "\"last_ms\":" + String(telemetry_ping_last_ms) + ",";
+  payload += "\"min_ms\":" + String(telemetry_ping_min_ms) + ",";
+  payload += "\"max_ms\":" + String(telemetry_ping_max_ms) + ",";
+  payload += "\"avg_ms\":" + String(telemetry_ping_avg_ms) + ",";
+  payload += "\"count\":" + String(telemetry_ping_count) + ",";
+  payload += "\"last_ok\":" + String(telemetry_ping_last_ok ? "true" : "false") + ",";
+  payload += "\"since_ok_s\":"
+             + String(last_ping_success_ms > 0 ? static_cast<uint32_t>((now - last_ping_success_ms) / 1000) : 0)
+             + ",";
+  payload += "\"since_ok\":\""
+             + JsonEscape(last_ping_success_ms > 0
+                              ? FormatDurationHms(static_cast<uint32_t>((now - last_ping_success_ms) / 1000))
+                              : String("--:--:--"))
+             + "\"";
+  payload += "}";
+  payload += "},";
+  payload += BuildDisplayPagesJson(now);
+  payload += "}";
+  return payload;
+}
+
+const char kWebUiHtml[] PROGMEM = R"HTML(
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pylons</title>
+  <style>
+    :root{color-scheme:light;background:#f3efe6;--ink:#1f1d1a;--panel:#fffaf2;--accent:#a63d17;--line:#d9cbb2}
+    *{box-sizing:border-box} body{margin:0;font-family:Georgia,serif;color:var(--ink);background:
+      radial-gradient(circle at top,#fff6df 0,#f3efe6 45%,#eadfcd 100%) fixed}
+    main{max-width:1100px;margin:0 auto;padding:20px}
+    h1,h2{margin:0 0 12px} .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+    .panel{background:rgba(255,250,242,.92);border:1px solid var(--line);border-radius:16px;padding:16px;box-shadow:0 10px 30px rgba(86,56,27,.08)}
+    .oled{background:#1f2730;color:#e9f2ff;font-family:"Courier New",monospace;min-height:126px}
+    .oled pre{margin:0;white-space:pre-wrap}
+    .meta{display:grid;gap:8px}.row{display:flex;justify-content:space-between;gap:12px;border-top:1px solid var(--line);padding-top:8px}
+    button{border:0;border-radius:999px;background:var(--accent);color:#fff;padding:12px 18px;font-size:16px;cursor:pointer}
+    button:disabled{opacity:.5;cursor:wait}
+    #log{background:#111;color:#d7ffd0;min-height:260px;max-height:420px;overflow:auto;font:13px/1.35 Consolas,monospace}
+    #log pre{margin:0;white-space:pre-wrap}
+    .pill{display:inline-block;padding:4px 10px;border-radius:999px;background:#eadfcd}
+    .active{background:#a63d17;color:#fff}
+  </style>
+</head>
+<body>
+  <main>
+    <div class="panel">
+      <h1>Pylons Control</h1>
+      <p><span id="solenoid" class="pill">Solenoid idle</span></p>
+      <p id="fw-version"></p>
+      <button id="trigger">Press and Hold Solenoid</button>
+    </div>
+    <div class="grid">
+      <section class="panel oled"><h2>OLED Ping</h2><pre id="oled-ping"></pre></section>
+      <section class="panel oled"><h2>OLED Wi-Fi</h2><pre id="oled-wifi"></pre></section>
+      <section class="panel oled"><h2>OLED Wi-Fi Detail</h2><pre id="oled-wifi-detail"></pre></section>
+      <section class="panel oled"><h2>OLED Node</h2><pre id="oled-node"></pre></section>
+      <section class="panel oled"><h2>OLED Firmware</h2><pre id="oled-firmware"></pre></section>
+    </div>
+    <div class="grid" style="margin-top:16px">
+      <section class="panel"><h2>Telemetry</h2><div id="meta" class="meta"></div></section>
+      <section class="panel"><h2>Serial Console</h2><div id="log"><pre id="log-text"></pre></div></section>
+    </div>
+  </main>
+  <script>
+    async function fetchJson(url, options) {
+      const res = await fetch(url, options);
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+    function setPage(id, lines) {
+      document.getElementById(id).textContent = (lines || []).join('\n');
+    }
+    function renderMeta(data) {
+      const rows = [
+        ['Pylon ID', data.pylon_id],
+        ['Description', data.description],
+        ['Host', data.hostname],
+        ['IP', data.ip],
+        ['Firmware', data.fw_version],
+        ['RSSI', `${data.telemetry.wifi_rssi_dbm} dBm`],
+        ['Ping', `${data.telemetry.ping.last_ok ? 'OK' : 'FAIL'} / ${data.telemetry.ping.last_ms} ms`],
+        ['Target IP', data.target_ip || '--'],
+        ['Triggers', String(data.trigger_event_count)],
+        ['Uptime', data.telemetry.uptime_hms]
+      ];
+      document.getElementById('meta').innerHTML = rows.map(([k,v]) => `<div class="row"><strong>${k}</strong><span>${v}</span></div>`).join('');
+      document.getElementById('fw-version').textContent = `FW ${data.fw_version}`;
+      const pill = document.getElementById('solenoid');
+      pill.textContent = data.solenoid_active ? 'Solenoid active' : 'Solenoid idle';
+      pill.className = data.solenoid_active ? 'pill active' : 'pill';
+      setPage('oled-ping', data.display_pages.ping);
+      setPage('oled-wifi', data.display_pages.wifi);
+      setPage('oled-wifi-detail', data.display_pages.wifi_detail);
+      setPage('oled-node', data.display_pages.node);
+      setPage('oled-firmware', data.display_pages.firmware);
+    }
+    async function refreshTelemetry() {
+      renderMeta(await fetchJson('/api/telemetry'));
+    }
+    async function refreshLogs() {
+      const data = await fetchJson('/api/logs');
+      document.getElementById('log-text').textContent = data.log;
+      const log = document.getElementById('log');
+      log.scrollTop = log.scrollHeight;
+    }
+    const triggerButton = document.getElementById('trigger');
+    let holdActive = false;
+
+    async function setHeldState(active) {
+      if (holdActive === active) return;
+      holdActive = active;
+      await fetchJson(active ? '/api/solenoid/on' : '/api/solenoid/off',
+        active ? {method:'POST'} : {method:'POST', keepalive:true});
+      await refreshTelemetry();
+    }
+
+    function endHold() {
+      void setHeldState(false);
+    }
+
+    triggerButton.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      triggerButton.setPointerCapture(event.pointerId);
+      void setHeldState(true);
+    });
+    triggerButton.addEventListener('pointerup', endHold);
+    triggerButton.addEventListener('pointercancel', endHold);
+    triggerButton.addEventListener('lostpointercapture', endHold);
+    triggerButton.addEventListener('mouseleave', endHold);
+    triggerButton.addEventListener('blur', endHold);
+    window.addEventListener('blur', endHold);
+    window.addEventListener('pagehide', endHold);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) endHold();
+    });
+    refreshTelemetry();
+    refreshLogs();
+    setInterval(refreshTelemetry, 1000);
+    setInterval(refreshLogs, 1500);
+  </script>
+</body>
+</html>
+)HTML";
+
+void HandleWebRoot() {
+  webServer.send(200, "text/html", kWebUiHtml);
+}
+
+void HandleTelemetryApi() {
+  webServer.send(200, "application/json", BuildTelemetryApiJson());
+}
+
+void HandleLogsApi() {
+  String payload;
+  payload.reserve(web_log_text.length() + 32);
+  payload = "{\"log\":\"" + JsonEscape(web_log_text) + "\"}";
+  webServer.send(200, "application/json", payload);
+}
+
+void HandleSolenoidOnApi() {
+  SetBooshActive(true, "http");
+  webServer.send(200, "application/json",
+                 "{\"ok\":true,\"solenoid_active\":true,\"triggered_via\":\"http\"}");
+}
+
+void HandleSolenoidOffApi() {
+  SetBooshActive(false, "http");
+  webServer.send(200, "application/json",
+                 "{\"ok\":true,\"solenoid_active\":false,\"triggered_via\":\"http\"}");
+}
+
+void SetupWebServer() {
+  if (web_server_started) {
+    return;
+  }
+  webServer.on("/", HTTP_GET, HandleWebRoot);
+  webServer.on("/api/telemetry", HTTP_GET, HandleTelemetryApi);
+  webServer.on("/api/logs", HTTP_GET, HandleLogsApi);
+  webServer.on("/api/solenoid/on", HTTP_POST, HandleSolenoidOnApi);
+  webServer.on("/api/solenoid/off", HTTP_POST, HandleSolenoidOffApi);
+  webServer.on("/api/solenoid/trigger", HTTP_POST, HandleSolenoidOnApi);
+  webServer.begin();
+  web_server_started = true;
+  Console.println("HTTP server listening on port 80");
 }
 
 void PollDevBoardButton() {
@@ -735,13 +1105,13 @@ void PollDevBoardButton() {
 
   lastPressed = pressed;
   if (pressed) {
-    Serial.println("Dev board button 0 pressed -> BooshMain ON");
-    ApplyBooshState(1.0f);
+    Console.println("Dev board button 0 pressed -> BooshMain ON");
+    SetBooshActive(true, "button");
     return;
   }
 
-  Serial.println("Dev board button 0 released -> BooshMain OFF");
-  ApplyBooshState(0.0f);
+  Console.println("Dev board button 0 released -> BooshMain OFF");
+  SetBooshActive(false, "button");
 }
 
 void setup() {
@@ -756,17 +1126,17 @@ void setup() {
   PrintCliHelp();
   pinMode(kDevBoardButtonPin, INPUT_PULLUP);
 
-  Serial.println("Boot: init I2C");
+  Console.println("Boot: init I2C");
   Wire.begin(kI2cSda, kI2cScl);
-  Serial.println("Boot: init OLED");
+  Console.println("Boot: init OLED");
   if (!display.begin(SSD1306_SWITCHCAPVCC, kOledAddress)) {
-    Serial.println("SSD1306 init failed.");
+    Console.println("SSD1306 init failed.");
   } else {
     display.invertDisplay(false);
     LogBootStep("Boot: OLED ready", "WEMOS S2 Pico");
   }
 
-  Serial.println("Boot: register WiFi events");
+  Console.println("Boot: register WiFi events");
   WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
     switch (event) {
       case ARDUINO_EVENT_WIFI_STA_GOT_IP:
@@ -792,8 +1162,8 @@ void setup() {
 
   LogBootStep("WiFi scan...");
   int networkCount = WiFi.scanNetworks(false, true);
-  Serial.print("WiFi scan count: ");
-  Serial.println(networkCount);
+  Console.print("WiFi scan count: ");
+  Console.println(networkCount);
   bool hasLowLatency = false;
   for (int i = 0; i < networkCount; ++i) {
     String ssid = WiFi.SSID(i);
@@ -806,8 +1176,8 @@ void setup() {
   const char *targetSsid = hasLowLatency ? BOOSH_WIFI_SSID_LL : BOOSH_WIFI_SSID_MW;
   const char *targetPass = hasLowLatency ? BOOSH_WIFI_PASS_LL : BOOSH_WIFI_PASS_MW;
 
-  Serial.print("Connecting to ");
-  Serial.println(targetSsid);
+  Console.print("Connecting to ");
+  Console.println(targetSsid);
   ShowStatus("Connecting to", String(targetSsid));
   WiFi.begin(targetSsid, targetPass);
 
@@ -815,32 +1185,34 @@ void setup() {
   const unsigned long timeoutMs = 20000;
   while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs) {
     delay(250);
-    Serial.print(".");
+    Console.print(".");
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println();
-    Serial.print("Connected. IP: ");
-    Serial.println(WiFi.localIP());
+    Console.println();
+    Console.print("Connected. IP: ");
+    Console.println(WiFi.localIP());
     ShowStatus("WiFi connected", WiFi.localIP().toString());
 
     if (MDNS.begin(pylon_mdns_host.c_str())) {
-      Serial.print("mDNS: ");
-      Serial.print(pylon_mdns_host);
-      Serial.println(".local");
+      Console.print("mDNS: ");
+      Console.print(pylon_mdns_host);
+      Console.println(".local");
+      MDNS.addService("http", "tcp", 80);
     } else {
-      Serial.println("mDNS init failed.");
+      Console.println("mDNS init failed.");
     }
 
     if (oscUdp.begin(kOscPort)) {
-      Serial.print("OSC listening on port ");
-      Serial.println(kOscPort);
+      Console.print("OSC listening on port ");
+      Console.println(kOscPort);
     } else {
-      Serial.println("OSC UDP begin failed.");
+      Console.println("OSC UDP begin failed.");
     }
+    SetupWebServer();
   } else {
-    Serial.println();
-    Serial.println("WiFi connect failed.");
+    Console.println();
+    Console.println("WiFi connect failed.");
     ShowStatus("WiFi failed", "Check SSID");
   }
 }
@@ -851,17 +1223,17 @@ void HandleOscMessage(OSCMessage &msg) {
   }
 
   if (msg.size() != 1 || !msg.isFloat(0)) {
-    Serial.println("OSC /rpiboosh/BooshMain ignored (unexpected args).");
+    Console.println("OSC /rpiboosh/BooshMain ignored (unexpected args).");
     return;
   }
 
   float value = msg.getFloat(0);
 
-  Serial.print("Received OSC message: ");
-  Serial.print(kOscAddress);
-  Serial.print(" with argument: ");
-  Serial.println(value, 3);
-  ApplyBooshState(value);
+  Console.print("Received OSC message: ");
+  Console.print(kOscAddress);
+  Console.print(" with argument: ");
+  Console.println(value, 3);
+  ApplyBooshState(value, "osc");
 }
 
 const char *OscErrorToString(OSCErrorCode code) {
@@ -884,37 +1256,37 @@ const char *OscErrorToString(OSCErrorCode code) {
 void PrintOscParseError(OSCMessage &msg, int packetSize, int bytesRead, const uint8_t *raw,
                         int rawCount) {
   const OSCErrorCode error = msg.getError();
-  Serial.print("OSC parse error: code=");
-  Serial.print(static_cast<int>(error));
-  Serial.print(" (");
-  Serial.print(OscErrorToString(error));
-  Serial.print("), packetSize=");
-  Serial.print(packetSize);
-  Serial.print(", bytesRead=");
-  Serial.print(bytesRead);
+  Console.print("OSC parse error: code=");
+  Console.print(static_cast<int>(error));
+  Console.print(" (");
+  Console.print(OscErrorToString(error));
+  Console.print("), packetSize=");
+  Console.print(packetSize);
+  Console.print(", bytesRead=");
+  Console.print(bytesRead);
 
   const char *address = msg.getAddress();
   if (address != nullptr && address[0] != '\0') {
-    Serial.print(", address=");
-    Serial.print(address);
+    Console.print(", address=");
+    Console.print(address);
   }
 
   if (raw != nullptr && rawCount > 0) {
-    Serial.print(", raw[");
-    Serial.print(rawCount);
-    Serial.print("]=");
+    Console.print(", raw[");
+    Console.print(rawCount);
+    Console.print("]=");
     for (int i = 0; i < rawCount; ++i) {
       if (i > 0) {
-        Serial.print(' ');
+        Console.print(' ');
       }
       if (raw[i] < 0x10) {
-        Serial.print('0');
+        Console.print('0');
       }
-      Serial.print(raw[i], HEX);
+      Console.print(raw[i], HEX);
     }
   }
 
-  Serial.println();
+  Console.println();
 }
 
 void PollOsc() {
@@ -966,16 +1338,18 @@ void loop() {
 
   PollSerialCli();
   PollDevBoardButton();
+  webServer.handleClient();
 
   if (WiFi.status() != WL_CONNECTED) {
     if (wasConnected) {
       wasConnected = false;
       pingWasDown = false;
       hasIp = false;
+      target_ip_string = "";
       registry_announced = false;
       registry_next_attempt_ms = 0;
       registry_consecutive_failures = 0;
-      Serial.println("WiFi disconnected: registry state reset.");
+      Console.println("WiFi disconnected: registry state reset.");
     }
     ShowStatus("WiFi lost", "Reconnecting");
     delay(1000);
@@ -989,7 +1363,8 @@ void loop() {
     registry_announced = false;
     registry_next_attempt_ms = now;
     registry_consecutive_failures = 0;
-    Serial.println("WiFi connected: scheduling registry announce.");
+    SetupWebServer();
+    Console.println("WiFi connected: scheduling registry announce.");
   }
   HandleRegistry(now);
   if (!wifi_has_ip && wifi_connected_since_ms == 0) {
@@ -998,19 +1373,20 @@ void loop() {
   if (boosh_failsafe_armed && now - boosh_failsafe_start_ms >= kBooshFailsafeTimeoutMs) {
     boosh_failsafe_armed = false;
     ApplyBooshState(0.0f);
-    Serial.println("Failsafe: BooshMain timeout -> forcing OFF.");
+    Console.println("Failsafe: BooshMain timeout -> forcing OFF.");
     ShowStatus("Failsafe timeout", "BooshMain OFF");
     boosh_failsafe_note_until_ms = now + kBooshFailsafeNoteMs;
   }
   if (!hasIp && now - lastResolveMs > 10000) {
     lastResolveMs = now;
-    Serial.println("Resolving RPIBOOSH...");
+    Console.println("Resolving RPIBOOSH...");
     if (WiFi.hostByName(kTargetHost, targetIp) || WiFi.hostByName(kTargetHostMdns, targetIp)) {
       hasIp = true;
-      Serial.print("Resolved to ");
-      Serial.println(targetIp);
+      target_ip_string = targetIp.toString();
+      Console.print("Resolved to ");
+      Console.println(targetIp);
     } else {
-      Serial.println("Resolve failed.");
+      Console.println("Resolve failed.");
       ShowStatus("Resolve failed", "RPIBOOSH");
       delay(1000);
       return;
@@ -1027,6 +1403,7 @@ void loop() {
     telemetry_ping_sent += 1;
     lastOk = Ping.ping(targetIp, 1);
     telemetry_ping_last_ok = lastOk;
+    current_ping_last_ok = lastOk;
     if (lastOk) {
       uint32_t lastMs = static_cast<uint32_t>(Ping.averageTime());
       stats.last_ms = lastMs;
@@ -1039,22 +1416,23 @@ void loop() {
         stats.max_ms = lastMs;
       }
       lastPingSuccessMs = now;
-      Serial.print("Ping ");
-      Serial.print(kTargetHost);
-      Serial.print(" ");
-      Serial.print(lastMs);
-      Serial.println("ms");
+      last_ping_success_ms = now;
+      Console.print("Ping ");
+      Console.print(kTargetHost);
+      Console.print(" ");
+      Console.print(lastMs);
+      Console.println("ms");
       if (pingWasDown) {
         pingWasDown = false;
         registry_announced = false;
         registry_next_attempt_ms = now;
         registry_consecutive_failures = 0;
-        Serial.println("Ping restored: scheduling registry announce.");
+        Console.println("Ping restored: scheduling registry announce.");
       }
     } else {
       telemetry_ping_lost += 1;
       pingWasDown = true;
-      Serial.println("Ping failed.");
+      Console.println("Ping failed.");
     }
     telemetry_ping_has_data = stats.has_data();
     telemetry_ping_last_ms = stats.last_ms;
@@ -1070,7 +1448,7 @@ void loop() {
       lastDisplayMs = now;
     } else if (now - lastDisplayMs >= kDisplayCycleMs) {
       lastDisplayMs = now;
-      displayPage = static_cast<uint8_t>((displayPage + 1) % 4);
+      displayPage = static_cast<uint8_t>((displayPage + 1) % 5);
     }
 
     if (displayPage == 0) {
@@ -1079,8 +1457,10 @@ void loop() {
       ShowWifiMetricsPage(0, wifi_connected_since_ms, last_disconnect_reason);
     } else if (displayPage == 2) {
       ShowWifiMetricsPage(1, wifi_connected_since_ms, last_disconnect_reason);
-    } else {
+    } else if (displayPage == 3) {
       ShowNodeConfigPage();
+    } else {
+      ShowFirmwarePage();
     }
   }
 
