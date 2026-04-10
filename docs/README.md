@@ -16,7 +16,7 @@ At runtime the firmware:
 1. Listens for OSC on UDP port `8000` at `/rpiboosh/BooshMain`.
 2. Treats the dev-board `0`/BOOT button (`GPIO0`) as a local BooshMain trigger.
 3. Serves an HTTP control/status page on port `80`.
-4. Exposes REST APIs for telemetry, console log access, and solenoid hold control.
+4. Exposes REST APIs for telemetry, console log access, solenoid hold control, and node config.
 5. Uses OLED inversion as a prototype proxy for the boosher solenoid state.
 6. Inverted display means solenoid open / fire ON.
 7. Normal display means solenoid closed / fire OFF.
@@ -75,15 +75,26 @@ Web control behavior:
 - The browser UI button is press-and-hold. Loss of focus, page hide, pointer cancel, or release is treated as OFF.
 
 ## HTTP Interface
-The device exposes a small web UI on `http://<ip>/` and `http://<mdns>.local/`.
+The device exposes a small dark-theme web UI on `http://<ip>/` and `http://<mdns>.local/`.
 
 Endpoints:
 - `GET /`: control/status web UI
 - `GET /api/telemetry`: current telemetry payload plus OLED page text
 - `GET /api/logs`: mirrored serial console text buffer
+- `GET /api/config`: current persisted node config (`id`, `host`, `hostname`, `description`)
+- `POST /api/config`: update any subset of `id`, `host`, `description`, or `node`
+- `POST /api/config/id`: set `id` via `value`
+- `POST /api/config/host`: set `host` via `value`
+- `POST /api/config/desc`: set `description` via `value`
+- `POST /api/config/node`: set both `id` and `host` via `value`
 - `POST /api/solenoid/on`: solenoid ON
 - `POST /api/solenoid/off`: solenoid OFF
 - `POST /api/solenoid/trigger`: compatibility alias for ON
+
+The web UI main page includes:
+- Live telemetry and console view
+- Press-and-hold solenoid control
+- Editable node config fields for `id`, `host`, `description`, and `node` alias
 
 ## PYLON Registry API
 The device posts presence metadata to RPIBOOSH:
@@ -102,6 +113,9 @@ Default metadata includes:
 - `firmware_version` / `version` / `fw_semver`
 - `ttl_sec` (`30`)
 - `telemetry.ipv4` / `telemetry.mdns_hostname` legacy compatibility aliases
+- `telemetry.temperature` / `telemetry.temperature_f` / `telemetry.temperature_c`
+- `telemetry.battery_voltage` / `telemetry.battery_voltage_v`
+- `telemetry.battery_charge` / `telemetry.battery_charge_pct`
 - `telemetry.uptime` / `telemetry.uptime_hms`
 - `telemetry.trigger_event_count` / `telemetry.solenoid_active`
 - `telemetry.ping.target/sent/recv/lost/last_ms/min_ms/max_ms/avg_ms/count/last_ok`

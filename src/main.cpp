@@ -42,6 +42,9 @@ constexpr const char *kFirmwareSemver = "0.0.1";
 constexpr const char *kFirmwareBuildDate = __DATE__;
 constexpr const char *kFirmwareBuildTime = __TIME__;
 constexpr const char *kFirmwareVersion = "0.0.1 " __DATE__ " " __TIME__;
+constexpr const char *kTelemetryTemperatureDefault = "N/A";
+constexpr const char *kTelemetryBatteryVoltageDefault = "N/A";
+constexpr const char *kTelemetryBatteryChargePercentDefault = "N/A";
 constexpr size_t kWebLogBufferMaxChars = 8192;
 
 Adafruit_SSD1306 display(kScreenWidth, kScreenHeight, &Wire, kOledReset);
@@ -380,6 +383,105 @@ void PrintCliHelp() {
   Console.println("  clear nvs          (erase saved id/host/desc)");
 }
 
+bool SetConfigFieldValue(const String &field_in, const String &value_in, bool log_output = true) {
+  String field = ToLowerAscii(field_in);
+  String value = value_in;
+  value.trim();
+  if (value.length() == 0) {
+    if (log_output) {
+      Console.println("[CFG] value cannot be empty");
+    }
+    return false;
+  }
+
+  bool changed = false;
+  if (field == "id") {
+    const String new_id = NormalizePylonId(value);
+    if (new_id.length() == 0) {
+      if (log_output) {
+        Console.println("[CFG] invalid id");
+      }
+      return false;
+    }
+    pylon_id = new_id;
+    changed = true;
+    if (log_output) {
+      Console.print("[CFG] id set: ");
+      Console.println(pylon_id);
+    }
+  } else if (field == "host" || field == "mdns") {
+    const String new_host = NormalizeMdnsHost(value);
+    if (!IsValidMdnsHost(new_host)) {
+      if (log_output) {
+        Console.println("[CFG] invalid host; allowed: letters, digits, '-' (1..63 chars)");
+      }
+      return false;
+    }
+    pylon_mdns_host = new_host;
+    changed = true;
+    if (log_output) {
+      Console.print("[CFG] host set: ");
+      Console.println(pylon_mdns_host);
+    }
+  } else if (field == "desc" || field == "description") {
+    pylon_description = value;
+    changed = true;
+    if (log_output) {
+      Console.print("[CFG] desc set: ");
+      Console.println(pylon_description);
+    }
+  } else if (field == "node") {
+    const String new_id = NormalizePylonId(value);
+    const String new_host = NormalizeMdnsHost(value);
+    if (new_id.length() == 0 || !IsValidMdnsHost(new_host)) {
+      if (log_output) {
+        Console.println("[CFG] invalid node value");
+      }
+      return false;
+    }
+    pylon_id = new_id;
+    pylon_mdns_host = new_host;
+    changed = true;
+    if (log_output) {
+      Console.print("[CFG] node set (id+host): ");
+      Console.println(pylon_id);
+    }
+  } else {
+    if (log_output) {
+      Console.println("[CFG] unknown set field. use id|host|desc|node");
+    }
+    return false;
+  }
+
+  if (!changed) {
+    return true;
+  }
+  if (!SavePylonConfig()) {
+    if (log_output) {
+      Console.println("[CFG] failed to persist config");
+    }
+    return false;
+  }
+  RestartMdnsIfConnected();
+  ScheduleRegistryRefreshNow();
+  if (log_output) {
+    PrintPylonConfig();
+  }
+  return true;
+}
+
+String BuildConfigApiJson() {
+  String payload;
+  payload.reserve(256);
+  payload += "{";
+  payload += "\"id\":\"" + JsonEscape(pylon_id) + "\",";
+  payload += "\"host\":\"" + JsonEscape(pylon_mdns_host) + "\",";
+  payload += "\"hostname\":\"" + JsonEscape(pylon_mdns_host + ".local") + "\",";
+  payload += "\"description\":\"" + JsonEscape(pylon_description) + "\"";
+  payload += "}";
+  return payload;
+}
+
 void HandleCliCommand(const String &input_line) {
   String line = input_line;
   line.trim();
@@ -423,60 +525,9 @@ void HandleCliCommand(const String &input_line) {
     Console.println("[CLI] value cannot be empty");
     return;
   }
-
-  bool changed = false;
-  if (field == "id") {
-    const String new_id = NormalizePylonId(value);
-    if (new_id.length() == 0) {
-      Console.println("[CLI] invalid id");
-      return;
-    }
-    pylon_id = new_id;
-    changed = true;
-    Console.print("[CLI] id set: ");
-    Console.println(pylon_id);
-  } else if (field == "host" || field == "mdns") {
-    const String new_host = NormalizeMdnsHost(value);
-    if (!IsValidMdnsHost(new_host)) {
-      Console.println("[CLI] invalid host; allowed: letters, digits, '-' (1..63 chars)");
-      return;
-    }
-    pylon_mdns_host = new_host;
-    changed = true;
-    Console.print("[CLI] host set: ");
-    Console.println(pylon_mdns_host);
-  } else if (field == "desc" || field == "description") {
-    pylon_description = value;
-    changed = true;
-    Console.print("[CLI] desc set: ");
-    Console.println(pylon_description);
-  } else if (field == "node") {
-    const String new_id = NormalizePylonId(value);
-    const String new_host = NormalizeMdnsHost(value);
-    if (new_id.length() == 0 || !IsValidMdnsHost(new_host)) {
-      Console.println("[CLI] invalid node value");
-      return;
-    }
-    pylon_id = new_id;
-    pylon_mdns_host = new_host;
-    changed = true;
-    Console.print("[CLI] node set (id+host): ");
-    Console.println(pylon_id);
-  } else {
-    Console.println("[CLI] unknown set field. use id|host|desc|node");
+  if (!SetConfigFieldValue(field, value)) {
     return;
   }
-
-  if (!changed) {
-    return;
-  }
-  if (!SavePylonConfig()) {
-    Console.println("[CFG] failed to persist config");
-    return;
-  }
-  RestartMdnsIfConnected();
-  ScheduleRegistryRefreshNow();
-  PrintPylonConfig();
 }
 
 void PollSerialCli() {
@@ -533,7 +584,13 @@ String BuildRegistryPayload() {
   payload += "\"fw_semver\":\"" + JsonEscape(String(kFirmwareSemver)) + "\",";
   payload += "\"fw_build_date\":\"" + JsonEscape(String(kFirmwareBuildDate)) + "\",";
   payload += "\"fw_build_time\":\"" + JsonEscape(String(kFirmwareBuildTime)) + "\",";
-  payload += "\"temperature_f\":\"N/A\",";
+  payload += "\"temperature\":\"" + JsonEscape(String(kTelemetryTemperatureDefault)) + "\",";
+  payload += "\"temperature_f\":\"" + JsonEscape(String(kTelemetryTemperatureDefault)) + "\",";
+  payload += "\"temperature_c\":\"" + JsonEscape(String(kTelemetryTemperatureDefault)) + "\",";
+  payload += "\"battery_voltage\":\"" + JsonEscape(String(kTelemetryBatteryVoltageDefault)) + "\",";
+  payload += "\"battery_voltage_v\":\"" + JsonEscape(String(kTelemetryBatteryVoltageDefault)) + "\",";
+  payload += "\"battery_charge\":\"" + JsonEscape(String(kTelemetryBatteryChargePercentDefault)) + "\",";
+  payload += "\"battery_charge_pct\":\"" + JsonEscape(String(kTelemetryBatteryChargePercentDefault)) + "\",";
   payload += "\"wifi_rssi_dbm\":" + String(wifi_rssi_dbm) + ",";
   payload += "\"uptime_s\":" + String(static_cast<uint32_t>(millis() / 1000)) + ",";
   payload += "\"uptime\":\"" + JsonEscape(FormatDurationHms(static_cast<uint32_t>(millis() / 1000))) + "\",";
@@ -896,7 +953,13 @@ String BuildTelemetryApiJson() {
   payload += "\"fw_semver\":\"" + JsonEscape(String(kFirmwareSemver)) + "\",";
   payload += "\"fw_build_date\":\"" + JsonEscape(String(kFirmwareBuildDate)) + "\",";
   payload += "\"fw_build_time\":\"" + JsonEscape(String(kFirmwareBuildTime)) + "\",";
-  payload += "\"temperature_f\":\"N/A\",";
+  payload += "\"temperature\":\"" + JsonEscape(String(kTelemetryTemperatureDefault)) + "\",";
+  payload += "\"temperature_f\":\"" + JsonEscape(String(kTelemetryTemperatureDefault)) + "\",";
+  payload += "\"temperature_c\":\"" + JsonEscape(String(kTelemetryTemperatureDefault)) + "\",";
+  payload += "\"battery_voltage\":\"" + JsonEscape(String(kTelemetryBatteryVoltageDefault)) + "\",";
+  payload += "\"battery_voltage_v\":\"" + JsonEscape(String(kTelemetryBatteryVoltageDefault)) + "\",";
+  payload += "\"battery_charge\":\"" + JsonEscape(String(kTelemetryBatteryChargePercentDefault)) + "\",";
+  payload += "\"battery_charge_pct\":\"" + JsonEscape(String(kTelemetryBatteryChargePercentDefault)) + "\",";
   payload += "\"wifi_rssi_dbm\":" + String(wifi_rssi_dbm) + ",";
   payload += "\"uptime_s\":" + String(static_cast<uint32_t>(now / 1000)) + ",";
   payload += "\"uptime\":\"" + JsonEscape(FormatDurationHms(static_cast<uint32_t>(now / 1000))) + "\",";
@@ -936,21 +999,24 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pylons</title>
   <style>
-    :root{color-scheme:light;background:#f3efe6;--ink:#1f1d1a;--panel:#fffaf2;--accent:#a63d17;--line:#d9cbb2}
+    :root{color-scheme:dark;background:#0a0d12;--ink:#e7edf6;--muted:#9db0c7;--panel:#121821;--panel-2:#0f141c;--accent:#4fb3ff;--accent-2:#1e7bbf;--line:#273445}
     *{box-sizing:border-box} body{margin:0;font-family:Georgia,serif;color:var(--ink);background:
-      radial-gradient(circle at top,#fff6df 0,#f3efe6 45%,#eadfcd 100%) fixed}
+      radial-gradient(circle at top,#162235 0,#0d121a 35%,#07090d 100%) fixed}
     main{max-width:1100px;margin:0 auto;padding:20px}
     h1,h2{margin:0 0 12px} .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
-    .panel{background:rgba(255,250,242,.92);border:1px solid var(--line);border-radius:16px;padding:16px;box-shadow:0 10px 30px rgba(86,56,27,.08)}
-    .oled{background:#1f2730;color:#e9f2ff;font-family:"Courier New",monospace;min-height:126px}
+    .panel{background:rgba(18,24,33,.94);border:1px solid var(--line);border-radius:16px;padding:16px;box-shadow:0 18px 40px rgba(0,0,0,.35)}
+    .oled{background:linear-gradient(180deg,#0d131c 0,#080c12 100%);color:#d8e8ff;font-family:"Courier New",monospace;min-height:126px}
     .oled pre{margin:0;white-space:pre-wrap}
     .meta{display:grid;gap:8px}.row{display:flex;justify-content:space-between;gap:12px;border-top:1px solid var(--line);padding-top:8px}
-    button{border:0;border-radius:999px;background:var(--accent);color:#fff;padding:12px 18px;font-size:16px;cursor:pointer}
+    label{display:grid;gap:6px;color:var(--muted)}
+    input{width:100%;background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+    input:focus{outline:2px solid rgba(79,179,255,.35);border-color:var(--accent)}
+    button{border:0;border-radius:999px;background:linear-gradient(180deg,var(--accent) 0,var(--accent-2) 100%);color:#06111d;padding:12px 18px;font-size:16px;font-weight:700;cursor:pointer}
     button:disabled{opacity:.5;cursor:wait}
-    #log{background:#111;color:#d7ffd0;min-height:260px;max-height:420px;overflow:auto;font:13px/1.35 Consolas,monospace}
+    #log{background:#05080d;color:#b9ffd6;min-height:260px;max-height:420px;overflow:auto;font:13px/1.35 Consolas,monospace;border-radius:12px;padding:12px;border:1px solid #193022}
     #log pre{margin:0;white-space:pre-wrap}
-    .pill{display:inline-block;padding:4px 10px;border-radius:999px;background:#eadfcd}
-    .active{background:#a63d17;color:#fff}
+    .pill{display:inline-block;padding:4px 10px;border-radius:999px;background:#243244;color:#c9d7e7}
+    .active{background:#f05a28;color:#fff}
   </style>
 </head>
 <body>
@@ -960,6 +1026,19 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       <p><span id="solenoid" class="pill">Solenoid idle</span></p>
       <p id="fw-version"></p>
       <button id="trigger">Press and Hold Solenoid</button>
+    </div>
+    <div class="panel" style="margin-top:16px">
+      <h2>Node Config</h2>
+      <form id="config-form" class="meta">
+        <label>ID <input id="cfg-id" name="id"></label>
+        <label>Host <input id="cfg-host" name="host"></label>
+        <label>Description <input id="cfg-description" name="description"></label>
+        <label>Node Alias <input id="cfg-node" name="node" placeholder="sets id + host"></label>
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+          <button type="submit">Save Config</button>
+          <span id="config-status"></span>
+        </div>
+      </form>
     </div>
     <div class="grid">
       <section class="panel oled"><h2>OLED Ping</h2><pre id="oled-ping"></pre></section>
@@ -979,8 +1058,18 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       if (!res.ok) throw new Error(await res.text());
       return res.json();
     }
+    function esc(value) {
+      return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+    }
     function setPage(id, lines) {
       document.getElementById(id).textContent = (lines || []).join('\n');
+    }
+    function syncConfigField(id, nextValue) {
+      const input = document.getElementById(id);
+      if (!input) return;
+      if (document.activeElement === input) return;
+      if (input.dataset.dirty === 'true') return;
+      input.value = nextValue ?? '';
     }
     function renderMeta(data) {
       const rows = [
@@ -989,6 +1078,9 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         ['Host', data.hostname],
         ['IP', data.ip],
         ['Firmware', data.fw_version],
+        ['Temperature', data.telemetry.temperature || data.telemetry.temperature_f || 'N/A'],
+        ['Battery V', data.telemetry.battery_voltage || data.telemetry.battery_voltage_v || 'N/A'],
+        ['Battery %', data.telemetry.battery_charge || data.telemetry.battery_charge_pct || 'N/A'],
         ['RSSI', `${data.telemetry.wifi_rssi_dbm} dBm`],
         ['Ping', `${data.telemetry.ping.last_ok ? 'OK' : 'FAIL'} / ${data.telemetry.ping.last_ms} ms`],
         ['Target IP', data.target_ip || '--'],
@@ -1005,6 +1097,9 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       setPage('oled-wifi-detail', data.display_pages.wifi_detail);
       setPage('oled-node', data.display_pages.node);
       setPage('oled-firmware', data.display_pages.firmware);
+      syncConfigField('cfg-id', data.pylon_id || '');
+      syncConfigField('cfg-host', (data.hostname || '').replace(/\.local$/,''));
+      syncConfigField('cfg-description', data.description || '');
     }
     async function refreshTelemetry() {
       renderMeta(await fetchJson('/api/telemetry'));
@@ -1016,7 +1111,18 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       log.scrollTop = log.scrollHeight;
     }
     const triggerButton = document.getElementById('trigger');
+    const configForm = document.getElementById('config-form');
+    const configInputs = ['cfg-id', 'cfg-host', 'cfg-description', 'cfg-node']
+      .map((id) => document.getElementById(id))
+      .filter(Boolean);
     let holdActive = false;
+
+    configInputs.forEach((input) => {
+      input.dataset.dirty = 'false';
+      input.addEventListener('input', () => {
+        input.dataset.dirty = 'true';
+      });
+    });
 
     async function setHeldState(active) {
       if (holdActive === active) return;
@@ -1045,6 +1151,36 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) endHold();
     });
+    configForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const status = document.getElementById('config-status');
+      status.textContent = 'Saving...';
+      const body = new URLSearchParams();
+      const node = document.getElementById('cfg-node').value.trim();
+      if (node) {
+        body.set('node', node);
+      } else {
+        body.set('id', document.getElementById('cfg-id').value.trim());
+        body.set('host', document.getElementById('cfg-host').value.trim());
+      }
+      body.set('description', document.getElementById('cfg-description').value.trim());
+      try {
+        const result = await fetchJson('/api/config', {
+          method:'POST',
+          headers:{'Content-Type':'application/x-www-form-urlencoded'},
+          body:body.toString()
+        });
+        status.textContent = `Saved ${result.config.hostname}`;
+        configInputs.forEach((input) => {
+          input.dataset.dirty = 'false';
+        });
+        document.getElementById('cfg-node').value = '';
+        await refreshTelemetry();
+        await refreshLogs();
+      } catch (error) {
+        status.innerHTML = `Save failed: ${esc(error.message)}`;
+      }
+    });
     refreshTelemetry();
     refreshLogs();
     setInterval(refreshTelemetry, 1000);
@@ -1069,6 +1205,104 @@ void HandleLogsApi() {
   webServer.send(200, "application/json", payload);
 }
 
+void SendApiError(int status_code, const String &message) {
+  webServer.send(status_code, "application/json",
+                 "{\"ok\":false,\"error\":\"" + JsonEscape(message) + "\"}");
+}
+
+void HandleConfigGetApi() {
+  webServer.send(200, "application/json", BuildConfigApiJson());
+}
+
+void HandleConfigPostApi() {
+  const bool has_node = webServer.hasArg("node");
+  const bool has_id = webServer.hasArg("id");
+  const bool has_host = webServer.hasArg("host");
+  const bool has_desc = webServer.hasArg("description") || webServer.hasArg("desc");
+
+  if (!has_node && !has_id && !has_host && !has_desc) {
+    SendApiError(400, "expected one of: node, id, host, description");
+    return;
+  }
+
+  bool ok = true;
+  if (has_node) {
+    ok = ok && SetConfigFieldValue("node", webServer.arg("node"));
+  } else {
+    if (has_id) {
+      ok = ok && SetConfigFieldValue("id", webServer.arg("id"));
+    }
+    if (has_host) {
+      ok = ok && SetConfigFieldValue("host", webServer.arg("host"));
+    }
+  }
+  if (has_desc) {
+    ok = ok && SetConfigFieldValue("desc",
+                                   webServer.hasArg("description") ? webServer.arg("description")
+                                                                   : webServer.arg("desc"));
+  }
+
+  if (!ok) {
+    SendApiError(400, "invalid config value");
+    return;
+  }
+
+  webServer.send(200, "application/json",
+                 "{\"ok\":true,\"config\":" + BuildConfigApiJson() + "}");
+}
+
+void HandleConfigIdApi() {
+  if (!webServer.hasArg("value")) {
+    SendApiError(400, "missing value");
+    return;
+  }
+  if (!SetConfigFieldValue("id", webServer.arg("value"))) {
+    SendApiError(400, "invalid id");
+    return;
+  }
+  webServer.send(200, "application/json",
+                 "{\"ok\":true,\"config\":" + BuildConfigApiJson() + "}");
+}
+
+void HandleConfigHostApi() {
+  if (!webServer.hasArg("value")) {
+    SendApiError(400, "missing value");
+    return;
+  }
+  if (!SetConfigFieldValue("host", webServer.arg("value"))) {
+    SendApiError(400, "invalid host");
+    return;
+  }
+  webServer.send(200, "application/json",
+                 "{\"ok\":true,\"config\":" + BuildConfigApiJson() + "}");
+}
+
+void HandleConfigDescApi() {
+  if (!webServer.hasArg("value")) {
+    SendApiError(400, "missing value");
+    return;
+  }
+  if (!SetConfigFieldValue("desc", webServer.arg("value"))) {
+    SendApiError(400, "invalid description");
+    return;
+  }
+  webServer.send(200, "application/json",
+                 "{\"ok\":true,\"config\":" + BuildConfigApiJson() + "}");
+}
+
+void HandleConfigNodeApi() {
+  if (!webServer.hasArg("value")) {
+    SendApiError(400, "missing value");
+    return;
+  }
+  if (!SetConfigFieldValue("node", webServer.arg("value"))) {
+    SendApiError(400, "invalid node");
+    return;
+  }
+  webServer.send(200, "application/json",
+                 "{\"ok\":true,\"config\":" + BuildConfigApiJson() + "}");
+}
+
 void HandleSolenoidOnApi() {
   SetBooshActive(true, "http");
   webServer.send(200, "application/json",
@@ -1088,6 +1322,12 @@ void SetupWebServer() {
   webServer.on("/", HTTP_GET, HandleWebRoot);
   webServer.on("/api/telemetry", HTTP_GET, HandleTelemetryApi);
   webServer.on("/api/logs", HTTP_GET, HandleLogsApi);
+  webServer.on("/api/config", HTTP_GET, HandleConfigGetApi);
+  webServer.on("/api/config", HTTP_POST, HandleConfigPostApi);
+  webServer.on("/api/config/id", HTTP_POST, HandleConfigIdApi);
+  webServer.on("/api/config/host", HTTP_POST, HandleConfigHostApi);
+  webServer.on("/api/config/desc", HTTP_POST, HandleConfigDescApi);
+  webServer.on("/api/config/node", HTTP_POST, HandleConfigNodeApi);
   webServer.on("/api/solenoid/on", HTTP_POST, HandleSolenoidOnApi);
   webServer.on("/api/solenoid/off", HTTP_POST, HandleSolenoidOffApi);
   webServer.on("/api/solenoid/trigger", HTTP_POST, HandleSolenoidOnApi);

@@ -48,7 +48,13 @@ Every announce/heartbeat in the current baseline includes:
     "ipv4": "192.168.1.70",
     "mdns_hostname": "PYLON0.local",
     "fw_version": "pylons ...",
+    "temperature": "N/A",
     "temperature_f": "N/A",
+    "temperature_c": "N/A",
+    "battery_voltage": "N/A",
+    "battery_voltage_v": "N/A",
+    "battery_charge": "N/A",
+    "battery_charge_pct": "N/A",
     "wifi_rssi_dbm": -58,
     "uptime_s": 9123,
     "ping_target": "RPIBOOSH",
@@ -83,7 +89,13 @@ Legacy-compatible consumers should assume these fields exist and keep their curr
 - `telemetry.ipv4`: current IPv4 string duplicated under telemetry for legacy compatibility
 - `telemetry.mdns_hostname`: current `.local` hostname duplicated under telemetry for legacy compatibility
 - `telemetry.fw_version`: firmware build/version string duplicated under telemetry for legacy compatibility
+- `telemetry.temperature`: generic temperature placeholder/value for receiver compatibility with newer High Striker-style consumers
 - `telemetry.temperature_f`: string placeholder used by older consumers when no temperature sensor is present
+- `telemetry.temperature_c`: optional Celsius alias kept as a string placeholder/value for forward compatibility
+- `telemetry.battery_voltage`: generic battery-voltage placeholder/value for receiver compatibility
+- `telemetry.battery_voltage_v`: voltage alias kept for explicit-unit consumers
+- `telemetry.battery_charge`: generic battery charge placeholder/value for receiver compatibility
+- `telemetry.battery_charge_pct`: percent alias kept for explicit-unit consumers
 - `telemetry.wifi_rssi_dbm`: integer RSSI in dBm
 - `telemetry.ping.target`: ping target string for older consumers that read nested ping metadata
 - `telemetry.ping.sent`: number of ping attempts since boot
@@ -125,6 +137,14 @@ Runtime identity (`id`, `host`, `desc`) is persisted in NVS and can be changed v
 - `set desc <value>`
 - `set node <value>`
 - `clear nvs`
+
+The same persisted config can also be queried or updated over HTTP:
+- `GET /api/config`
+- `POST /api/config`
+- `POST /api/config/id`
+- `POST /api/config/host`
+- `POST /api/config/desc`
+- `POST /api/config/node`
 
 ## Validation
 
