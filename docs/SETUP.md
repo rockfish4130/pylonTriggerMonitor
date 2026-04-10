@@ -34,19 +34,19 @@ PlatformIO will auto-install:
 These are declared in `platformio.ini`.
 
 ## Example OSC Payloads
-Hex payloads for `/rpiboosh/BooshMain` with 3 float args:
+Hex payloads for `/rpiboosh/BooshMain` with 1 float arg:
 
 Start (ON):
 ```text
-2F 72 70 69 62 6F 6F 73 68 2F 42 6F 6F 73 68 4D 61 69 6E 00 2C 66 66 66 00 00 00 00 3F 80 00 00 00 00 00 00 00 00 00 00
+2F 72 70 69 62 6F 6F 73 68 2F 42 6F 6F 73 68 4D 61 69 6E 00 2C 66 00 3F 80 00 00
 ```
 
 Stop (OFF):
 ```text
-2F 72 70 69 62 6F 6F 73 68 2F 42 6F 6F 73 68 4D 61 69 6E 00 2C 66 66 66 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+2F 72 70 69 62 6F 6F 73 68 2F 42 6F 6F 73 68 4D 61 69 6E 00 2C 66 00 00 00 00 00
 ```
 
 ## Dev-Board Button
 On the WEMOS S2 Pico dev board, the `0`/BOOT button is also mapped as a local BooshMain trigger:
-- Press: ON (`[1.0, 0.0, 0.0]`)
-- Release: OFF (`[0.0, 0.0, 0.0]`)
+- Press: ON (`[1.0]`)
+- Release: OFF (`[0.0]`)

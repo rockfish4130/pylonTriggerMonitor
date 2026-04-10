@@ -51,13 +51,13 @@ pio device monitor
 - `src/wifi_credentials.h`: Wi-Fi SSIDs/passwords (not for commit).
 
 ## OSC Control
-The device listens for OSC messages on `/rpiboosh/BooshMain` with 3 float arguments.
-- ON: `[1.0, 0.0, 0.0]`
-- OFF: `[0.0, 0.0, 0.0]`
+The device listens for OSC messages on `/rpiboosh/BooshMain` with 1 float argument.
+- ON: `[1.0]`
+- OFF: `[0.0]`
 
 Local dev-board control on the WEMOS S2 Pico matches the OSC behavior:
-- Press the `0`/BOOT button: ON (`[1.0, 0.0, 0.0]`)
-- Release the `0`/BOOT button: OFF (`[0.0, 0.0, 0.0]`)
+- Press the `0`/BOOT button: ON (`[1.0]`)
+- Release the `0`/BOOT button: OFF (`[0.0]`)
 
 Prototype proxy behavior:
 - Inverted display = solenoid open / fire ON
@@ -80,6 +80,14 @@ Default metadata includes:
 - `roles` (`boosh_main`)
 - `fw_version`
 - `ttl_sec` (`30`)
+- `telemetry.ipv4` / `telemetry.mdns_hostname` legacy compatibility aliases
+- `telemetry.ping.target/sent/recv/lost/last_ms/min_ms/max_ms/avg_ms/count/last_ok`
+
+Compatibility note:
+- The current announce/heartbeat payload is the legacy baseline for deployed nodes.
+- The telemetry object is emitted in the same compatibility shape used by existing High Striker nodes so `boosh_box_pi/rpi_python_control` can ingest it without receiver changes.
+- Future firmware may append optional telemetry fields, and receivers should ignore unknown fields.
+- Absence of an explicit schema/protocol marker should be interpreted as the current legacy baseline documented in `docs/PYLON_REGISTRY.md`.
 
 See:
 - `docs/PYLON_REGISTRY.md`

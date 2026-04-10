@@ -22,7 +22,7 @@ constexpr uint8_t kOledAddress = 0x3C;
 constexpr int kScreenWidth = 128;
 constexpr int kScreenHeight = 32;
 constexpr uint16_t kOscPort = 8000;
-constexpr const char *kOscAddress = "/rpiboosh/BooshMain";
+constexpr const char *kOscAddress = "/pylon/BooshMain";
 constexpr unsigned long kBooshFailsafeTimeoutMs = 5000;
 constexpr unsigned long kBooshFailsafeNoteMs = 3000;
 constexpr unsigned long kPingTimeoutMs = 5000;
@@ -58,6 +58,8 @@ String pylon_description;
 String serial_cli_line;
 bool telemetry_ping_last_ok = false;
 bool telemetry_ping_has_data = false;
+uint32_t telemetry_ping_sent = 0;
+uint32_t telemetry_ping_lost = 0;
 uint32_t telemetry_ping_last_ms = 0;
 uint32_t telemetry_ping_min_ms = 0;
 uint32_t telemetry_ping_max_ms = 0;
@@ -419,7 +421,7 @@ String BuildRegistryPayload() {
   const String ip = WiFi.localIP().toString();
   const long wifi_rssi_dbm = WiFi.RSSI();
   String payload;
-  payload.reserve(520);
+  payload.reserve(680);
   payload += "{";
   payload += "\"pylon_id\":\"" + JsonEscape(pylon_id) + "\",";
   payload += "\"description\":\"" + JsonEscape(pylon_description) + "\",";
@@ -431,17 +433,25 @@ String BuildRegistryPayload() {
   payload += "\"fw_version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
   payload += "\"ttl_sec\":" + String(kRegistryTtlSec) + ",";
   payload += "\"telemetry\":{";
+  payload += "\"ipv4\":\"" + JsonEscape(ip) + "\",";
+  payload += "\"mdns_hostname\":\"" + JsonEscape(hostname) + "\",";
+  payload += "\"fw_version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
+  payload += "\"temperature_f\":\"N/A\",";
   payload += "\"wifi_rssi_dbm\":" + String(wifi_rssi_dbm) + ",";
+  payload += "\"uptime_s\":" + String(static_cast<uint32_t>(millis() / 1000)) + ",";
   payload += "\"ping_target\":\"" + JsonEscape(String(kPingTargetHost)) + "\",";
   payload += "\"ping\":{";
+  payload += "\"target\":\"" + JsonEscape(String(kPingTargetHost)) + "\",";
+  payload += "\"sent\":" + String(telemetry_ping_sent) + ",";
+  payload += "\"recv\":" + String(telemetry_ping_count) + ",";
+  payload += "\"lost\":" + String(telemetry_ping_lost) + ",";
   payload += "\"last_ms\":" + String(telemetry_ping_last_ms) + ",";
   payload += "\"min_ms\":" + String(telemetry_ping_min_ms) + ",";
   payload += "\"max_ms\":" + String(telemetry_ping_max_ms) + ",";
   payload += "\"avg_ms\":" + String(telemetry_ping_avg_ms) + ",";
   payload += "\"count\":" + String(telemetry_ping_count) + ",";
   payload += "\"last_ok\":" + String(telemetry_ping_last_ok ? "true" : "false");
-  payload += "},";
-  payload += "\"uptime_s\":" + String(static_cast<uint32_t>(millis() / 1000));
+  payload += "}";
   payload += "}";
   payload += "}";
   return payload;
@@ -703,15 +713,14 @@ void ShowNodeConfigPage() {
   display.display();
 }
 
-void ApplyBooshState(float v0, float v1, float v2) {
+void ApplyBooshState(float value) {
   const float kOnThreshold = 0.5f;
-  const float kOffThreshold = 0.5f;
 
-  if (v0 > kOnThreshold && v1 < kOffThreshold && v2 < kOffThreshold) {
+  if (value > kOnThreshold) {
     SetDisplayInverted(true);
     boosh_failsafe_armed = true;
     boosh_failsafe_start_ms = millis();
-  } else if (v0 < kOffThreshold && v1 < kOffThreshold && v2 < kOffThreshold) {
+  } else {
     SetDisplayInverted(false);
     boosh_failsafe_armed = false;
   }
@@ -727,12 +736,12 @@ void PollDevBoardButton() {
   lastPressed = pressed;
   if (pressed) {
     Serial.println("Dev board button 0 pressed -> BooshMain ON");
-    ApplyBooshState(1.0f, 0.0f, 0.0f);
+    ApplyBooshState(1.0f);
     return;
   }
 
   Serial.println("Dev board button 0 released -> BooshMain OFF");
-  ApplyBooshState(0.0f, 0.0f, 0.0f);
+  ApplyBooshState(0.0f);
 }
 
 void setup() {
@@ -841,25 +850,18 @@ void HandleOscMessage(OSCMessage &msg) {
     return;
   }
 
-  if (msg.size() < 3 || !msg.isFloat(0) || !msg.isFloat(1) || !msg.isFloat(2)) {
+  if (msg.size() != 1 || !msg.isFloat(0)) {
     Serial.println("OSC /rpiboosh/BooshMain ignored (unexpected args).");
     return;
   }
 
-  float v0 = msg.getFloat(0);
-  float v1 = msg.getFloat(1);
-  float v2 = msg.getFloat(2);
+  float value = msg.getFloat(0);
 
   Serial.print("Received OSC message: ");
   Serial.print(kOscAddress);
-  Serial.print(" with arguments: ([");
-  Serial.print(v0, 3);
-  Serial.print(", ");
-  Serial.print(v1, 3);
-  Serial.print(", ");
-  Serial.print(v2, 3);
-  Serial.println("],)");
-  ApplyBooshState(v0, v1, v2);
+  Serial.print(" with argument: ");
+  Serial.println(value, 3);
+  ApplyBooshState(value);
 }
 
 const char *OscErrorToString(OSCErrorCode code) {
@@ -995,7 +997,7 @@ void loop() {
   }
   if (boosh_failsafe_armed && now - boosh_failsafe_start_ms >= kBooshFailsafeTimeoutMs) {
     boosh_failsafe_armed = false;
-    ApplyBooshState(0.0f, 0.0f, 0.0f);
+    ApplyBooshState(0.0f);
     Serial.println("Failsafe: BooshMain timeout -> forcing OFF.");
     ShowStatus("Failsafe timeout", "BooshMain OFF");
     boosh_failsafe_note_until_ms = now + kBooshFailsafeNoteMs;
@@ -1022,6 +1024,7 @@ void loop() {
 
   if (now - lastPingMs >= 1000) {
     lastPingMs = now;
+    telemetry_ping_sent += 1;
     lastOk = Ping.ping(targetIp, 1);
     telemetry_ping_last_ok = lastOk;
     if (lastOk) {
@@ -1049,6 +1052,7 @@ void loop() {
         Serial.println("Ping restored: scheduling registry announce.");
       }
     } else {
+      telemetry_ping_lost += 1;
       pingWasDown = true;
       Serial.println("Ping failed.");
     }

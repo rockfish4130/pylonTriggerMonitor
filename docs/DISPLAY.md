@@ -49,8 +49,8 @@ Wi-Fi debug page B:
 ## BooshMain Visuals
 Display inversion is a prototype proxy for triggering the boosher solenoid.
 
-When OSC `/rpiboosh/BooshMain` is ON (`[1, 0, 0]`), the OLED is inverted.
+When OSC `/rpiboosh/BooshMain` is ON (`[1]`), the OLED is inverted.
 - Inverted display = solenoid open / fire ON
 
-When OFF (`[0, 0, 0]`), the OLED returns to normal.
+When OFF (`[0]`), the OLED returns to normal.
 - Normal display = solenoid closed / fire OFF

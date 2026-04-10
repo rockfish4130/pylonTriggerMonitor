@@ -26,8 +26,8 @@
 
 ## OSC Not Responding
 - Confirm UDP port `8000` is open and the target IP is the device IP.
-- Verify address is `/rpiboosh/BooshMain` with 3 float args.
-- ON is `[1, 0, 0]`, OFF is `[0, 0, 0]`.
+- Verify address is `/rpiboosh/BooshMain` with 1 float arg.
+- ON is `[1]`, OFF is `[0]`.
 - On the WEMOS S2 Pico, test the same path locally with the `0`/BOOT button: press for ON, release for OFF.
 
 ## BooshMain Turns Off Unexpectedly
