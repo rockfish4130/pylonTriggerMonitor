@@ -41,7 +41,7 @@
 			)
 		)
 		(instances
-			(project "boosh_remote_reciver"
+			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455"
 					(page "6")
 				)
@@ -79,7 +79,7 @@
 			)
 		)
 		(instances
-			(project "boosh_remote_reciver"
+			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455"
 					(page "2")
 				)
@@ -117,7 +117,7 @@
 			)
 		)
 		(instances
-			(project "boosh_remote_reciver"
+			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455"
 					(page "3")
 				)
@@ -155,7 +155,7 @@
 			)
 		)
 		(instances
-			(project "boosh_remote_reciver"
+			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455"
 					(page "5")
 				)
@@ -193,7 +193,7 @@
 			)
 		)
 		(instances
-			(project "boosh_remote_reciver"
+			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455"
 					(page "7")
 				)

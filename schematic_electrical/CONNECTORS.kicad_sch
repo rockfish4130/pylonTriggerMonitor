@@ -2399,6 +2399,20 @@
 		)
 		(uuid "a865c4b9-f13b-4d2a-88c9-c67807c78177")
 	)
+	(text "PYLONS"
+		(exclude_from_sim no)
+		(at 30.226 157.48 0)
+		(effects
+			(font
+				(size 4.7752 4.7752)
+				(thickness 0.955)
+				(bold yes)
+				(italic yes)
+				(color 255 153 0 1)
+			)
+		)
+		(uuid "a92536ce-4649-4351-b747-913405191f47")
+	)
 	(text "CONNECTOR WIRE YELLOW"
 		(exclude_from_sim no)
 		(at 107.188 36.068 0)
@@ -2711,7 +2725,7 @@
 			(uuid "0c35db3f-965c-4d56-981a-8510305bac30")
 		)
 		(instances
-			(project "high_striker_boosh"
+			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/d08cb7b6-6190-46a9-b97e-3e5f70878a10"
 					(reference "#PWR060")
 					(unit 1)
@@ -2785,7 +2799,7 @@
 			(uuid "c99b9728-fd40-46c6-b2fb-c6bd67cc2ee3")
 		)
 		(instances
-			(project "high_striker_boosh"
+			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/d08cb7b6-6190-46a9-b97e-3e5f70878a10"
 					(reference "J16")
 					(unit 1)
@@ -2855,7 +2869,7 @@
 			(uuid "124ce9d2-457c-411f-beae-31de5b25595a")
 		)
 		(instances
-			(project "high_striker_boosh"
+			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/d08cb7b6-6190-46a9-b97e-3e5f70878a10"
 					(reference "J3")
 					(unit 1)
@@ -2921,7 +2935,7 @@
 			(uuid "7e580420-5096-47b4-8e14-d50aab9fe56e")
 		)
 		(instances
-			(project "high_striker_boosh"
+			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/d08cb7b6-6190-46a9-b97e-3e5f70878a10"
 					(reference "#PWR047")
 					(unit 1)
@@ -2991,7 +3005,7 @@
 			(uuid "21e07e7b-f07f-4991-a87a-a9da9b9cfe03")
 		)
 		(instances
-			(project "high_striker_boosh"
+			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/d08cb7b6-6190-46a9-b97e-3e5f70878a10"
 					(reference "J13")
 					(unit 1)
@@ -3064,7 +3078,7 @@
 			(uuid "b9484881-189d-420b-aece-94f5f4c6245f")
 		)
 		(instances
-			(project "high_striker_boosh"
+			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/d08cb7b6-6190-46a9-b97e-3e5f70878a10"
 					(reference "PS1")
 					(unit 1)
@@ -3137,7 +3151,7 @@
 			(uuid "60f20c70-fb04-4bf4-abdc-a7849d8a7b7b")
 		)
 		(instances
-			(project "high_striker_boosh"
+			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/d08cb7b6-6190-46a9-b97e-3e5f70878a10"
 					(reference "J12")
 					(unit 1)
@@ -3203,7 +3217,7 @@
 			(uuid "57f9e5b5-57e9-4309-bb56-57944a2aa910")
 		)
 		(instances
-			(project "high_striker_boosh"
+			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/d08cb7b6-6190-46a9-b97e-3e5f70878a10"
 					(reference "#PWR053")
 					(unit 1)
@@ -3289,7 +3303,7 @@
 			(uuid "99ccf724-c485-4769-92b3-aa857b651ca0")
 		)
 		(instances
-			(project "high_striker_boosh"
+			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/d08cb7b6-6190-46a9-b97e-3e5f70878a10"
 					(reference "J18")
 					(unit 1)
@@ -3359,7 +3373,7 @@
 			(uuid "e860ede5-2b1a-482d-a181-fd9b48cb76f0")
 		)
 		(instances
-			(project "high_striker_boosh"
+			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/d08cb7b6-6190-46a9-b97e-3e5f70878a10"
 					(reference "L1")
 					(unit 1)
@@ -3424,7 +3438,7 @@
 			(uuid "990da157-1977-45c3-9768-09c86a587392")
 		)
 		(instances
-			(project "high_striker_boosh"
+			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/d08cb7b6-6190-46a9-b97e-3e5f70878a10"
 					(reference "#PWR054")
 					(unit 1)
@@ -3489,7 +3503,7 @@
 			(uuid "0ac5dedb-4488-42ca-9f71-9c401c2c147a")
 		)
 		(instances
-			(project "high_striker_boosh"
+			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/d08cb7b6-6190-46a9-b97e-3e5f70878a10"
 					(reference "#PWR055")
 					(unit 1)
@@ -3575,7 +3589,7 @@
 			(uuid "1b1a4fdc-f15c-4a23-8f70-cb381ba1b893")
 		)
 		(instances
-			(project "high_striker_boosh"
+			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/d08cb7b6-6190-46a9-b97e-3e5f70878a10"
 					(reference "J14")
 					(unit 1)
@@ -3645,7 +3659,7 @@
 			(uuid "dd76fd5b-75ca-4dce-9929-85de1dcfa763")
 		)
 		(instances
-			(project "high_striker_boosh"
+			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/d08cb7b6-6190-46a9-b97e-3e5f70878a10"
 					(reference "J15")
 					(unit 1)
@@ -3711,7 +3725,7 @@
 			(uuid "24dcfa95-2af0-46c4-84f9-5316d03a9d5e")
 		)
 		(instances
-			(project "high_striker_boosh"
+			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/d08cb7b6-6190-46a9-b97e-3e5f70878a10"
 					(reference "#PWR059")
 					(unit 1)
