@@ -2,4 +2,7 @@
   (version 7)
   (lib (name "esp32 s3 lolin")(type "KiCad")(uri "${KIPRJMOD}/symbols/esp32_s3_lolin_dev_board.kicad_sym")(options "")(descr ""))
   (lib (name "levelshift")(type "KiCad")(uri "${KIPRJMOD}/symbols/levelshift.kicad_sym")(options "")(descr ""))
+  (lib (name "esp32_s2_pico")(type "KiCad")(uri "${KIPRJMOD}/symbols/esp32_s2_pico.kicad_sym")(options "")(descr ""))
+  (lib (name "plusroc_12v_5v_usbc")(type "KiCad")(uri "${KIPRJMOD}/symbols/plusroc_12v_5v_usbc.kicad_sym")(options "")(descr ""))
+  (lib (name "drok_ntc_10k_b3950")(type "KiCad")(uri "${KIPRJMOD}/symbols/drok_ntc_10k_b3950.kicad_sym")(options "")(descr ""))
 )

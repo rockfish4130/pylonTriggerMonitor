@@ -2590,16 +2590,6 @@
 		)
 		(uuid b6b684a1-401b-4d9a-ac9b-6b0ce70fe067)
 	)
-	(text "TODO:\nRC SNUBBER IS USELESS?"
-		(exclude_from_sim no)
-		(at 157.48 90.932 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-		)
-		(uuid "073ca9d2-e16f-4c90-84a4-657aceb7fde8")
-	)
 	(text "FIELD-REPLACEABLE\nDIODES ARE INSTALLED IN A 2-PIN TERMINAL BLOCK\nALONG WITH WIRES TO DEUTSCH CONNECTOR"
 		(exclude_from_sim no)
 		(at 183.134 81.788 0)
@@ -2610,7 +2600,7 @@
 		)
 		(uuid "2732cb46-dc41-448d-b0d7-8e4eb1351aae")
 	)
-	(text "TODO: 5KP16A LEADS TOO THICK.\nSOLDER ONTO HEADER PINS TO MAKE PLUGGABLE\nOR USE SCREW TERMINALS, OR LEVER NUTS"
+	(text "5KP16A LEADS TOO THICK.\nUSE SCREW TERMINALS"
 		(exclude_from_sim no)
 		(at 200.914 92.71 0)
 		(effects

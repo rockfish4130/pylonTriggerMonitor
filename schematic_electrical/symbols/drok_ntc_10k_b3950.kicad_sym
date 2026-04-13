@@ -1,0 +1,144 @@
+(kicad_symbol_lib
+	(version 20231120)
+	(generator "kicad_symbol_editor")
+	(generator_version "8.0")
+	(symbol "DROK_NTC_10K_B3950"
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(property "Reference" "RT"
+			(at 2.54 3.81 0)
+			(effects
+				(font (size 1.27 1.27))
+				(justify left)
+			)
+		)
+		(property "Value" "DROK_NTC_10K_B3950"
+			(at 2.54 1.27 0)
+			(effects
+				(font (size 1.27 1.27))
+				(justify left)
+			)
+		)
+		(property "Footprint" ""
+			(at 0 0 0)
+			(effects
+				(font (size 1.27 1.27))
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "https://www.amazon.com/dp/B01MZ6Y336"
+			(at 0 0 0)
+			(effects
+				(font (size 1.27 1.27))
+				(hide yes)
+			)
+		)
+		(property "Description" "10K NTC B3950 thermistor probe, stainless steel, -25 to 125C, 3m cable"
+			(at 0 0 0)
+			(effects
+				(font (size 1.27 1.27))
+				(hide yes)
+			)
+		)
+		(property "ki_keywords" "NTC thermistor 10K B3950 temperature sensor probe DROK"
+			(at 0 0 0)
+			(effects
+				(font (size 1.27 1.27))
+				(hide yes)
+			)
+		)
+		(property "ki_fp_filters" "Thermistor*"
+			(at 0 0 0)
+			(effects
+				(font (size 1.27 1.27))
+				(hide yes)
+			)
+		)
+		(symbol "DROK_NTC_10K_B3950_0_1"
+			(polyline
+				(pts
+					(xy 0 -2.286)
+					(xy 0 -1.651)
+				)
+				(stroke (width 0) (type default))
+				(fill (type none))
+			)
+			(polyline
+				(pts
+					(xy 0 -1.651)
+					(xy -0.508 -0.762)
+					(xy 0.508 0.127)
+					(xy -0.508 1.016)
+					(xy 0.508 1.905)
+					(xy -0.508 2.794)
+					(xy 0.508 3.683)
+					(xy -0.508 4.572)
+					(xy 0 5.461)
+				)
+				(stroke (width 0) (type default))
+				(fill (type none))
+			)
+			(polyline
+				(pts
+					(xy 0 5.461)
+					(xy 0 6.096)
+				)
+				(stroke (width 0) (type default))
+				(fill (type none))
+			)
+			(rectangle
+				(start -1.016 -1.651)
+				(end 1.016 5.461)
+				(stroke (width 0) (type default))
+				(fill (type background))
+			)
+			(polyline
+				(pts
+					(xy -2.032 -0.762)
+					(xy 2.032 -0.762)
+				)
+				(stroke (width 0) (type default))
+				(fill (type none))
+			)
+			(polyline
+				(pts
+					(xy 1.27 -1.651)
+					(xy 2.032 -0.762)
+					(xy 1.27 -0.381)
+				)
+				(stroke (width 0) (type default))
+				(fill (type none))
+			)
+			(text "NTC"
+				(at 1.905 2.032 0)
+				(effects
+					(font (size 0.762 0.762))
+					(justify left)
+				)
+			)
+		)
+		(symbol "DROK_NTC_10K_B3950_0_0"
+			(pin passive line
+				(at 0 -5.08 90)
+				(length 2.794)
+				(name "T1"
+					(effects (font (size 1.27 1.27)))
+				)
+				(number "1"
+					(effects (font (size 1.27 1.27)))
+				)
+			)
+			(pin passive line
+				(at 0 10.16 270)
+				(length 4.064)
+				(name "T2"
+					(effects (font (size 1.27 1.27)))
+				)
+				(number "2"
+					(effects (font (size 1.27 1.27)))
+				)
+			)
+		)
+	)
+)
