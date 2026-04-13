@@ -37,7 +37,7 @@ constexpr const char *kRegistryAnnouncePath = "/api/pylons/announce";
 constexpr const char *kRegistryHeartbeatPath = "/api/pylons/heartbeat";
 constexpr uint16_t kRegistryTtlSec = 30;
 constexpr unsigned long kRegistryHeartbeatIntervalMs = 10000;
-constexpr uint16_t kRegistryHttpTimeoutMs = 800;
+constexpr uint16_t kRegistryHttpTimeoutMs = 2500;
 constexpr const char *kFirmwareSemver = "0.0.1";
 constexpr const char *kFirmwareBuildDate = __DATE__;
 constexpr const char *kFirmwareBuildTime = __TIME__;
@@ -638,8 +638,27 @@ bool PostRegistryToBase(const char *baseUrl, const char *path, const String &pay
   Console.print(url);
   Console.print(" -> ");
   Console.println(statusCode);
+  if (!ok && statusCode < 0) {
+    Console.print("[REG] error: ");
+    Console.println(http.errorToString(statusCode));
+  }
   http.end();
   return ok;
+}
+
+bool ResolveRegistryFallbackBase(String &baseUrl) {
+  IPAddress resolvedIp;
+  if (target_ip_string.length() > 0 && resolvedIp.fromString(target_ip_string)) {
+    baseUrl = "http://" + target_ip_string + ":5000";
+    return true;
+  }
+  if (WiFi.hostByName("rpiboosh.local", resolvedIp) || WiFi.hostByName(kPingTargetHost, resolvedIp) ||
+      WiFi.hostByName("RPIBOOSH.local", resolvedIp)) {
+    target_ip_string = resolvedIp.toString();
+    baseUrl = "http://" + target_ip_string + ":5000";
+    return true;
+  }
+  return false;
 }
 
 bool PostRegistry(bool heartbeat) {
@@ -655,6 +674,14 @@ bool PostRegistry(bool heartbeat) {
   }
   if (kRegistryBaseUrlFallback[0] != '\0') {
     if (PostRegistryToBase(kRegistryBaseUrlFallback, path, payload, kind)) {
+      return true;
+    }
+  }
+  String dynamicFallbackBase;
+  if (ResolveRegistryFallbackBase(dynamicFallbackBase)) {
+    if (dynamicFallbackBase != String(kRegistryBaseUrlPrimary) &&
+        dynamicFallbackBase != String(kRegistryBaseUrlFallback) &&
+        PostRegistryToBase(dynamicFallbackBase.c_str(), path, payload, kind)) {
       return true;
     }
   }
