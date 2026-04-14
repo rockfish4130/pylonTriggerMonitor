@@ -141,6 +141,175 @@
 				)
 			)
 		)
+		(symbol "Device:LED"
+			(pin_numbers hide)
+			(pin_names
+				(offset 1.016) hide)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "D"
+				(at 0 2.54 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Value" "LED"
+				(at 0 -2.54 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Datasheet" "~"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Description" "Light emitting diode"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "ki_keywords" "LED diode"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "ki_fp_filters" "LED* LED_SMD:* LED_THT:*"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(symbol "LED_0_1"
+				(polyline
+					(pts
+						(xy -1.27 -1.27) (xy -1.27 1.27)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -1.27 0) (xy 1.27 0)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 1.27 -1.27) (xy 1.27 1.27) (xy -1.27 0) (xy 1.27 -1.27)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -3.048 -0.762) (xy -4.572 -2.286) (xy -3.81 -2.286) (xy -4.572 -2.286) (xy -4.572 -1.524)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -1.778 -0.762) (xy -3.302 -2.286) (xy -2.54 -2.286) (xy -3.302 -2.286) (xy -3.302 -1.524)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "LED_1_1"
+				(pin passive line
+					(at -3.81 0 0)
+					(length 2.54)
+					(name "K"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 3.81 0 180)
+					(length 2.54)
+					(name "A"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+		)
 		(symbol "Device:R_US"
 			(pin_numbers hide)
 			(pin_names
@@ -1465,10 +1634,6 @@
 		(uuid "e4440fdb-5841-4e11-a03a-41daaa8a00ff")
 	)
 	(no_connect
-		(at 180.34 81.28)
-		(uuid "11d4588d-7797-41aa-a3c5-04c9b67cfd5a")
-	)
-	(no_connect
 		(at 142.24 76.2)
 		(uuid "30d7469e-59c3-4463-94ca-fd1f22effa99")
 	)
@@ -1505,10 +1670,6 @@
 		(uuid "54656afe-9971-40e5-9eba-fa6b0223867c")
 	)
 	(no_connect
-		(at 180.34 83.82)
-		(uuid "5a2fa1c0-3f8e-4f45-b06d-c6230e7d0bc3")
-	)
-	(no_connect
 		(at 180.34 66.04)
 		(uuid "5a6431f1-d894-466c-87b7-0b22628c07e9")
 	)
@@ -1541,10 +1702,6 @@
 		(uuid "a976cfcb-03cd-49e4-9f41-241790a3e5a8")
 	)
 	(no_connect
-		(at 180.34 86.36)
-		(uuid "a9ccb528-85de-47e9-9b73-3e92e0a932b3")
-	)
-	(no_connect
 		(at 142.24 91.44)
 		(uuid "c859e85b-5ae6-42f0-8325-bbc04829950b")
 	)
@@ -1566,6 +1723,26 @@
 	)
 	(wire
 		(pts
+			(xy 266.7 86.36) (xy 266.7 92.71)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "0206917e-04de-47f7-b801-12675dc18ee2")
+	)
+	(wire
+		(pts
+			(xy 266.7 107.95) (xy 266.7 110.49)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "05e84f0e-a617-4efe-9731-5d7c1514cb54")
+	)
+	(wire
+		(pts
 			(xy 66.04 74.93) (xy 66.04 76.2)
 		)
 		(stroke
@@ -1583,6 +1760,16 @@
 			(type default)
 		)
 		(uuid "1a6ded80-54e8-4e1f-9803-0693a593cd8d")
+	)
+	(wire
+		(pts
+			(xy 248.92 107.95) (xy 248.92 110.49)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "207f6288-77bf-4e1a-b08e-7563e793ff9f")
 	)
 	(wire
 		(pts
@@ -1616,6 +1803,16 @@
 	)
 	(wire
 		(pts
+			(xy 180.34 81.28) (xy 231.14 81.28)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "2e8c5bd7-cd38-48b2-9c04-8cd4d6bf003e")
+	)
+	(wire
+		(pts
 			(xy 82.55 63.5) (xy 82.55 60.96)
 		)
 		(stroke
@@ -1623,6 +1820,16 @@
 			(type default)
 		)
 		(uuid "30e8762d-cf14-454a-92a0-5eb0ba910f3f")
+	)
+	(wire
+		(pts
+			(xy 231.14 107.95) (xy 231.14 110.49)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "3ab5a3f9-1517-4e16-80b7-92077f7fdbcb")
 	)
 	(wire
 		(pts
@@ -1663,6 +1870,16 @@
 			(type default)
 		)
 		(uuid "53813ae4-2e28-4be9-972c-3e3556e01e8a")
+	)
+	(wire
+		(pts
+			(xy 231.14 81.28) (xy 231.14 92.71)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "5484a546-6e6f-49bf-b6f5-3ea760cfe656")
 	)
 	(wire
 		(pts
@@ -1756,6 +1973,16 @@
 	)
 	(wire
 		(pts
+			(xy 180.34 83.82) (xy 248.92 83.82)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "7f89ccae-23d9-4d53-bb63-e70b0bd9aea8")
+	)
+	(wire
+		(pts
 			(xy 80.01 118.11) (xy 80.01 115.57)
 		)
 		(stroke
@@ -1773,6 +2000,16 @@
 			(type default)
 		)
 		(uuid "8ba9df1f-c270-4c2b-a760-05f93904be88")
+	)
+	(wire
+		(pts
+			(xy 248.92 83.82) (xy 248.92 92.71)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "973c2e04-902c-4b12-b6de-310a868ba261")
 	)
 	(wire
 		(pts
@@ -1833,6 +2070,16 @@
 			(type default)
 		)
 		(uuid "b37d3c8f-63bd-4acd-b52a-e95d61ff2283")
+	)
+	(wire
+		(pts
+			(xy 180.34 86.36) (xy 266.7 86.36)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b65ddf86-0fa5-461d-beff-181c44dacb3b")
 	)
 	(wire
 		(pts
@@ -2476,6 +2723,72 @@
 	)
 	(symbol
 		(lib_id "power:GND")
+		(at 248.92 110.49 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "283c6b5b-b85c-4bec-8c0b-6805dedb46c3")
+		(property "Reference" "#PWR012"
+			(at 248.92 116.84 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 248.92 115.57 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 248.92 110.49 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 248.92 110.49 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 248.92 110.49 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "b72a06f8-4627-45d8-ba1d-81cc264d08fd")
+		)
+		(instances
+			(project "pylons_boosh_remote_reciver"
+				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/91617d0d-6f07-4f47-baaa-678bb3c8f5f7"
+					(reference "#PWR012")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
 		(at 82.55 77.47 0)
 		(unit 1)
 		(exclude_from_sim no)
@@ -2679,6 +2992,76 @@
 		)
 	)
 	(symbol
+		(lib_id "Device:R_US")
+		(at 248.92 96.52 180)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "563c297f-cb37-4cdb-a1db-2ce29174bae2")
+		(property "Reference" "R14"
+			(at 251.46 95.2499 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Value" "1K"
+			(at 251.46 97.7899 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 247.904 96.266 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 248.92 96.52 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Resistor, US symbol"
+			(at 248.92 96.52 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "2"
+			(uuid "0cb51ee3-91e8-4d39-aa89-9292092aed2d")
+		)
+		(pin "1"
+			(uuid "9dfbc2fc-541a-4072-b552-3e6d4a79272b")
+		)
+		(instances
+			(project "pylons_boosh_remote_reciver"
+				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/91617d0d-6f07-4f47-baaa-678bb3c8f5f7"
+					(reference "R14")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "power:+3.3V")
 		(at 80.01 102.87 0)
 		(unit 1)
@@ -2739,6 +3122,146 @@
 			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/91617d0d-6f07-4f47-baaa-678bb3c8f5f7"
 					(reference "#PWR07")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:LED")
+		(at 248.92 104.14 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "7dbf3fd0-32e0-46f5-b75f-ca119486e789")
+		(property "Reference" "D5"
+			(at 252.73 104.4574 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Value" "LED BLUE"
+			(at 252.73 106.9974 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 248.92 104.14 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 248.92 104.14 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Light emitting diode"
+			(at 248.92 104.14 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "2"
+			(uuid "aa4fe391-3e9a-42de-bfab-70517fec16fc")
+		)
+		(pin "1"
+			(uuid "886646bd-d694-442b-b8ff-a25dfb7022aa")
+		)
+		(instances
+			(project "pylons_boosh_remote_reciver"
+				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/91617d0d-6f07-4f47-baaa-678bb3c8f5f7"
+					(reference "D5")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R_US")
+		(at 231.14 96.52 180)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "7fba056d-d690-4740-93e3-10bcbdc2cb36")
+		(property "Reference" "R11"
+			(at 233.68 95.2499 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Value" "1K"
+			(at 233.68 97.7899 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 230.124 96.266 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 231.14 96.52 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Resistor, US symbol"
+			(at 231.14 96.52 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "2"
+			(uuid "9f9fefab-afce-4414-a3ff-be00a1035f77")
+		)
+		(pin "1"
+			(uuid "26a3806b-8ce4-4be4-816b-44c38f82dad5")
+		)
+		(instances
+			(project "pylons_boosh_remote_reciver"
+				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/91617d0d-6f07-4f47-baaa-678bb3c8f5f7"
+					(reference "R11")
 					(unit 1)
 				)
 			)
@@ -2809,6 +3332,76 @@
 			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/91617d0d-6f07-4f47-baaa-678bb3c8f5f7"
 					(reference "C3")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:LED")
+		(at 266.7 104.14 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "92cc6734-b6a3-4370-818d-c880f2effc9c")
+		(property "Reference" "D6"
+			(at 270.51 104.4574 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Value" "LED YELLOW"
+			(at 270.51 106.9974 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 266.7 104.14 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 266.7 104.14 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Light emitting diode"
+			(at 266.7 104.14 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "2"
+			(uuid "03fb7f34-4046-44cf-ba21-69bb107c1f0f")
+		)
+		(pin "1"
+			(uuid "56d654a0-38fd-4abf-adf9-f0f5af584711")
+		)
+		(instances
+			(project "pylons_boosh_remote_reciver"
+				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/91617d0d-6f07-4f47-baaa-678bb3c8f5f7"
+					(reference "D6")
 					(unit 1)
 				)
 			)
@@ -3018,6 +3611,142 @@
 	)
 	(symbol
 		(lib_id "Device:R_US")
+		(at 266.7 96.52 180)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "bf42c549-a6e7-4100-b4ef-872f5c4d7c0f")
+		(property "Reference" "R15"
+			(at 269.24 95.2499 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Value" "1K"
+			(at 269.24 97.7899 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 265.684 96.266 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 266.7 96.52 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Resistor, US symbol"
+			(at 266.7 96.52 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "2"
+			(uuid "0d802e9c-c9d3-4373-9ace-da731b6b6dcd")
+		)
+		(pin "1"
+			(uuid "754f2359-03e5-41c9-a753-661cadc776c9")
+		)
+		(instances
+			(project "pylons_boosh_remote_reciver"
+				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/91617d0d-6f07-4f47-baaa-678bb3c8f5f7"
+					(reference "R15")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 266.7 110.49 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "c89ee7b9-38d1-4cfa-aead-9d767d5dade7")
+		(property "Reference" "#PWR013"
+			(at 266.7 116.84 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 266.7 115.57 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 266.7 110.49 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 266.7 110.49 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 266.7 110.49 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "057d00e6-81b6-4ae2-86db-92dc009d1951")
+		)
+		(instances
+			(project "pylons_boosh_remote_reciver"
+				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/91617d0d-6f07-4f47-baaa-678bb3c8f5f7"
+					(reference "#PWR013")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R_US")
 		(at 82.55 71.12 0)
 		(unit 1)
 		(exclude_from_sim no)
@@ -3087,6 +3816,76 @@
 		)
 	)
 	(symbol
+		(lib_id "Device:LED")
+		(at 231.14 104.14 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "ead55b58-d424-458c-9794-6587c1baa554")
+		(property "Reference" "D4"
+			(at 234.95 104.4574 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Value" "LED GREEN"
+			(at 234.95 106.9974 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 231.14 104.14 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 231.14 104.14 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Light emitting diode"
+			(at 231.14 104.14 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "2"
+			(uuid "be1fca6b-aca3-4e2f-af63-436a4ece89e6")
+		)
+		(pin "1"
+			(uuid "f52ecf6a-3dbd-47be-9d7e-512c0cd835aa")
+		)
+		(instances
+			(project "pylons_boosh_remote_reciver"
+				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/91617d0d-6f07-4f47-baaa-678bb3c8f5f7"
+					(reference "D4")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "power:GND")
 		(at 129.54 116.84 0)
 		(unit 1)
@@ -3147,6 +3946,72 @@
 			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/91617d0d-6f07-4f47-baaa-678bb3c8f5f7"
 					(reference "#PWR01")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 231.14 110.49 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "f430ce8f-d622-409a-97ab-9effe5eb2fe2")
+		(property "Reference" "#PWR010"
+			(at 231.14 116.84 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 231.14 115.57 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 231.14 110.49 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 231.14 110.49 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 231.14 110.49 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "54b57570-9d3c-482b-88b3-86187fba1cab")
+		)
+		(instances
+			(project "pylons_boosh_remote_reciver"
+				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/91617d0d-6f07-4f47-baaa-678bb3c8f5f7"
+					(reference "#PWR010")
 					(unit 1)
 				)
 			)

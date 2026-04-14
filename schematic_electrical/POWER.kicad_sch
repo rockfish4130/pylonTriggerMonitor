@@ -1234,6 +1234,18 @@
 		)
 		(uuid "ea1f4919-45e3-4a53-ab17-994e04b71228")
 	)
+	(rectangle
+		(start 29.21 39.37)
+		(end 104.14 110.49)
+		(stroke
+			(width 0)
+			(type dash)
+		)
+		(fill
+			(type none)
+		)
+		(uuid c9919068-bc85-41db-afbc-baf041816120)
+	)
 	(text "PYLONS"
 		(exclude_from_sim no)
 		(at 34.798 21.844 0)
@@ -1287,6 +1299,16 @@
 			)
 		)
 		(uuid "c384f3b1-2a62-4f1d-ab5f-684161ae3308")
+	)
+	(text "POWER OPTIONS:\nPYLONS USE BATTERY,\nBOOSHMAN VEHICLE USES 12V EXTERNAL CONNECTOR"
+		(exclude_from_sim no)
+		(at 67.056 97.79 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "ce93380e-83bd-4746-a7fe-b83d3dccef1b")
 	)
 	(text "BOLD INDICATES HIGH-CURRENT\nUSE 16-GA WIRE"
 		(exclude_from_sim no)
