@@ -2,6 +2,7 @@
 #include <Wire.h>
 #include <USB.h>
 #include "esp_task_wdt.h"
+#include <DNSServer.h>
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <ESP32Ping.h>
@@ -88,11 +89,15 @@ unsigned long last_ping_success_ms = 0;
 String target_ip_string = "";
 String web_log_text;
 String web_log_partial_line;
+bool ap_enabled = false;
+bool ap_active = false;
+DNSServer dnsServer;
 
 constexpr const char *kPrefsNamespace = "pylon_cfg";
 constexpr const char *kPrefsKeyId = "id";
 constexpr const char *kPrefsKeyHost = "host";
 constexpr const char *kPrefsKeyDesc = "desc";
+constexpr const char *kPrefsKeyAp = "ap_en";
 
 void AppendWebLogLine(const String &line) {
   web_log_text += line;
@@ -293,6 +298,7 @@ bool SavePylonConfig() {
   prefs.putString(kPrefsKeyId, pylon_id);
   prefs.putString(kPrefsKeyHost, pylon_mdns_host);
   prefs.putString(kPrefsKeyDesc, pylon_description);
+  prefs.putBool(kPrefsKeyAp, ap_enabled);
   prefs.end();
   return true;
 }
@@ -323,6 +329,8 @@ void PrintPylonConfig() {
   Console.println(pylon_mdns_host);
   Console.print("  desc: ");
   Console.println(pylon_description);
+  Console.print("  ap: ");
+  Console.println(ap_enabled ? "true" : "false");
 }
 
 void LoadPylonConfig() {
@@ -338,6 +346,7 @@ void LoadPylonConfig() {
   String stored_id = NormalizePylonId(prefs.getString(kPrefsKeyId, ""));
   String stored_host = NormalizeMdnsHost(prefs.getString(kPrefsKeyHost, ""));
   String stored_desc = prefs.getString(kPrefsKeyDesc, "");
+  ap_enabled = prefs.getBool(kPrefsKeyAp, false);
   stored_desc.trim();
 
   const bool unprogrammed = stored_id.length() == 0;
@@ -388,6 +397,7 @@ void PrintCliHelp() {
   Console.println("  set host <value>");
   Console.println("  set desc <value>");
   Console.println("  set node <value>   (sets both id and host)");
+  Console.println("  set ap true|false  (enable/disable WiFi AP mode)");
   Console.println("  clear nvs          (erase saved id/host/desc)");
 }
 
@@ -454,9 +464,17 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
       Console.print("[CFG] node set (id+host): ");
       Console.println(pylon_id);
     }
+  } else if (field == "ap") {
+    const String v = ToLowerAscii(value);
+    ap_enabled = (v == "true" || v == "1" || v == "yes" || v == "on");
+    changed = true;
+    if (log_output) {
+      Console.print("[CFG] ap_enabled set: ");
+      Console.println(ap_enabled ? "true" : "false");
+    }
   } else {
     if (log_output) {
-      Console.println("[CFG] unknown set field. use id|host|desc|node");
+      Console.println("[CFG] unknown set field. use id|host|desc|node|ap");
     }
     return false;
   }
@@ -485,7 +503,9 @@ String BuildConfigApiJson() {
   payload += "\"id\":\"" + JsonEscape(pylon_id) + "\",";
   payload += "\"host\":\"" + JsonEscape(pylon_mdns_host) + "\",";
   payload += "\"hostname\":\"" + JsonEscape(pylon_mdns_host + ".local") + "\",";
-  payload += "\"description\":\"" + JsonEscape(pylon_description) + "\"";
+  payload += "\"description\":\"" + JsonEscape(pylon_description) + "\",";
+  payload += "\"ap_enabled\":" + String(ap_enabled ? "true" : "false") + ",";
+  payload += "\"ap_active\":" + String(ap_active ? "true" : "false");
   payload += "}";
   return payload;
 }
@@ -978,6 +998,8 @@ String BuildTelemetryApiJson() {
   payload += "\"uptime_hms\":\"" + JsonEscape(FormatDurationHms(static_cast<uint32_t>(now / 1000))) + "\",";
   payload += "\"solenoid_active\":" + String(display_inverted ? "true" : "false") + ",";
   payload += "\"trigger_event_count\":" + String(trigger_event_count) + ",";
+  payload += "\"ap_enabled\":" + String(ap_enabled ? "true" : "false") + ",";
+  payload += "\"ap_active\":" + String(ap_active ? "true" : "false") + ",";
   payload += "\"target_ip\":\"" + JsonEscape(target_ip_string) + "\",";
   payload += "\"telemetry\":{";
   payload += "\"ipv4\":\"" + JsonEscape(ip) + "\",";
@@ -1046,8 +1068,9 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     label{display:grid;gap:6px;color:var(--muted)}
     input{width:100%;background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
     input:focus{outline:2px solid rgba(79,179,255,.35);border-color:var(--accent)}
-    button{border:0;border-radius:999px;background:linear-gradient(180deg,var(--accent) 0,var(--accent-2) 100%);color:#06111d;padding:12px 18px;font-size:16px;font-weight:700;cursor:pointer}
+    button{border:0;border-radius:999px;background:linear-gradient(180deg,var(--accent) 0,var(--accent-2) 100%);color:#06111d;padding:12px 18px;font-size:16px;font-weight:700;cursor:pointer;transition:background .1s,box-shadow .1s,transform .1s}
     button:disabled{opacity:.5;cursor:wait}
+    #trigger.held{background:linear-gradient(180deg,#f05a28 0,#c03a10 100%);color:#fff;box-shadow:0 0 28px rgba(240,90,40,.6);transform:scale(0.96)}
     #log{background:#05080d;color:#b9ffd6;min-height:260px;max-height:420px;overflow:auto;font:13px/1.35 Consolas,monospace;border-radius:12px;padding:12px;border:1px solid #193022}
     #log pre{margin:0;white-space:pre-wrap}
     .pill{display:inline-block;padding:4px 10px;border-radius:999px;background:#243244;color:#c9d7e7}
@@ -1069,6 +1092,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         <label>Host <input id="cfg-host" name="host"></label>
         <label>Description <input id="cfg-description" name="description"></label>
         <label>Node Alias <input id="cfg-node" name="node" placeholder="sets id + host"></label>
+        <label style="flex-direction:row;gap:10px;align-items:center"><input type="checkbox" id="cfg-ap" style="width:auto;margin:0"> Enable WiFi AP (SSID: PYLON_<em>id</em>, IP 10.1.2.3)</label>
         <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
           <button type="submit">Save Config</button>
           <span id="config-status"></span>
@@ -1135,6 +1159,8 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       syncConfigField('cfg-id', data.pylon_id || '');
       syncConfigField('cfg-host', (data.hostname || '').replace(/\.local$/,''));
       syncConfigField('cfg-description', data.description || '');
+      const apBox = document.getElementById('cfg-ap');
+      if (apBox && document.activeElement !== apBox) apBox.checked = !!data.ap_enabled;
     }
     async function refreshTelemetry() {
       renderMeta(await fetchJson('/api/telemetry'));
@@ -1163,6 +1189,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     async function setHeldState(active) {
       if (holdActive === active) return;
       holdActive = active;
+      triggerButton.classList.toggle('held', active);
       await fetchJson(active ? '/api/solenoid/on' : '/api/solenoid/off',
         active ? {method:'POST'} : {method:'POST', keepalive:true});
       await refreshTelemetry();
@@ -1183,6 +1210,13 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     triggerButton.addEventListener('mouseleave', endHold);
     triggerButton.addEventListener('blur', endHold);
     window.addEventListener('blur', endHold);
+    document.getElementById('cfg-ap').addEventListener('change', async (e) => {
+      await fetchJson('/api/config/ap', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: new URLSearchParams({value: e.target.checked ? 'true' : 'false'}).toString()
+      });
+    });
     window.addEventListener('pagehide', endHold);
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) endHold();
@@ -1339,6 +1373,61 @@ void HandleConfigNodeApi() {
                  "{\"ok\":true,\"config\":" + BuildConfigApiJson() + "}");
 }
 
+void SetupWebServer();  // forward declaration
+
+void HandleCaptivePortalRedirect() {
+  webServer.sendHeader("Location", "http://10.1.2.3/");
+  webServer.sendHeader("Cache-Control", "no-cache");
+  webServer.send(302, "text/plain", "");
+}
+
+void HandleConfigApApi() {
+  if (!webServer.hasArg("value")) {
+    SendApiError(400, "missing value");
+    return;
+  }
+  if (!SetConfigFieldValue("ap", webServer.arg("value"))) {
+    SendApiError(400, "invalid ap value");
+    return;
+  }
+  webServer.send(200, "application/json",
+                 "{\"ok\":true,\"config\":" + BuildConfigApiJson() + "}");
+}
+
+void SetupApMode() {
+  const String ssid = "PYLON_" + pylon_id;
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFi.mode(WIFI_AP_STA);
+  } else {
+    WiFi.mode(WIFI_AP);
+  }
+  WiFi.softAPConfig(IPAddress(10, 1, 2, 3), IPAddress(10, 1, 2, 3), IPAddress(255, 255, 255, 0));
+  WiFi.softAP(ssid.c_str());  // no password
+  delay(100);
+  dnsServer.start(53, "*", IPAddress(10, 1, 2, 3));
+  ap_active = true;
+  Console.print("[AP] started SSID: ");
+  Console.println(ssid);
+  Console.println("[AP] IP: 10.1.2.3, captive DNS active");
+  SetupWebServer();
+  // Captive portal detection paths for iOS/Android/Windows
+  webServer.on("/generate_204", HTTP_GET, HandleCaptivePortalRedirect);
+  webServer.on("/hotspot-detect.html", HTTP_GET, HandleCaptivePortalRedirect);
+  webServer.on("/ncsi.txt", HTTP_GET, HandleCaptivePortalRedirect);
+  webServer.on("/connecttest.txt", HTTP_GET, HandleCaptivePortalRedirect);
+  webServer.onNotFound(HandleCaptivePortalRedirect);
+}
+
+void StopApMode() {
+  dnsServer.stop();
+  WiFi.softAPdisconnect(true);
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFi.mode(WIFI_STA);
+  }
+  ap_active = false;
+  Console.println("[AP] stopped");
+}
+
 void HandleSolenoidOnApi() {
   SetBooshActive(true, "http");
   webServer.send(200, "application/json",
@@ -1364,6 +1453,7 @@ void SetupWebServer() {
   webServer.on("/api/config/host", HTTP_POST, HandleConfigHostApi);
   webServer.on("/api/config/desc", HTTP_POST, HandleConfigDescApi);
   webServer.on("/api/config/node", HTTP_POST, HandleConfigNodeApi);
+  webServer.on("/api/config/ap", HTTP_POST, HandleConfigApApi);
   webServer.on("/api/solenoid/on", HTTP_POST, HandleSolenoidOnApi);
   webServer.on("/api/solenoid/off", HTTP_POST, HandleSolenoidOffApi);
   webServer.on("/api/solenoid/trigger", HTTP_POST, HandleSolenoidOnApi);
@@ -1510,7 +1600,16 @@ void setup() {
   } else {
     Console.println();
     Console.println("WiFi connect failed.");
-    ShowStatus("WiFi failed", "Check SSID");
+    ShowStatus("WiFi failed", "Starting AP");
+    if (!ap_enabled) {
+      ap_enabled = true;
+      SavePylonConfig();
+      Console.println("[AP] auto-enabled: no WiFi network found");
+    }
+  }
+
+  if (ap_enabled) {
+    SetupApMode();
   }
 }
 
@@ -1656,6 +1755,14 @@ void loop() {
   PollSerialCli();
   PollDevBoardButton();
   webServer.handleClient();
+  if (ap_active) dnsServer.processNextRequest();
+
+  // Apply live AP enable/disable from config changes
+  if (ap_enabled && !ap_active) {
+    SetupApMode();
+  } else if (!ap_enabled && ap_active) {
+    StopApMode();
+  }
 
   if (WiFi.status() != WL_CONNECTED) {
     if (wasConnected) {
@@ -1668,8 +1775,13 @@ void loop() {
       registry_consecutive_failures = 0;
       Console.println("WiFi disconnected: registry state reset.");
     }
-    ShowStatus("WiFi lost", "Reconnecting");
-    delay(1000);
+    if (ap_active) {
+      ShowStatus("AP mode", "PYLON_" + pylon_id);
+      delay(100);
+    } else {
+      ShowStatus("WiFi lost", "Reconnecting");
+      delay(1000);
+    }
     return;
   }
 
