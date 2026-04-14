@@ -19,6 +19,12 @@ constexpr int kI2cSda = 8;
 constexpr int kI2cScl = 9;
 constexpr int kOledReset = 18;
 constexpr int kDevBoardButtonPin = 0;
+constexpr int kLedWhitePin = 12;   // IO12 boosh trigger LED - 1Hz
+constexpr int kLedGreenPin = 15;   // IO15 green - 2Hz
+constexpr int kLedBluePin = 14;    // IO14 blue - 4Hz
+constexpr int kLedYellowPin = 13;  // IO13 yellow - 6Hz
+constexpr int kIo38Pin = 38;       // IO38 high = WiFi connected
+constexpr int kIo11Pin = 11;       // IO11 high = boosh active
 constexpr uint8_t kOledAddress = 0x3C;
 constexpr int kScreenWidth = 128;
 constexpr int kScreenHeight = 32;
@@ -159,6 +165,7 @@ void SetDisplayInverted(bool inverted) {
   }
   display_inverted = inverted;
   display.invertDisplay(inverted);
+  digitalWrite(kIo11Pin, inverted ? HIGH : LOW);
 }
 
 void ShowStatus(const String &line1, const String &line2 = "") {
@@ -1393,6 +1400,20 @@ void setup() {
   PrintCliHelp();
   pinMode(kDevBoardButtonPin, INPUT_PULLUP);
 
+  pinMode(kLedWhitePin, OUTPUT);
+  digitalWrite(kLedWhitePin, LOW);
+  pinMode(kLedGreenPin, OUTPUT);
+  digitalWrite(kLedGreenPin, LOW);
+  pinMode(kLedBluePin, OUTPUT);
+  digitalWrite(kLedBluePin, LOW);
+  pinMode(kLedYellowPin, OUTPUT);
+  digitalWrite(kLedYellowPin, LOW);
+
+  pinMode(kIo38Pin, OUTPUT);
+  digitalWrite(kIo38Pin, LOW);
+  pinMode(kIo11Pin, OUTPUT);
+  digitalWrite(kIo11Pin, LOW);
+
   Console.println("Boot: init I2C");
   Wire.begin(kI2cSda, kI2cScl);
   Console.println("Boot: init OLED");
@@ -1409,11 +1430,13 @@ void setup() {
       case ARDUINO_EVENT_WIFI_STA_GOT_IP:
         wifi_connected_since_ms = millis();
         wifi_has_ip = true;
+        digitalWrite(kIo38Pin, HIGH);
         break;
       case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
         last_disconnect_reason = info.wifi_sta_disconnected.reason;
         wifi_connected_since_ms = 0;
         wifi_has_ip = false;
+        digitalWrite(kIo38Pin, LOW);
         break;
       default:
         break;
@@ -1588,6 +1611,40 @@ void PollOsc() {
   HandleOscMessage(msg);
 }
 
+void PollBlinkLeds() {
+  static unsigned long lastWhiteMs = 0;
+  static unsigned long lastGreenMs = 0;
+  static unsigned long lastBlueMs = 0;
+  static unsigned long lastYellowMs = 0;
+  static bool whiteState = false;
+  static bool greenState = false;
+  static bool blueState = false;
+  static bool yellowState = false;
+
+  const unsigned long now = millis();
+
+  if (now - lastWhiteMs >= 500) {   // 1Hz
+    lastWhiteMs = now;
+    whiteState = !whiteState;
+    digitalWrite(kLedWhitePin, whiteState);
+  }
+  if (now - lastGreenMs >= 250) {   // 2Hz
+    lastGreenMs = now;
+    greenState = !greenState;
+    digitalWrite(kLedGreenPin, greenState);
+  }
+  if (now - lastBlueMs >= 125) {    // 4Hz
+    lastBlueMs = now;
+    blueState = !blueState;
+    digitalWrite(kLedBluePin, blueState);
+  }
+  if (now - lastYellowMs >= 83) {   // ~6Hz
+    lastYellowMs = now;
+    yellowState = !yellowState;
+    digitalWrite(kLedYellowPin, yellowState);
+  }
+}
+
 void loop() {
   static const char *kTargetHost = kPingTargetHost;
   static const char *kTargetHostMdns = "RPIBOOSH.local";
@@ -1603,6 +1660,7 @@ void loop() {
   static unsigned long lastDisplayMs = 0;
   static uint8_t displayPage = 0;
 
+  PollBlinkLeds();
   PollSerialCli();
   PollDevBoardButton();
   webServer.handleClient();
