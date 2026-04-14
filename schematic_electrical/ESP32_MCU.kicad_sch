@@ -1254,126 +1254,6 @@
 				)
 			)
 		)
-		(symbol "power:+12V"
-			(power)
-			(pin_numbers hide)
-			(pin_names
-				(offset 0) hide)
-			(exclude_from_sim no)
-			(in_bom yes)
-			(on_board yes)
-			(property "Reference" "#PWR"
-				(at 0 -3.81 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "Value" "+12V"
-				(at 0 3.556 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Footprint" ""
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "Datasheet" ""
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "Description" "Power symbol creates a global label with name \"+12V\""
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "ki_keywords" "global power"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(symbol "+12V_0_1"
-				(polyline
-					(pts
-						(xy -0.762 1.27) (xy 0 2.54)
-					)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy 0 0) (xy 0 2.54)
-					)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy 0 2.54) (xy 0.762 1.27)
-					)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-			)
-			(symbol "+12V_1_1"
-				(pin power_in line
-					(at 0 0 90)
-					(length 0)
-					(name "~"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "1"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-			)
-		)
 		(symbol "power:+3.3V"
 			(power)
 			(pin_numbers hide)
@@ -1650,16 +1530,8 @@
 		(uuid "42844fcf-516f-49ef-a377-06266f659344")
 	)
 	(no_connect
-		(at 180.34 93.98)
-		(uuid "4400ddbd-9081-4130-ad9a-a0b5275a95d5")
-	)
-	(no_connect
 		(at 180.34 68.58)
 		(uuid "48c4adc4-8ac6-4ef5-8908-6383a83a51b2")
-	)
-	(no_connect
-		(at 180.34 88.9)
-		(uuid "4edae36a-f6bb-414c-aefb-91aa43a18a40")
 	)
 	(no_connect
 		(at 142.24 93.98)
@@ -1763,6 +1635,16 @@
 	)
 	(wire
 		(pts
+			(xy 72.39 49.53) (xy 82.55 49.53)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "1db787d1-8ac9-49bf-ad75-159f4ec49538")
+	)
+	(wire
+		(pts
 			(xy 248.92 107.95) (xy 248.92 110.49)
 		)
 		(stroke
@@ -1780,6 +1662,16 @@
 			(type default)
 		)
 		(uuid "20ced4ba-5142-4e23-b4d5-f83712bdf95d")
+	)
+	(wire
+		(pts
+			(xy 180.34 93.98) (xy 193.04 93.98)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "2797e486-389b-47e9-92fe-7bb084f963af")
 	)
 	(wire
 		(pts
@@ -2043,16 +1935,6 @@
 	)
 	(wire
 		(pts
-			(xy 190.5 91.44) (xy 180.34 91.44)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "aa3b773c-91e0-4864-87a5-8281ad89ee4e")
-	)
-	(wire
-		(pts
 			(xy 80.01 128.27) (xy 80.01 127)
 		)
 		(stroke
@@ -2100,6 +1982,16 @@
 			(type default)
 		)
 		(uuid "c548a0d1-2103-4a40-b182-f1471f5d4e41")
+	)
+	(wire
+		(pts
+			(xy 82.55 49.53) (xy 82.55 53.34)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c6d35f1f-ff76-431a-aa00-472ab5d62504")
 	)
 	(wire
 		(pts
@@ -2274,6 +2166,28 @@
 		)
 		(uuid "db9b09d1-265a-4b1f-b6cf-8a4411d926d2")
 	)
+	(global_label "BATTERY_SENSE_12V"
+		(shape input)
+		(at 72.39 49.53 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "8cf41f18-9ce3-4e9a-bc16-877273a62bb9")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 50.1131 49.53 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+				(hide yes)
+			)
+		)
+	)
 	(global_label "THERMO_SENSOR_P"
 		(shape input)
 		(at 73.66 106.68 180)
@@ -2320,7 +2234,7 @@
 	)
 	(global_label "BOOSH_TRIGGER_ESP3V3"
 		(shape input)
-		(at 190.5 91.44 0)
+		(at 193.04 93.98 0)
 		(fields_autoplaced yes)
 		(effects
 			(font
@@ -2330,7 +2244,7 @@
 		)
 		(uuid "c263aa6c-7260-49bc-a828-2b4cdb111696")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 216.8289 91.44 0)
+			(at 219.3689 93.98 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2491,72 +2405,6 @@
 			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/91617d0d-6f07-4f47-baaa-678bb3c8f5f7"
 					(reference "R4")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:+12V")
-		(at 82.55 53.34 0)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "19cd35b7-2bbe-4397-97b7-a263dbd44deb")
-		(property "Reference" "#PWR08"
-			(at 82.55 57.15 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Value" "+12V"
-			(at 82.55 48.26 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 82.55 53.34 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 82.55 53.34 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"+12V\""
-			(at 82.55 53.34 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "1"
-			(uuid "5d9edfd6-f66c-47df-90d2-11381321c073")
-		)
-		(instances
-			(project "pylons_boosh_remote_reciver"
-				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/91617d0d-6f07-4f47-baaa-678bb3c8f5f7"
-					(reference "#PWR08")
 					(unit 1)
 				)
 			)

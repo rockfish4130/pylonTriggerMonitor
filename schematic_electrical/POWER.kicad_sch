@@ -310,30 +310,30 @@
 				)
 			)
 		)
-		(symbol "Switch:SW_SPST_Lamp"
-			(pin_names
-				(offset 1.016) hide)
+		(symbol "WGCD_SPST_ILLUM_TOGGLE_1"
 			(exclude_from_sim no)
 			(in_bom yes)
 			(on_board yes)
 			(property "Reference" "SW"
-				(at 0 6.35 0)
+				(at -11.43 -10.414 0)
 				(effects
 					(font
 						(size 1.27 1.27)
 					)
+					(justify left)
 				)
 			)
-			(property "Value" "SW_SPST_Lamp"
-				(at 0 -3.81 0)
+			(property "Value" "WGCD_SPST_ILLUM_TOGGLE"
+				(at -11.43 -7.874 0)
 				(effects
 					(font
 						(size 1.27 1.27)
 					)
+					(justify left)
 				)
 			)
 			(property "Footprint" ""
-				(at 0 7.62 0)
+				(at 0 3.81 0)
 				(effects
 					(font
 						(size 1.27 1.27)
@@ -341,8 +341,8 @@
 					(hide yes)
 				)
 			)
-			(property "Datasheet" "~"
-				(at 0 -6.35 0)
+			(property "Datasheet" "https://www.amazon.com/dp/B07DBY6G3X"
+				(at 4.064 20.066 0)
 				(effects
 					(font
 						(size 1.27 1.27)
@@ -350,7 +350,16 @@
 					(hide yes)
 				)
 			)
-			(property "Description" "Single Pole Single Throw (SPST) switch with signal lamp, generic"
+			(property "Description" "SPST illuminated toggle switch 3-pin 20A 12VDC LED hardwired WGCD"
+				(at 5.334 15.494 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "ki_keywords" "toggle switch SPST illuminated LED 3-pin panel mount WGCD"
 				(at 0 0 0)
 				(effects
 					(font
@@ -359,30 +368,10 @@
 					(hide yes)
 				)
 			)
-			(property "ki_keywords" "switch SPST LED OFF-ON lamp"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(symbol "SW_SPST_Lamp_0_1"
-				(circle
-					(center -2.032 2.54)
-					(radius 0.508)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
+			(symbol "WGCD_SPST_ILLUM_TOGGLE_1_0_0"
 				(polyline
 					(pts
-						(xy -2.54 0) (xy -1.27 0)
+						(xy -2.4151 10.5534) (xy -1.1451 9.2834)
 					)
 					(stroke
 						(width 0)
@@ -394,7 +383,7 @@
 				)
 				(polyline
 					(pts
-						(xy -1.524 2.794) (xy 2.159 4.191)
+						(xy -1.1451 10.5534) (xy 0.1249 9.2834)
 					)
 					(stroke
 						(width 0)
@@ -406,7 +395,7 @@
 				)
 				(polyline
 					(pts
-						(xy -0.889 -0.889) (xy 0.889 0.889)
+						(xy -0.7641 7.1244) (xy -0.7641 9.6644)
 					)
 					(stroke
 						(width 0)
@@ -418,7 +407,7 @@
 				)
 				(polyline
 					(pts
-						(xy 0.889 -0.889) (xy -0.889 0.889)
+						(xy -2.4151 9.9184) (xy -2.4151 10.5534) (xy -1.7801 10.5534)
 					)
 					(stroke
 						(width 0)
@@ -430,7 +419,7 @@
 				)
 				(polyline
 					(pts
-						(xy 2.54 0) (xy 1.27 0)
+						(xy -1.1451 9.9184) (xy -1.1451 10.5534) (xy -0.5101 10.5534)
 					)
 					(stroke
 						(width 0)
@@ -440,50 +429,22 @@
 						(type none)
 					)
 				)
-				(circle
-					(center 0 0)
-					(radius 1.27)
-					(stroke
-						(width 0.254)
-						(type default)
+				(polyline
+					(pts
+						(xy -0.7641 8.3944) (xy 1.1409 7.1244) (xy 1.1409 9.6644) (xy -0.7641 8.3944)
 					)
-					(fill
-						(type none)
-					)
-				)
-				(circle
-					(center 2.032 2.54)
-					(radius 0.508)
 					(stroke
 						(width 0)
 						(type default)
 					)
 					(fill
-						(type none)
+						(type outline)
 					)
 				)
 				(pin passive line
-					(at -5.08 2.54 0)
+					(at -12.7 -1.27 0)
 					(length 2.54)
-					(name "1"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "1"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin passive line
-					(at 5.08 2.54 180)
-					(length 2.54)
-					(name "2"
+					(name "LOAD+"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -499,9 +460,9 @@
 					)
 				)
 				(pin passive line
-					(at -5.08 0 0)
+					(at -12.7 8.382 0)
 					(length 2.54)
-					(name "L"
+					(name "GND"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -516,35 +477,284 @@
 						)
 					)
 				)
-				(pin passive line
-					(at 5.08 0 180)
-					(length 2.54)
-					(name "L"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
+			)
+			(symbol "WGCD_SPST_ILLUM_TOGGLE_1_0_1"
+				(rectangle
+					(start -10.16 13.97)
+					(end 17.78 -6.35)
+					(stroke
+						(width 0.254)
+						(type default)
 					)
-					(number "4"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
+					(fill
+						(type background)
 					)
 				)
-			)
-			(symbol "SW_SPST_Lamp_1_1"
-				(rectangle
-					(start -3.175 4.445)
-					(end 3.175 -1.905)
+				(circle
+					(center -7.6432 11.3544)
+					(radius 1.6764)
 					(stroke
 						(width 0)
 						(type default)
 					)
 					(fill
-						(type background)
+						(type none)
+					)
+				)
+				(circle
+					(center -7.112 -3.81)
+					(radius 1.397)
+					(stroke
+						(width 0.127)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(circle
+					(center -2.54 -1.27)
+					(radius 0.508)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -8.9132 11.3544) (xy -6.3732 11.3544)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -7.6432 11.3544) (xy -7.6329 12.8288)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -7.5162 10.0844) (xy -7.7702 10.0844)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -7.112 -2.794) (xy -7.112 -4.826)
+					)
+					(stroke
+						(width 0.508)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -7.0082 10.7194) (xy -8.2782 10.7194)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -6.096 -3.81) (xy -8.128 -3.81)
+					)
+					(stroke
+						(width 0.508)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy -3.048 -1.27) (xy -3.4189 -1.2719)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 2.032 -1.27) (xy -2.032 -2.286)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 3.7724 8.3863) (xy -5.6394 8.4076)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 3.7775 8.3542) (xy 3.7811 -1.3462)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 4.7707 -1.3623) (xy 3.0746 -1.3628)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 13.97 -2.286) (xy 13.97 -5.334)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 14.4451 -4.5719) (xy 14.9613 -4.8095)
+					)
+					(stroke
+						(width 0.127)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 14.478 -3.81) (xy 15.2194 -3.81)
+					)
+					(stroke
+						(width 0.127)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 14.527 -3.0767) (xy 15.0842 -2.8923)
+					)
+					(stroke
+						(width 0.127)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(circle
+					(center 2.54 -1.27)
+					(radius 0.508)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(circle
+					(center 13.97 -3.81)
+					(radius 1.6764)
+					(stroke
+						(width 0.127)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(arc
+					(start 13.97 -2.286)
+					(mid 12.7 -3.81)
+					(end 13.97 -5.334)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "WGCD_SPST_ILLUM_TOGGLE_1_1_0"
+				(pin passive line
+					(at 20.32 -1.27 180)
+					(length 2.54)
+					(name "INPUT/LAMP"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
 					)
 				)
 			)
@@ -1007,22 +1217,16 @@
 		)
 	)
 	(junction
-		(at 187.96 72.39)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "2adfae78-5ce8-4750-9701-6ef0285b5fd4")
-	)
-	(junction
 		(at 180.34 72.39)
 		(diameter 0)
 		(color 0 0 0 0)
-		(uuid "90b28ba7-b321-402c-af42-03d9573645f6")
+		(uuid "49af2e46-4bb6-4202-ad5d-7cd7cc7ce648")
 	)
 	(junction
-		(at 129.54 72.39)
+		(at 167.64 72.39)
 		(diameter 0)
 		(color 0 0 0 0)
-		(uuid "c4de06c3-fd9f-44eb-963e-dc92d796f71a")
+		(uuid "e28061e4-c32a-43a3-a291-4e13679b2a63")
 	)
 	(wire
 		(pts
@@ -1036,17 +1240,17 @@
 	)
 	(wire
 		(pts
-			(xy 204.47 74.93) (xy 204.47 77.47)
+			(xy 167.64 88.9) (xy 167.64 72.39)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "1951c43c-e7a5-4602-974f-285b0851bfad")
+		(uuid "1b79bdb0-7694-479f-ab35-7384195d54fa")
 	)
 	(wire
 		(pts
-			(xy 135.89 72.39) (xy 129.54 72.39)
+			(xy 123.19 72.39) (xy 127 72.39)
 		)
 		(stroke
 			(width 0.508)
@@ -1056,27 +1260,7 @@
 	)
 	(wire
 		(pts
-			(xy 129.54 72.39) (xy 123.19 72.39)
-		)
-		(stroke
-			(width 0.508)
-			(type default)
-		)
-		(uuid "20533dec-c4b9-4323-9e1e-93fab35c4b39")
-	)
-	(wire
-		(pts
-			(xy 146.05 72.39) (xy 180.34 72.39)
-		)
-		(stroke
-			(width 0.508)
-			(type default)
-		)
-		(uuid "22c86d9f-66a7-499c-af13-f95b965b5b70")
-	)
-	(wire
-		(pts
-			(xy 212.09 72.39) (xy 212.09 55.88)
+			(xy 248.92 72.39) (xy 248.92 55.88)
 		)
 		(stroke
 			(width 0.508)
@@ -1096,16 +1280,6 @@
 	)
 	(wire
 		(pts
-			(xy 135.89 74.93) (xy 129.54 74.93)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "2bb899e6-b4d9-4add-8740-2c824e615222")
-	)
-	(wire
-		(pts
 			(xy 231.14 125.73) (xy 223.52 125.73)
 		)
 		(stroke
@@ -1116,7 +1290,7 @@
 	)
 	(wire
 		(pts
-			(xy 180.34 72.39) (xy 187.96 72.39)
+			(xy 180.34 72.39) (xy 194.31 72.39)
 		)
 		(stroke
 			(width 0.508)
@@ -1126,13 +1300,13 @@
 	)
 	(wire
 		(pts
-			(xy 187.96 72.39) (xy 194.31 72.39)
+			(xy 168.91 63.5) (xy 168.91 62.738)
 		)
 		(stroke
-			(width 0.508)
+			(width 0)
 			(type default)
 		)
-		(uuid "3f69ea0b-9728-496d-8c64-c2283cdf18e8")
+		(uuid "43bd1b4c-e3ee-44e7-b6d2-65e384b9347b")
 	)
 	(wire
 		(pts
@@ -1146,6 +1320,16 @@
 	)
 	(wire
 		(pts
+			(xy 233.68 62.738) (xy 227.33 62.738)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "5008f9d3-872c-4f09-ac80-e527fb5b51c2")
+	)
+	(wire
+		(pts
 			(xy 107.95 72.39) (xy 107.95 54.61)
 		)
 		(stroke
@@ -1153,16 +1337,6 @@
 			(type default)
 		)
 		(uuid "56e9c0a3-d0cc-4b6c-ab8d-32a2f009d1c8")
-	)
-	(wire
-		(pts
-			(xy 194.31 74.93) (xy 187.96 74.93)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "57fcb7f3-c894-42b8-96ed-dcffaf2788ec")
 	)
 	(wire
 		(pts
@@ -1176,7 +1350,37 @@
 	)
 	(wire
 		(pts
-			(xy 204.47 72.39) (xy 212.09 72.39)
+			(xy 162.56 88.9) (xy 167.64 88.9)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "7489d2d5-1878-4363-80d3-c982ddba5e11")
+	)
+	(wire
+		(pts
+			(xy 160.02 72.39) (xy 167.64 72.39)
+		)
+		(stroke
+			(width 0.508)
+			(type default)
+		)
+		(uuid "78ee1cb9-94f9-4539-b71e-ff2baeefb6c8")
+	)
+	(wire
+		(pts
+			(xy 168.91 62.738) (xy 160.02 62.738)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "91b9c4db-a733-431e-b1b3-8ec0db873f18")
+	)
+	(wire
+		(pts
+			(xy 227.33 72.39) (xy 248.92 72.39)
 		)
 		(stroke
 			(width 0.508)
@@ -1186,23 +1390,13 @@
 	)
 	(wire
 		(pts
-			(xy 129.54 72.39) (xy 129.54 74.93)
+			(xy 167.64 72.39) (xy 180.34 72.39)
 		)
 		(stroke
-			(width 0)
+			(width 0.508)
 			(type default)
 		)
-		(uuid "b8877f76-4b87-4f21-a9ea-7cad26dd5b44")
-	)
-	(wire
-		(pts
-			(xy 187.96 74.93) (xy 187.96 72.39)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "d044d6e9-35e3-4f60-a377-b93e6001aa6f")
+		(uuid "cb95b100-288a-40c8-aeb4-229eeeb5a42d")
 	)
 	(wire
 		(pts
@@ -1226,13 +1420,13 @@
 	)
 	(wire
 		(pts
-			(xy 146.05 74.93) (xy 146.05 77.47)
+			(xy 233.68 63.5) (xy 233.68 62.738)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "ea1f4919-45e3-4a53-ab17-994e04b71228")
+		(uuid "ff39e7ae-0961-4619-96c2-c5cb82042f37")
 	)
 	(rectangle
 		(start 29.21 39.37)
@@ -1270,19 +1464,9 @@
 		)
 		(uuid "63d627b6-adbd-4f58-95d8-9d04c30b86b3")
 	)
-	(text "LAMP HARDWIRED\nWITHIN SWITCH"
-		(exclude_from_sim no)
-		(at 191.77 80.01 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-		)
-		(uuid "a0703425-0dc6-43e3-bbdd-778b3eb0fe55")
-	)
 	(text "ARM SWITCH\nRED LED"
 		(exclude_from_sim no)
-		(at 199.898 62.23 0)
+		(at 211.074 81.788 0)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -1292,7 +1476,7 @@
 	)
 	(text "MAIN POWER SWITCH\nBLUE LED"
 		(exclude_from_sim no)
-		(at 141.478 62.23 0)
+		(at 143.51 81.28 0)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -1320,16 +1504,6 @@
 		)
 		(uuid "d2581b62-be6a-4bd5-af26-3aa804119a0b")
 	)
-	(text "LAMP HARDWIRED\nWITHIN SWITCH"
-		(exclude_from_sim no)
-		(at 129.54 79.756 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-		)
-		(uuid "ed28eebc-0a19-48b8-8cf5-5c3230f449c3")
-	)
 	(global_label "USBC_5V_TO_RASPBERRY_PI"
 		(shape output)
 		(at 231.14 125.73 0)
@@ -1352,77 +1526,25 @@
 			)
 		)
 	)
-	(symbol
-		(lib_id "Switch:SW_SPST_Lamp")
-		(at 199.39 74.93 0)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
+	(global_label "BATTERY_SENSE_12V"
+		(shape input)
+		(at 162.56 88.9 180)
 		(fields_autoplaced yes)
-		(uuid "15632211-0761-4181-b520-2d4f60eefce0")
-		(property "Reference" "SW1"
-			(at 199.39 66.04 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
+		(effects
+			(font
+				(size 1.27 1.27)
 			)
+			(justify right)
 		)
-		(property "Value" "SW_SPST_Lamp"
-			(at 199.39 68.58 0)
+		(uuid "f411b5a2-b95a-40ef-b1bb-8469166cb075")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 140.2831 88.9 0)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-			)
-		)
-		(property "Footprint" ""
-			(at 199.39 67.31 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
+				(justify right)
 				(hide yes)
-			)
-		)
-		(property "Datasheet" "~"
-			(at 199.39 81.28 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "Single Pole Single Throw (SPST) switch with signal lamp, generic"
-			(at 199.39 74.93 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "4"
-			(uuid "be7547fc-933d-40f2-bfee-02194db953dd")
-		)
-		(pin "1"
-			(uuid "550c1798-eefa-495d-859d-cc4fdee1549d")
-		)
-		(pin "2"
-			(uuid "520b37bf-0faf-497f-8f37-8b0d65e8c263")
-		)
-		(pin "3"
-			(uuid "be62f16d-4628-4b48-865c-7f409e048656")
-		)
-		(instances
-			(project "pylons_boosh_remote_reciver"
-				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/6657731a-46b5-42dc-8611-bac46a2b6e5c"
-					(reference "SW1")
-					(unit 1)
-				)
 			)
 		)
 	)
@@ -1559,8 +1681,80 @@
 		)
 	)
 	(symbol
+		(lib_name "WGCD_SPST_ILLUM_TOGGLE_1")
+		(lib_id "wgcd_spst_illum_toggle:WGCD_SPST_ILLUM_TOGGLE")
+		(at 147.32 71.12 0)
+		(mirror y)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "40ad3f99-cd4a-4fec-a660-3a21d031b9ca")
+		(property "Reference" "SW1"
+			(at 143.51 52.07 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "WGCD_SPST_ILLUM_TOGGLE"
+			(at 143.51 54.61 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 147.32 67.31 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "https://www.amazon.com/dp/B07DBY6G3X"
+			(at 143.256 51.054 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "SPST illuminated toggle switch 3-pin 20A 12VDC LED hardwired WGCD"
+			(at 141.986 55.626 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "3"
+			(uuid "6ae1e310-7f3e-4b07-83dc-e7f49410147b")
+		)
+		(pin "1"
+			(uuid "c641dc86-debc-469e-bd7d-29426a7e8859")
+		)
+		(pin "2"
+			(uuid "d015ac59-2614-438e-b393-77236c4c2c61")
+		)
+		(instances
+			(project "pylons_boosh_remote_reciver"
+				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/6657731a-46b5-42dc-8611-bac46a2b6e5c"
+					(reference "SW1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
 		(lib_id "power:GND")
-		(at 146.05 77.47 0)
+		(at 168.91 63.5 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -1569,7 +1763,7 @@
 		(fields_autoplaced yes)
 		(uuid "4fe765f3-1a82-42a3-b96a-06c446512894")
 		(property "Reference" "#PWR038"
-			(at 146.05 83.82 0)
+			(at 168.91 69.85 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1578,7 +1772,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 146.05 82.55 0)
+			(at 168.91 68.58 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1586,7 +1780,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 146.05 77.47 0)
+			(at 168.91 63.5 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1595,7 +1789,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 146.05 77.47 0)
+			(at 168.91 63.5 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1604,7 +1798,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 146.05 77.47 0)
+			(at 168.91 63.5 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1967,7 +2161,7 @@
 	)
 	(symbol
 		(lib_id "power:+12V")
-		(at 212.09 55.88 0)
+		(at 248.92 55.88 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -1976,7 +2170,7 @@
 		(fields_autoplaced yes)
 		(uuid "8779b7ca-9c41-4292-91eb-05123c8262ff")
 		(property "Reference" "#PWR045"
-			(at 212.09 59.69 0)
+			(at 248.92 59.69 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1985,7 +2179,7 @@
 			)
 		)
 		(property "Value" "+12V_MASTER_ARM_SW"
-			(at 212.09 50.8 0)
+			(at 248.92 50.8 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1993,7 +2187,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 212.09 55.88 0)
+			(at 248.92 55.88 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2002,7 +2196,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 212.09 55.88 0)
+			(at 248.92 55.88 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2011,7 +2205,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"+12V\""
-			(at 212.09 55.88 0)
+			(at 248.92 55.88 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2033,16 +2227,16 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 204.47 77.47 0)
+		(at 233.68 63.5 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "a5662795-2468-4b5a-826a-4157925ffd3b")
-		(property "Reference" "#PWR043"
-			(at 204.47 83.82 0)
+		(uuid "a5193b2b-0cca-429f-967d-6164504fe5af")
+		(property "Reference" "#PWR016"
+			(at 233.68 69.85 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2051,7 +2245,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 204.47 82.55 0)
+			(at 233.68 68.58 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2059,7 +2253,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 204.47 77.47 0)
+			(at 233.68 63.5 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2068,7 +2262,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 204.47 77.47 0)
+			(at 233.68 63.5 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2077,7 +2271,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 204.47 77.47 0)
+			(at 233.68 63.5 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2086,37 +2280,38 @@
 			)
 		)
 		(pin "1"
-			(uuid "5f91a137-74d4-4ea0-bc2d-69533b541656")
+			(uuid "86869422-2d42-43f4-8743-f8506d8ad4e0")
 		)
 		(instances
 			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/6657731a-46b5-42dc-8611-bac46a2b6e5c"
-					(reference "#PWR043")
+					(reference "#PWR016")
 					(unit 1)
 				)
 			)
 		)
 	)
 	(symbol
-		(lib_id "Switch:SW_SPST_Lamp")
-		(at 140.97 74.93 0)
+		(lib_name "WGCD_SPST_ILLUM_TOGGLE_1")
+		(lib_id "wgcd_spst_illum_toggle:WGCD_SPST_ILLUM_TOGGLE")
+		(at 214.63 71.12 0)
+		(mirror y)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
 		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "da15cc1f-316d-4ce8-94a1-ee7669815401")
+		(uuid "ab6c309e-a34c-431c-b845-21356ed92b98")
 		(property "Reference" "SW2"
-			(at 140.97 66.04 0)
+			(at 210.82 52.07 0)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
 			)
 		)
-		(property "Value" "SW_SPST_Lamp"
-			(at 140.97 68.58 0)
+		(property "Value" "WGCD_SPST_ILLUM_TOGGLE"
+			(at 210.82 54.61 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2124,7 +2319,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 140.97 67.31 0)
+			(at 214.63 67.31 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2132,8 +2327,8 @@
 				(hide yes)
 			)
 		)
-		(property "Datasheet" "~"
-			(at 140.97 81.28 0)
+		(property "Datasheet" "https://www.amazon.com/dp/B07DBY6G3X"
+			(at 210.566 51.054 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2141,26 +2336,23 @@
 				(hide yes)
 			)
 		)
-		(property "Description" "Single Pole Single Throw (SPST) switch with signal lamp, generic"
-			(at 140.97 74.93 0)
+		(property "Description" "SPST illuminated toggle switch 3-pin 20A 12VDC LED hardwired WGCD"
+			(at 209.296 55.626 0)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
 				(hide yes)
 			)
-		)
-		(pin "4"
-			(uuid "e71a6354-f5c5-4309-b31f-079254838ecd")
-		)
-		(pin "1"
-			(uuid "07686fb1-015b-40cb-93bd-aea3bf0b34fa")
-		)
-		(pin "2"
-			(uuid "9079011f-97e0-44af-91f5-12c993f833f5")
 		)
 		(pin "3"
-			(uuid "9f910284-8054-42f7-a561-a307214e220a")
+			(uuid "8268cb8d-394d-490d-99dc-70dc662f43db")
+		)
+		(pin "1"
+			(uuid "d6acb224-1865-4fea-9ec5-8d54d3ba4e69")
+		)
+		(pin "2"
+			(uuid "2a5789ce-bb01-44e4-b5ab-6a805e321e2e")
 		)
 		(instances
 			(project "pylons_boosh_remote_reciver"
