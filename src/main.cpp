@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <USB.h>
+#include "esp_task_wdt.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <ESP32Ping.h>
@@ -1139,10 +1140,11 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       renderMeta(await fetchJson('/api/telemetry'));
     }
     async function refreshLogs() {
+      const log = document.getElementById('log');
+      const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 50;
       const data = await fetchJson('/api/logs');
       document.getElementById('log-text').textContent = data.log;
-      const log = document.getElementById('log');
-      log.scrollTop = log.scrollHeight;
+      if (atBottom) log.scrollTop = log.scrollHeight;
     }
     const triggerButton = document.getElementById('trigger');
     const configForm = document.getElementById('config-form');
@@ -1391,6 +1393,7 @@ void PollDevBoardButton() {
 void setup() {
   USB.begin();
   Serial.begin(115200);
+  esp_task_wdt_delete(NULL);  // remove loopTask from watchdog; blocking calls (ping, HTTP) are intentional
   unsigned long serialStart = millis();
   while (!Serial && (millis() - serialStart) < 2000) {
     delay(10);
