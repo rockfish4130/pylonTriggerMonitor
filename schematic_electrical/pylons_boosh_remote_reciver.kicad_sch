@@ -25,7 +25,7 @@
 		(uuid "de86c57d-bce5-4c60-9589-dfaad89ea7ad")
 	)
 	(sheet
-		(at 44.45 92.71)
+		(at 44.45 71.12)
 		(size 12.7 3.81)
 		(fields_autoplaced yes)
 		(stroke
@@ -37,7 +37,7 @@
 		)
 		(uuid "6657731a-46b5-42dc-8611-bac46a2b6e5c")
 		(property "Sheetname" "POWER"
-			(at 44.45 91.9984 0)
+			(at 44.45 70.4084 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -46,7 +46,7 @@
 			)
 		)
 		(property "Sheetfile" "POWER.kicad_sch"
-			(at 44.45 97.1046 0)
+			(at 44.45 75.5146 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -57,7 +57,7 @@
 		(instances
 			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455"
-					(page "6")
+					(page "4")
 				)
 			)
 		)
@@ -101,7 +101,7 @@
 		)
 	)
 	(sheet
-		(at 44.45 82.55)
+		(at 44.45 60.96)
 		(size 12.7 3.81)
 		(fields_autoplaced yes)
 		(stroke
@@ -113,7 +113,7 @@
 		)
 		(uuid "abf3116a-5807-45c2-900d-76b411163732")
 		(property "Sheetname" "BOOSH_TRIGGER"
-			(at 44.45 81.8384 0)
+			(at 44.45 60.2484 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -122,7 +122,7 @@
 			)
 		)
 		(property "Sheetfile" "BOOSH_TRIGGER.kicad_sch"
-			(at 44.45 86.9446 0)
+			(at 44.45 65.3546 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -133,13 +133,13 @@
 		(instances
 			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455"
-					(page "5")
+					(page "3")
 				)
 			)
 		)
 	)
 	(sheet
-		(at 44.45 102.87)
+		(at 44.45 81.28)
 		(size 12.7 3.81)
 		(fields_autoplaced yes)
 		(stroke
@@ -151,7 +151,7 @@
 		)
 		(uuid "d08cb7b6-6190-46a9-b97e-3e5f70878a10")
 		(property "Sheetname" "CONNECTORS"
-			(at 44.45 102.1584 0)
+			(at 44.45 80.5684 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -160,7 +160,7 @@
 			)
 		)
 		(property "Sheetfile" "CONNECTORS.kicad_sch"
-			(at 44.45 107.2646 0)
+			(at 44.45 85.6746 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -171,7 +171,7 @@
 		(instances
 			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455"
-					(page "7")
+					(page "5")
 				)
 			)
 		)
