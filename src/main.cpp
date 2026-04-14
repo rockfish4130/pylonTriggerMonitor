@@ -1402,12 +1402,16 @@ void setup() {
 
   pinMode(kLedWhitePin, OUTPUT);
   digitalWrite(kLedWhitePin, LOW);
-  pinMode(kLedGreenPin, OUTPUT);
-  digitalWrite(kLedGreenPin, LOW);
-  pinMode(kLedBluePin, OUTPUT);
-  digitalWrite(kLedBluePin, LOW);
-  pinMode(kLedYellowPin, OUTPUT);
-  digitalWrite(kLedYellowPin, LOW);
+  // Green/Blue/Yellow: 5kHz PWM carrier, duty updated in loop() for sine wave
+  ledcSetup(0, 5000, 8);
+  ledcAttachPin(kLedGreenPin, 0);
+  ledcWrite(0, 0);
+  ledcSetup(1, 5000, 8);
+  ledcAttachPin(kLedBluePin, 1);
+  ledcWrite(1, 0);
+  ledcSetup(2, 5000, 8);
+  ledcAttachPin(kLedYellowPin, 2);
+  ledcWrite(2, 0);
 
   pinMode(kIo38Pin, OUTPUT);
   digitalWrite(kIo38Pin, LOW);
@@ -1612,37 +1616,22 @@ void PollOsc() {
 }
 
 void PollBlinkLeds() {
+  // White: simple 1Hz square wave toggle
   static unsigned long lastWhiteMs = 0;
-  static unsigned long lastGreenMs = 0;
-  static unsigned long lastBlueMs = 0;
-  static unsigned long lastYellowMs = 0;
   static bool whiteState = false;
-  static bool greenState = false;
-  static bool blueState = false;
-  static bool yellowState = false;
-
   const unsigned long now = millis();
-
-  if (now - lastWhiteMs >= 500) {   // 1Hz
+  if (now - lastWhiteMs >= 500) {
     lastWhiteMs = now;
     whiteState = !whiteState;
     digitalWrite(kLedWhitePin, whiteState);
   }
-  if (now - lastGreenMs >= 250) {   // 2Hz
-    lastGreenMs = now;
-    greenState = !greenState;
-    digitalWrite(kLedGreenPin, greenState);
-  }
-  if (now - lastBlueMs >= 125) {    // 4Hz
-    lastBlueMs = now;
-    blueState = !blueState;
-    digitalWrite(kLedBluePin, blueState);
-  }
-  if (now - lastYellowMs >= 83) {   // ~6Hz
-    lastYellowMs = now;
-    yellowState = !yellowState;
-    digitalWrite(kLedYellowPin, yellowState);
-  }
+
+  // Green/Blue/Yellow: sine wave brightness 0-33%, 5kHz carrier via LEDC
+  const float t = now / 1000.0f;
+  constexpr float kMaxDuty = 0.33f * 255.0f;
+  ledcWrite(0, (uint8_t)(((1.0f + sinf(2.0f * M_PI * 0.4f * t)) / 2.0f) * kMaxDuty));  // green 0.4Hz
+  ledcWrite(1, (uint8_t)(((1.0f + sinf(2.0f * M_PI * 0.8f * t)) / 2.0f) * kMaxDuty));  // blue 0.8Hz
+  ledcWrite(2, (uint8_t)(((1.0f + sinf(2.0f * M_PI * 1.2f * t)) / 2.0f) * kMaxDuty));  // yellow 1.2Hz
 }
 
 void loop() {
