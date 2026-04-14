@@ -1,52 +1,65 @@
 # Setup
 
-This project uses PlatformIO with the Arduino framework targeting the WEMOS/LOLIN S2 Pico (ESP32-S2).
+## Prerequisites
 
-Official board reference:
-- https://www.wemos.cc/en/latest/s2/s2_pico.html
+- [PlatformIO](https://platformio.org/) (VS Code extension or CLI)
+- USB-C data cable (not charge-only)
+- WEMOS/LOLIN S2 Pico board
 
-## Install
-1. Install PlatformIO (VS Code extension or CLI).
-2. Connect the board via USB-C.
+## Credential File
+
+Before building, create `src/wifi_credentials.h`. This file is gitignored and must be created locally. See [WIFI.md](WIFI.md) for the template and explanation.
 
 ## Build
+
 ```bash
 pio run
 ```
 
 ## Upload
+
 ```bash
 pio run -t upload
 ```
 
+Upload port is set to `COM16` in `platformio.ini`. Change this to match your system.
+
+If the upload fails, the board may need to be manually put into bootloader mode:
+
+1. Hold the `0`/BOOT button
+2. Tap `RST`
+3. Release `0`
+4. Run the upload command
+
+After flashing, tap `RST` once to reboot into firmware. The USB CDC port re-enumerates on reboot — if the port disappears, wait a few seconds and try again.
+
 ## Serial Monitor
+
 ```bash
 pio device monitor
 ```
 
-Default baud is `115200` (see `platformio.ini`).
+Baud rate: `115200` (set in `platformio.ini`).
+
+USB CDC is used (no external UART chip). Requires `ARDUINO_USB_CDC_ON_BOOT=1` and `ARDUINO_USB_MODE=0` build flags, which are already set in `platformio.ini`.
 
 ## Dependencies
-PlatformIO will auto-install:
-- `Adafruit GFX Library`
-- `Adafruit SSD1306`
 
-These are declared in `platformio.ini`.
+Declared in `platformio.ini`. PlatformIO installs automatically:
 
-## Example OSC Payloads
-Hex payloads for `/rpiboosh/BooshMain` with 1 float arg:
-
-Start (ON):
-```text
-2F 72 70 69 62 6F 6F 73 68 2F 42 6F 6F 73 68 4D 61 69 6E 00 2C 66 00 3F 80 00 00
-```
-
-Stop (OFF):
-```text
-2F 72 70 69 62 6F 6F 73 68 2F 42 6F 6F 73 68 4D 61 69 6E 00 2C 66 00 00 00 00 00
-```
+| Library | Purpose |
+|---------|---------|
+| `Adafruit GFX Library` | OLED graphics primitives |
+| `Adafruit SSD1306` | OLED driver |
+| `ESP32Ping` | ICMP ping to RPIBOOSH |
+| `CNMAT/OSC` | OSC packet parsing |
+| `DNSServer` | Captive portal DNS (bundled with ESP32 Arduino core) |
 
 ## Dev-Board Button
-On the WEMOS S2 Pico dev board, the `0`/BOOT button is also mapped as a local BooshMain trigger:
-- Press: ON (`[1.0]`)
-- Release: OFF (`[0.0]`)
+
+On the WEMOS S2 Pico, the `0`/BOOT button doubles as a local boosh trigger:
+
+- Press → boosh ON
+- Release → boosh OFF
+
+This is equivalent to sending an OSC `/pylon/BooshMain` message.

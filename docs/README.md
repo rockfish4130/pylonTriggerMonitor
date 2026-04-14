@@ -1,140 +1,163 @@
-# Pylons
+# Pylons — Project Overview
 
-ESP32-S2 (WEMOS/LOLIN S2 Pico) Arduino project with OLED status and prioritized Wi-Fi connection.
+## What Is This?
 
-Reference board:
-- WEMOS S2 Pico: https://www.wemos.cc/en/latest/s2/s2_pico.html
+Pylons are autonomous ESP32-S2 nodes deployed at Lava Lounge fire-effect installations. Each pylon:
 
-## What It Does
-At boot the firmware:
-1. Initializes the built-in SSD1306 128x32 OLED on I2C.
-2. Scans for the Lava production SSID (`BOOSH_WIFI_SSID_LL`).
-3. Connects to Lava production if found, otherwise falls back to home test/development Wi-Fi (`BOOSH_WIFI_SSID_MW`).
-4. Shows connection status and IP address on the OLED and serial.
+- Receives fire-trigger commands from the central RPIBOOSH controller via OSC (UDP) or HTTP
+- Drives a solenoid output and visual indicator LEDs
+- Monitors battery voltage and enclosure temperature
+- Reports telemetry (ping, sensors, identity) back to RPIBOOSH
+- Can operate standalone via a captive-portal Wi-Fi AP if no venue network is available
 
-At runtime the firmware:
-1. Listens for OSC on UDP port `8000` at `/rpiboosh/BooshMain`.
-2. Treats the dev-board `0`/BOOT button (`GPIO0`) as a local BooshMain trigger.
-3. Serves an HTTP control/status page on port `80`.
-4. Exposes REST APIs for telemetry, console log access, solenoid hold control, and node config.
-5. Uses OLED inversion as a prototype proxy for the boosher solenoid state.
-6. Inverted display means solenoid open / fire ON.
-7. Normal display means solenoid closed / fire OFF.
-8. Counts total trigger events for the current boot session.
-9. Pings `RPIBOOSH` once per second and shows ping status/stats on the OLED.
-10. Applies a failsafe: if ON is received and OFF is not seen within 5 seconds, it forces OFF.
-11. Cycles OLED pages with Wi-Fi debug metrics, node stats, firmware version, and ping timeout status.
-12. Tracks Wi-Fi disconnect reason and uptime since last connect for field debugging.
-13. Announces this node to RPIBOOSH PYLON registry API and sends periodic heartbeats.
+The central controller (`RPIBOOSH`, a Raspberry Pi) discovers pylons via the registry API and orchestrates synchronized fire effects across multiple nodes.
 
-## Requirements
-- PlatformIO (VS Code extension or CLI)
-- WEMOS/LOLIN S2 Pico (ESP32-S2)
-- USB-C cable (data-capable)
+---
 
-## Quick Start
-1. Create `src/wifi_credentials.h` with your credentials and these exact defines:
-   `BOOSH_WIFI_SSID_MW`, `BOOSH_WIFI_PASS_MW`, `BOOSH_WIFI_SSID_LL`, `BOOSH_WIFI_PASS_LL`
-   (see `docs/WIFI.md` for a copy/paste template).
-2. Build and upload:
+## Repository Layout
 
-```bash
-pio run -t upload
+```
+pylons/
+├── src/
+│   ├── main.cpp              # All firmware logic (single file)
+│   └── wifi_credentials.h   # NOT committed — local credentials only
+├── platformio.ini            # PlatformIO build config
+├── schematic_electrical/     # KiCad schematics
+│   ├── ESP32_MCU.kicad_sch
+│   ├── POWER.kicad_sch
+│   └── CONNECTORS.kicad_sch
+├── docs/                     # This documentation
+└── README.md
 ```
 
-3. Monitor serial output:
+---
 
-```bash
-pio device monitor
+## System Architecture
+
+```
+RPIBOOSH (Raspberry Pi)
+    │
+    ├─ OSC UDP :8000 ──────────► Pylon (ESP32-S2)
+    │                                 │
+    ├─ HTTP registry API ◄────────────┤  announces + heartbeats
+    │                                 │
+    └─ HTTP solenoid API ◄────────────┘  web UI / REST
 ```
 
-## Files
-- `platformio.ini`: PlatformIO config and dependencies.
-- `src/main.cpp`: Firmware entry point.
-- `src/wifi_credentials.h`: Wi-Fi SSIDs/passwords (not for commit).
+Multiple pylons can be on the same network. RPIBOOSH maintains a registry of active nodes via announce/heartbeat and targets individual nodes by ID.
 
-## OSC Control
-The device listens for OSC messages on `/rpiboosh/BooshMain` with 1 float argument.
-- ON: `[1.0]`
-- OFF: `[0.0]`
+---
 
-Local dev-board control on the WEMOS S2 Pico matches the OSC behavior:
-- Press the `0`/BOOT button: ON (`[1.0]`)
-- Release the `0`/BOOT button: OFF (`[0.0]`)
+## Boot Sequence
 
-Prototype proxy behavior:
-- Inverted display = solenoid open / fire ON
-- Normal display = solenoid closed / fire OFF
+1. USB CDC + Serial initialized
+2. Task watchdog disabled for `loopTask` (blocking calls are intentional)
+3. NVS config loaded (node ID, host, description, AP flag, user WiFi creds)
+4. GPIO and ADC pins configured; LEDC PWM channels started for status LEDs
+5. I2C + OLED initialized
+6. Wi-Fi connection attempted in priority order:
+   - `BOOSH_WIFI_SSID_LL` (Lava production, if visible in scan)
+   - `BOOSH_WIFI_SSID_MW` (dev/bench network)
+   - User-defined fallback SSID (if configured in NVS)
+   - If all fail → AP mode auto-enabled and saved to NVS
+7. If connected: mDNS, OSC UDP, web server started; pylon announced to registry
+8. If AP enabled: SoftAP started on `PYLON_{id}` with captive DNS at `10.1.2.3`
 
-If ON is received and OFF does not arrive within 5 seconds, the device forces OFF and logs a failsafe note to Serial and the OLED.
+---
 
-Web control behavior:
-- `POST /api/solenoid/on`: open solenoid immediately
-- `POST /api/solenoid/off`: close solenoid immediately
-- `POST /api/solenoid/trigger`: compatibility alias for `on`
-- The browser UI button is press-and-hold. Loss of focus, page hide, pointer cancel, or release is treated as OFF.
+## Main Loop
 
-## HTTP Interface
-The device exposes a small dark-theme web UI on `http://<ip>/` and `http://<mdns>.local/`.
+Each iteration (no hard delay except in disconnected/AP-only state):
 
-Endpoints:
-- `GET /`: control/status web UI
-- `GET /api/telemetry`: current telemetry payload plus OLED page text
-- `GET /api/logs`: mirrored serial console text buffer
-- `GET /api/config`: current persisted node config (`id`, `host`, `hostname`, `description`)
-- `POST /api/config`: update any subset of `id`, `host`, `description`, or `node`
-- `POST /api/config/id`: set `id` via `value`
-- `POST /api/config/host`: set `host` via `value`
-- `POST /api/config/desc`: set `description` via `value`
-- `POST /api/config/node`: set both `id` and `host` via `value`
-- `POST /api/solenoid/on`: solenoid ON
-- `POST /api/solenoid/off`: solenoid OFF
-- `POST /api/solenoid/trigger`: compatibility alias for ON
+- `PollBlinkLeds()` — drive status LED square wave (IO12) and sine-wave brightness (IO13/14/15)
+- `PollSensors()` — read battery ADC and thermistor every 5 s
+- `PollSerialCli()` — process serial CLI input
+- `PollDevBoardButton()` — handle dev board button (GPIO0)
+- `webServer.handleClient()` — serve HTTP requests
+- `dnsServer.processNextRequest()` — captive portal DNS (if AP active)
+- Apply live AP enable/disable from config changes
+- If Wi-Fi disconnected and not in AP mode: show status and return
+- `PollOsc()` — receive and process OSC packets
+- `HandleRegistry()` — announce / heartbeat
+- Boosh failsafe timeout check
+- mDNS host resolution + ping once per second
+- OLED page cycle (5 pages, 3 s each)
 
-The web UI main page includes:
-- Live telemetry and console view
-- Press-and-hold solenoid control
-- Editable node config fields for `id`, `host`, `description`, and `node` alias
+---
 
-## PYLON Registry API
-The device posts presence metadata to RPIBOOSH:
-- `POST /api/pylons/announce` after Wi-Fi connect/reconnect
-- `POST /api/pylons/heartbeat` every 10 seconds
+## Features
 
-Default metadata includes:
-- `pylon_id` (stable string)
-- `description` (human-readable string)
-- `hostname` (`<mdns>.local`)
-- `ip`
-- `osc_port` (`8000`)
-- `osc_paths` (`/rpiboosh/BooshMain`)
-- `roles` (`boosh_main`)
-- `fw_version`
-- `firmware_version` / `version` / `fw_semver`
-- `ttl_sec` (`30`)
-- `telemetry.ipv4` / `telemetry.mdns_hostname` legacy compatibility aliases
-- `telemetry.temperature` / `telemetry.temperature_f` / `telemetry.temperature_c`
-- `telemetry.battery_voltage` / `telemetry.battery_voltage_v`
-- `telemetry.battery_charge` / `telemetry.battery_charge_pct`
-- `telemetry.uptime` / `telemetry.uptime_hms`
-- `telemetry.trigger_event_count` / `telemetry.solenoid_active`
-- `telemetry.ping.target/sent/recv/lost/last_ms/min_ms/max_ms/avg_ms/count/last_ok`
-- `telemetry.ping.since_ok` / `telemetry.ping.since_ok_s`
+### Boosh (Fire Trigger)
 
-Compatibility note:
-- The current announce/heartbeat payload is the legacy baseline for deployed nodes.
-- The telemetry object is emitted in the same compatibility shape used by existing High Striker nodes so `boosh_box_pi/rpi_python_control` can ingest it without receiver changes.
-- Future firmware may append optional telemetry fields, and receivers should ignore unknown fields.
-- Absence of an explicit schema/protocol marker should be interpreted as the current legacy baseline documented in `docs/PYLON_REGISTRY.md`.
+The primary function. When triggered ON:
+- OLED inverts (visual indicator)
+- `IO11` goes HIGH (external signal: boosh active)
+- `IO12` white LED continues its 1 Hz blink
+- Failsafe: if ON is received and OFF is not seen within **5 seconds**, firmware forces OFF
 
-See:
-- `docs/PYLON_REGISTRY.md`
+Trigger sources (all equivalent):
+- OSC message `/pylon/BooshMain` with float arg `1.0` (ON) or `0.0` (OFF)
+- `POST /api/solenoid/on` and `POST /api/solenoid/off`
+- Dev-board GPIO0/BOOT button press and release
+- Web UI press-and-hold button
 
-## Docs
-- `docs/SETUP.md`: Toolchain, build, and flashing.
-- `docs/DISPLAY.md`: OLED details and usage.
-- `docs/PYLON_REGISTRY.md`: Registry API integration details.
+### Status LEDs
 
-## Firmware Version
-Current firmware version format:
-- `0.0.1 <DATE> <TIME>`
+| Pin | Color | Behavior |
+|-----|-------|----------|
+| IO12 | White | 1 Hz square wave — boosh trigger indicator |
+| IO13 | Yellow | Sine-wave brightness, ~1.2 Hz, 0–33% |
+| IO14 | Blue | Sine-wave brightness, ~0.8 Hz, 0–33% |
+| IO15 | Green | Sine-wave brightness, ~0.4 Hz, 0–33% |
+| IO11 | — | HIGH when boosh is active |
+| IO38 | — | HIGH when Wi-Fi STA connected |
+
+### Battery Sensing (IO3)
+
+Voltage divider: `BATTERY_SENSE_12V → R5(100 kΩ) → R8(27 kΩ) → GND`; junction feeds IO3 via R4(10 kΩ) protection resistor.
+
+- Scale factor: `(100k + 27k) / 27k ≈ 4.704×`
+- 100% = 12.7 V (SLA fully charged)
+- 0% = 10.5 V (SLA discharged)
+- Discharge rate estimated from a rolling 20-minute voltage history (1-min samples). Time-remaining shown in telemetry once 5+ samples are collected.
+
+### Thermistor (IO4)
+
+NTC thermistor in voltage divider with R12 (10 kΩ pull-down), output through R13 (10 kΩ) to IO4.
+
+Steinhart-Hart equation with empirically calibrated coefficients:
+- `c1 = 1.274219988e-03`
+- `c2 = 2.171368266e-04`
+- `c3 = 1.119659695e-07`
+- Manual offset: `+11.17 °F` (validated against reference `boosh_box_esp32_remote_thermo` project)
+
+Temperature reported in °F and °C in telemetry.
+
+### Wi-Fi AP Mode
+
+When enabled, pylon broadcasts its own open Wi-Fi network:
+- SSID: `PYLON_{id}` (e.g. `PYLON_PYLON5`)
+- No password
+- Fixed IP: `10.1.2.3`
+- DNS server answers all queries with `10.1.2.3` (captive portal)
+- OS captive portal detection paths handled: `/generate_204`, `/hotspot-detect.html`, `/ncsi.txt`, `/connecttest.txt`
+- Connecting clients are presented with the pylon control page
+
+AP mode is **auto-enabled** if all STA networks fail to connect at boot (and saved to NVS so it persists).
+
+### PYLON Registry
+
+After connecting to Wi-Fi, the pylon announces itself to RPIBOOSH and sends heartbeats every 10 s. See [PYLON_REGISTRY.md](PYLON_REGISTRY.md) for the full payload contract.
+
+---
+
+## See Also
+
+- [HARDWARE.md](HARDWARE.md) — GPIO pinout, schematic notes, ADC circuits
+- [SETUP.md](SETUP.md) — build and flash instructions
+- [WIFI.md](WIFI.md) — credential file, connection priority, AP mode
+- [API.md](API.md) — HTTP REST and OSC reference
+- [CONFIG.md](CONFIG.md) — node identity, NVS, CLI, HTTP config
+- [PYLON_REGISTRY.md](PYLON_REGISTRY.md) — registry payload contract
+- [DISPLAY.md](DISPLAY.md) — OLED page layout
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md)

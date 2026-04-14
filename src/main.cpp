@@ -27,6 +27,24 @@ constexpr int kLedBluePin = 14;    // IO14 blue - 4Hz
 constexpr int kLedYellowPin = 13;  // IO13 yellow - 6Hz
 constexpr int kIo38Pin = 38;       // IO38 high = WiFi connected
 constexpr int kIo11Pin = 11;       // IO11 high = boosh active
+constexpr int kBatteryAdcPin = 3;  // IO3 ADC - battery voltage divider (R5=100k, R8=27k)
+constexpr int kThermistorAdcPin = 4; // IO4 ADC - NTC thermistor (R12=10k pull-down, R13=10k series)
+// Battery voltage divider: Vbat → R5(100k) → junction → R8(27k) → GND; junction → R4(10k) → IO3
+constexpr float kBatteryDividerScale = (100000.0f + 27000.0f) / 27000.0f;  // ~4.704
+constexpr float kBatteryAdcRef = 3.3f;
+constexpr float kBatteryAdcFullScale = 4095.0f;
+constexpr float kBatteryVoltFull = 12.7f;   // 100% (SLA fully charged)
+constexpr float kBatteryVoltEmpty = 10.5f;  // 0%  (SLA discharged)
+// Steinhart-Hart coefficients for thermistor - from empirical calibration in boosh_box_esp32_remote_thermo
+constexpr float kThermistorC1 = 1.274219988e-03f;
+constexpr float kThermistorC2 = 2.171368266e-04f;
+constexpr float kThermistorC3 = 1.119659695e-07f;
+constexpr float kThermistorR1 = 10000.0f;          // R12 pull-down
+constexpr float kThermistorOffsetF = 11.17f;        // empirical manual offset from reference project
+constexpr int kThermistorAvgSamples = 16;
+constexpr unsigned long kSensorPollIntervalMs = 5000;
+constexpr unsigned long kBatteryHistoryIntervalMs = 60000; // 1 min between battery history samples
+constexpr int kBatteryHistorySize = 20;             // 20 min of history for rate calc
 constexpr uint8_t kOledAddress = 0x3C;
 constexpr int kScreenWidth = 128;
 constexpr int kScreenHeight = 32;
@@ -92,12 +110,28 @@ String web_log_partial_line;
 bool ap_enabled = false;
 bool ap_active = false;
 DNSServer dnsServer;
+String user_wifi_ssid;
+String user_wifi_pass;
+// Sensor state
+float sensor_battery_v = NAN;
+float sensor_battery_pct = NAN;
+float sensor_temp_f = NAN;
+float sensor_battery_time_remaining_h = NAN;
+unsigned long sensor_last_poll_ms = 0;
+// Battery voltage history for discharge-rate estimation
+float battery_v_history[kBatteryHistorySize];
+unsigned long battery_v_history_ms[kBatteryHistorySize];
+int battery_v_history_count = 0;
+int battery_v_history_head = 0;
+unsigned long battery_last_history_ms = 0;
 
 constexpr const char *kPrefsNamespace = "pylon_cfg";
 constexpr const char *kPrefsKeyId = "id";
 constexpr const char *kPrefsKeyHost = "host";
 constexpr const char *kPrefsKeyDesc = "desc";
 constexpr const char *kPrefsKeyAp = "ap_en";
+constexpr const char *kPrefsKeyUserSsid = "usr_ssid";
+constexpr const char *kPrefsKeyUserPass = "usr_pass";
 
 void AppendWebLogLine(const String &line) {
   web_log_text += line;
@@ -299,6 +333,8 @@ bool SavePylonConfig() {
   prefs.putString(kPrefsKeyHost, pylon_mdns_host);
   prefs.putString(kPrefsKeyDesc, pylon_description);
   prefs.putBool(kPrefsKeyAp, ap_enabled);
+  prefs.putString(kPrefsKeyUserSsid, user_wifi_ssid);
+  prefs.putString(kPrefsKeyUserPass, user_wifi_pass);
   prefs.end();
   return true;
 }
@@ -331,6 +367,10 @@ void PrintPylonConfig() {
   Console.println(pylon_description);
   Console.print("  ap: ");
   Console.println(ap_enabled ? "true" : "false");
+  Console.print("  wifi_ssid: ");
+  Console.println(user_wifi_ssid.length() > 0 ? user_wifi_ssid : "(not set)");
+  Console.print("  wifi_pass: ");
+  Console.println(user_wifi_pass.length() > 0 ? "***" : "(not set)");
 }
 
 void LoadPylonConfig() {
@@ -347,6 +387,8 @@ void LoadPylonConfig() {
   String stored_host = NormalizeMdnsHost(prefs.getString(kPrefsKeyHost, ""));
   String stored_desc = prefs.getString(kPrefsKeyDesc, "");
   ap_enabled = prefs.getBool(kPrefsKeyAp, false);
+  user_wifi_ssid = prefs.getString(kPrefsKeyUserSsid, "");
+  user_wifi_pass = prefs.getString(kPrefsKeyUserPass, "");
   stored_desc.trim();
 
   const bool unprogrammed = stored_id.length() == 0;
@@ -398,6 +440,8 @@ void PrintCliHelp() {
   Console.println("  set desc <value>");
   Console.println("  set node <value>   (sets both id and host)");
   Console.println("  set ap true|false  (enable/disable WiFi AP mode)");
+  Console.println("  set wifi_ssid <value>  (user WiFi SSID fallback)");
+  Console.println("  set wifi_pass <value>  (user WiFi password)");
   Console.println("  clear nvs          (erase saved id/host/desc)");
 }
 
@@ -472,6 +516,19 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
       Console.print("[CFG] ap_enabled set: ");
       Console.println(ap_enabled ? "true" : "false");
     }
+  } else if (field == "wifi_ssid") {
+    user_wifi_ssid = value;
+    changed = true;
+    if (log_output) {
+      Console.print("[CFG] wifi_ssid set: ");
+      Console.println(user_wifi_ssid);
+    }
+  } else if (field == "wifi_pass") {
+    user_wifi_pass = value;
+    changed = true;
+    if (log_output) {
+      Console.println("[CFG] wifi_pass updated");
+    }
   } else {
     if (log_output) {
       Console.println("[CFG] unknown set field. use id|host|desc|node|ap");
@@ -505,7 +562,8 @@ String BuildConfigApiJson() {
   payload += "\"hostname\":\"" + JsonEscape(pylon_mdns_host + ".local") + "\",";
   payload += "\"description\":\"" + JsonEscape(pylon_description) + "\",";
   payload += "\"ap_enabled\":" + String(ap_enabled ? "true" : "false") + ",";
-  payload += "\"ap_active\":" + String(ap_active ? "true" : "false");
+  payload += "\"ap_active\":" + String(ap_active ? "true" : "false") + ",";
+  payload += "\"wifi_ssid\":\"" + JsonEscape(user_wifi_ssid) + "\"";
   payload += "}";
   return payload;
 }
@@ -596,7 +654,7 @@ String BuildRegistryPayload() {
   payload += "\"hostname\":\"" + JsonEscape(hostname) + "\",";
   payload += "\"ip\":\"" + JsonEscape(ip) + "\",";
   payload += "\"osc_port\":" + String(kOscPort) + ",";
-  payload += "\"osc_paths\":[\"/rpiboosh/BooshMain\"],";
+  payload += "\"osc_paths\":[\"" + String(kOscAddress) + "\"],";
   payload += "\"roles\":[\"boosh_main\"],";
   payload += "\"fw_version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
   payload += "\"firmware_version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
@@ -612,13 +670,23 @@ String BuildRegistryPayload() {
   payload += "\"fw_semver\":\"" + JsonEscape(String(kFirmwareSemver)) + "\",";
   payload += "\"fw_build_date\":\"" + JsonEscape(String(kFirmwareBuildDate)) + "\",";
   payload += "\"fw_build_time\":\"" + JsonEscape(String(kFirmwareBuildTime)) + "\",";
-  payload += "\"temperature\":\"" + JsonEscape(String(kTelemetryTemperatureDefault)) + "\",";
-  payload += "\"temperature_f\":\"" + JsonEscape(String(kTelemetryTemperatureDefault)) + "\",";
-  payload += "\"temperature_c\":\"" + JsonEscape(String(kTelemetryTemperatureDefault)) + "\",";
-  payload += "\"battery_voltage\":\"" + JsonEscape(String(kTelemetryBatteryVoltageDefault)) + "\",";
-  payload += "\"battery_voltage_v\":\"" + JsonEscape(String(kTelemetryBatteryVoltageDefault)) + "\",";
-  payload += "\"battery_charge\":\"" + JsonEscape(String(kTelemetryBatteryChargePercentDefault)) + "\",";
-  payload += "\"battery_charge_pct\":\"" + JsonEscape(String(kTelemetryBatteryChargePercentDefault)) + "\",";
+  {
+    char sbuf[16];
+    auto fmtOrNull = [&](float v) -> String {
+      if (!isfinite(v)) return "null";
+      snprintf(sbuf, sizeof(sbuf), "%.2f", v);
+      return String(sbuf);
+    };
+    payload += "\"temperature\":" + fmtOrNull(sensor_temp_f) + ",";
+    payload += "\"temperature_f\":" + fmtOrNull(sensor_temp_f) + ",";
+    const float tempC = isfinite(sensor_temp_f) ? (sensor_temp_f - 32.0f) * 5.0f / 9.0f : NAN;
+    payload += "\"temperature_c\":" + fmtOrNull(tempC) + ",";
+    payload += "\"battery_voltage\":" + fmtOrNull(sensor_battery_v) + ",";
+    payload += "\"battery_voltage_v\":" + fmtOrNull(sensor_battery_v) + ",";
+    payload += "\"battery_charge\":" + fmtOrNull(sensor_battery_pct) + ",";
+    payload += "\"battery_charge_pct\":" + fmtOrNull(sensor_battery_pct) + ",";
+    payload += "\"battery_time_remaining_h\":" + fmtOrNull(sensor_battery_time_remaining_h) + ",";
+  }
   payload += "\"wifi_rssi_dbm\":" + String(wifi_rssi_dbm) + ",";
   payload += "\"uptime_s\":" + String(static_cast<uint32_t>(millis() / 1000)) + ",";
   payload += "\"uptime\":\"" + JsonEscape(FormatDurationHms(static_cast<uint32_t>(millis() / 1000))) + "\",";
@@ -1001,6 +1069,41 @@ String BuildTelemetryApiJson() {
   payload += "\"ap_enabled\":" + String(ap_enabled ? "true" : "false") + ",";
   payload += "\"ap_active\":" + String(ap_active ? "true" : "false") + ",";
   payload += "\"target_ip\":\"" + JsonEscape(target_ip_string) + "\",";
+  {
+    char buf[16];
+    payload += "\"battery_voltage_v\":";
+    if (isfinite(sensor_battery_v)) {
+      snprintf(buf, sizeof(buf), "%.2f", sensor_battery_v);
+      payload += buf;
+    } else {
+      payload += "null";
+    }
+    payload += ",";
+    payload += "\"battery_charge_pct\":";
+    if (isfinite(sensor_battery_pct)) {
+      snprintf(buf, sizeof(buf), "%.1f", sensor_battery_pct);
+      payload += buf;
+    } else {
+      payload += "null";
+    }
+    payload += ",";
+    payload += "\"battery_time_remaining_h\":";
+    if (isfinite(sensor_battery_time_remaining_h)) {
+      snprintf(buf, sizeof(buf), "%.1f", sensor_battery_time_remaining_h);
+      payload += buf;
+    } else {
+      payload += "null";
+    }
+    payload += ",";
+    payload += "\"temperature_f\":";
+    if (isfinite(sensor_temp_f)) {
+      snprintf(buf, sizeof(buf), "%.1f", sensor_temp_f);
+      payload += buf;
+    } else {
+      payload += "null";
+    }
+    payload += ",";
+  }
   payload += "\"telemetry\":{";
   payload += "\"ipv4\":\"" + JsonEscape(ip) + "\",";
   payload += "\"mdns_hostname\":\"" + JsonEscape(hostname) + "\",";
@@ -1010,13 +1113,23 @@ String BuildTelemetryApiJson() {
   payload += "\"fw_semver\":\"" + JsonEscape(String(kFirmwareSemver)) + "\",";
   payload += "\"fw_build_date\":\"" + JsonEscape(String(kFirmwareBuildDate)) + "\",";
   payload += "\"fw_build_time\":\"" + JsonEscape(String(kFirmwareBuildTime)) + "\",";
-  payload += "\"temperature\":\"" + JsonEscape(String(kTelemetryTemperatureDefault)) + "\",";
-  payload += "\"temperature_f\":\"" + JsonEscape(String(kTelemetryTemperatureDefault)) + "\",";
-  payload += "\"temperature_c\":\"" + JsonEscape(String(kTelemetryTemperatureDefault)) + "\",";
-  payload += "\"battery_voltage\":\"" + JsonEscape(String(kTelemetryBatteryVoltageDefault)) + "\",";
-  payload += "\"battery_voltage_v\":\"" + JsonEscape(String(kTelemetryBatteryVoltageDefault)) + "\",";
-  payload += "\"battery_charge\":\"" + JsonEscape(String(kTelemetryBatteryChargePercentDefault)) + "\",";
-  payload += "\"battery_charge_pct\":\"" + JsonEscape(String(kTelemetryBatteryChargePercentDefault)) + "\",";
+  {
+    char sbuf[16];
+    auto fmtOrNull = [&](float v) -> String {
+      if (!isfinite(v)) return "null";
+      snprintf(sbuf, sizeof(sbuf), "%.2f", v);
+      return String(sbuf);
+    };
+    payload += "\"temperature\":" + fmtOrNull(sensor_temp_f) + ",";
+    payload += "\"temperature_f\":" + fmtOrNull(sensor_temp_f) + ",";
+    const float tempC = isfinite(sensor_temp_f) ? (sensor_temp_f - 32.0f) * 5.0f / 9.0f : NAN;
+    payload += "\"temperature_c\":" + fmtOrNull(tempC) + ",";
+    payload += "\"battery_voltage\":" + fmtOrNull(sensor_battery_v) + ",";
+    payload += "\"battery_voltage_v\":" + fmtOrNull(sensor_battery_v) + ",";
+    payload += "\"battery_charge\":" + fmtOrNull(sensor_battery_pct) + ",";
+    payload += "\"battery_charge_pct\":" + fmtOrNull(sensor_battery_pct) + ",";
+    payload += "\"battery_time_remaining_h\":" + fmtOrNull(sensor_battery_time_remaining_h) + ",";
+  }
   payload += "\"wifi_rssi_dbm\":" + String(wifi_rssi_dbm) + ",";
   payload += "\"uptime_s\":" + String(static_cast<uint32_t>(now / 1000)) + ",";
   payload += "\"uptime\":\"" + JsonEscape(FormatDurationHms(static_cast<uint32_t>(now / 1000))) + "\",";
@@ -1092,7 +1205,15 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         <label>Host <input id="cfg-host" name="host"></label>
         <label>Description <input id="cfg-description" name="description"></label>
         <label>Node Alias <input id="cfg-node" name="node" placeholder="sets id + host"></label>
-        <label style="flex-direction:row;gap:10px;align-items:center"><input type="checkbox" id="cfg-ap" style="width:auto;margin:0"> Enable WiFi AP (SSID: PYLON_<em>id</em>, IP 10.1.2.3)</label>
+        <div style="border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
+          <span style="color:var(--muted);font-size:13px">WiFi Fallback</span>
+          <label>SSID <input id="cfg-wifi-ssid" placeholder="leave blank to disable"></label>
+          <label>Password <input id="cfg-wifi-pass" type="password" placeholder=""></label>
+        </div>
+        <div style="border-top:1px solid var(--line);padding-top:10px;display:flex;align-items:center;gap:10px">
+          <input type="checkbox" id="cfg-ap" style="width:18px;height:18px;margin:0;cursor:pointer;accent-color:var(--accent)">
+          <span style="color:var(--muted);font-size:14px">Enable WiFi AP &mdash; SSID: <code>PYLON_<em>id</em></code>, IP <code>10.1.2.3</code></span>
+        </div>
         <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
           <button type="submit">Save Config</button>
           <span id="config-status"></span>
@@ -1144,6 +1265,10 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         ['Ping', `${data.telemetry.ping.last_ok ? 'OK' : 'FAIL'} / ${data.telemetry.ping.last_ms} ms`],
         ['Target IP', data.target_ip || '--'],
         ['Triggers', String(data.trigger_event_count)],
+        ['Battery V', data.battery_voltage_v != null ? data.battery_voltage_v.toFixed(2) + ' V' : 'N/A'],
+        ['Battery %', data.battery_charge_pct != null ? data.battery_charge_pct.toFixed(1) + ' %' : 'N/A'],
+        ['Batt Time Left', data.battery_time_remaining_h != null ? data.battery_time_remaining_h.toFixed(1) + ' hr' : 'N/A'],
+        ['Temperature', data.temperature_f != null ? data.temperature_f.toFixed(1) + ' °F' : 'N/A'],
         ['Uptime', data.telemetry.uptime_hms]
       ];
       document.getElementById('meta').innerHTML = rows.map(([k,v]) => `<div class="row"><strong>${k}</strong><span>${v}</span></div>`).join('');
@@ -1159,6 +1284,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       syncConfigField('cfg-id', data.pylon_id || '');
       syncConfigField('cfg-host', (data.hostname || '').replace(/\.local$/,''));
       syncConfigField('cfg-description', data.description || '');
+      syncConfigField('cfg-wifi-ssid', data.wifi_ssid || '');
       const apBox = document.getElementById('cfg-ap');
       if (apBox && document.activeElement !== apBox) apBox.checked = !!data.ap_enabled;
     }
@@ -1174,7 +1300,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     }
     const triggerButton = document.getElementById('trigger');
     const configForm = document.getElementById('config-form');
-    const configInputs = ['cfg-id', 'cfg-host', 'cfg-description', 'cfg-node']
+    const configInputs = ['cfg-id', 'cfg-host', 'cfg-description', 'cfg-node', 'cfg-wifi-ssid', 'cfg-wifi-pass']
       .map((id) => document.getElementById(id))
       .filter(Boolean);
     let holdActive = false;
@@ -1234,6 +1360,10 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         body.set('host', document.getElementById('cfg-host').value.trim());
       }
       body.set('description', document.getElementById('cfg-description').value.trim());
+      const wifiSsid = document.getElementById('cfg-wifi-ssid').value.trim();
+      if (wifiSsid) body.set('wifi_ssid', wifiSsid);
+      const wifiPass = document.getElementById('cfg-wifi-pass').value;
+      if (wifiPass) body.set('wifi_pass', wifiPass);
       try {
         const result = await fetchJson('/api/config', {
           method:'POST',
@@ -1289,9 +1419,11 @@ void HandleConfigPostApi() {
   const bool has_id = webServer.hasArg("id");
   const bool has_host = webServer.hasArg("host");
   const bool has_desc = webServer.hasArg("description") || webServer.hasArg("desc");
+  const bool has_wifi_ssid = webServer.hasArg("wifi_ssid");
+  const bool has_wifi_pass = webServer.hasArg("wifi_pass");
 
-  if (!has_node && !has_id && !has_host && !has_desc) {
-    SendApiError(400, "expected one of: node, id, host, description");
+  if (!has_node && !has_id && !has_host && !has_desc && !has_wifi_ssid && !has_wifi_pass) {
+    SendApiError(400, "expected one of: node, id, host, description, wifi_ssid, wifi_pass");
     return;
   }
 
@@ -1311,6 +1443,8 @@ void HandleConfigPostApi() {
                                    webServer.hasArg("description") ? webServer.arg("description")
                                                                    : webServer.arg("desc"));
   }
+  if (has_wifi_ssid) ok = ok && SetConfigFieldValue("wifi_ssid", webServer.arg("wifi_ssid"));
+  if (has_wifi_pass) ok = ok && SetConfigFieldValue("wifi_pass", webServer.arg("wifi_pass"));
 
   if (!ok) {
     SendApiError(400, "invalid config value");
@@ -1492,6 +1626,9 @@ void setup() {
   LoadPylonConfig();
   PrintCliHelp();
   pinMode(kDevBoardButtonPin, INPUT_PULLUP);
+  pinMode(kBatteryAdcPin, INPUT);
+  pinMode(kThermistorAdcPin, INPUT);
+  analogReadResolution(12);
 
   pinMode(kLedWhitePin, OUTPUT);
   digitalWrite(kLedWhitePin, LOW);
@@ -1560,19 +1697,32 @@ void setup() {
     }
   }
 
-  const char *targetSsid = hasLowLatency ? BOOSH_WIFI_SSID_LL : BOOSH_WIFI_SSID_MW;
-  const char *targetPass = hasLowLatency ? BOOSH_WIFI_PASS_LL : BOOSH_WIFI_PASS_MW;
-
-  Console.print("Connecting to ");
-  Console.println(targetSsid);
-  ShowStatus("Connecting to", String(targetSsid));
-  WiFi.begin(targetSsid, targetPass);
-
-  unsigned long start = millis();
-  const unsigned long timeoutMs = 20000;
-  while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs) {
-    delay(250);
-    Console.print(".");
+  // Try networks in priority order: LL → MW → user-defined
+  struct { const char *ssid; const char *pass; } networks[3] = {
+    { hasLowLatency ? BOOSH_WIFI_SSID_LL : BOOSH_WIFI_SSID_MW,
+      hasLowLatency ? BOOSH_WIFI_PASS_LL : BOOSH_WIFI_PASS_MW },
+    { hasLowLatency ? BOOSH_WIFI_SSID_MW : nullptr, hasLowLatency ? BOOSH_WIFI_PASS_MW : nullptr },
+    { user_wifi_ssid.length() > 0 ? user_wifi_ssid.c_str() : nullptr, user_wifi_pass.c_str() },
+  };
+  const unsigned long kPerNetworkTimeoutMs = 15000;
+  for (int ni = 0; ni < 3 && WiFi.status() != WL_CONNECTED; ++ni) {
+    if (networks[ni].ssid == nullptr) continue;
+    Console.print("Connecting to ");
+    Console.println(networks[ni].ssid);
+    ShowStatus("Connecting to", String(networks[ni].ssid));
+    WiFi.begin(networks[ni].ssid, networks[ni].pass);
+    unsigned long start = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start < kPerNetworkTimeoutMs) {
+      delay(250);
+      Console.print(".");
+    }
+    if (WiFi.status() != WL_CONNECTED) {
+      Console.println();
+      Console.print("Failed: ");
+      Console.println(networks[ni].ssid);
+      WiFi.disconnect(false, false);
+      delay(100);
+    }
   }
 
   if (WiFi.status() == WL_CONNECTED) {
@@ -1619,7 +1769,7 @@ void HandleOscMessage(OSCMessage &msg) {
   }
 
   if (msg.size() != 1 || !msg.isFloat(0)) {
-    Console.println("OSC /rpiboosh/BooshMain ignored (unexpected args).");
+    Console.println("OSC " + String(kOscAddress) + " ignored (unexpected args).");
     return;
   }
 
@@ -1717,6 +1867,91 @@ void PollOsc() {
   HandleOscMessage(msg);
 }
 
+// ---- Sensor readings --------------------------------------------------------
+
+float ReadBatteryVoltage() {
+  // Average 16 samples to reduce ADC noise
+  int32_t raw = 0;
+  for (int i = 0; i < 16; ++i) {
+    raw += analogRead(kBatteryAdcPin);
+    delayMicroseconds(100);
+  }
+  raw >>= 4;  // divide by 16
+  if (raw <= 0) return NAN;
+  const float v_adc = raw * kBatteryAdcRef / kBatteryAdcFullScale;
+  return v_adc * kBatteryDividerScale;
+}
+
+float ReadThermistorF() {
+  // Average 16 samples (same pattern as reference project)
+  int32_t raw = 0;
+  for (int i = 0; i < kThermistorAvgSamples; ++i) {
+    raw += analogRead(kThermistorAdcPin);
+    delayMicroseconds(100);
+  }
+  raw >>= 4;
+  if (raw <= 0 || raw >= 4095) return NAN;
+  // Steinhart-Hart: thermistor is upper element, R1 is pull-down
+  // Vadc = Vcc * R1 / (Rth + R1)  → Rth = R1*(4095/raw - 1)
+  const float r_th = kThermistorR1 * (kBatteryAdcFullScale / (float)raw - 1.0f);
+  if (r_th <= 0.0f) return NAN;
+  const float logR = logf(r_th);
+  if (!isfinite(logR)) return NAN;
+  float t_k = 1.0f / (kThermistorC1 + kThermistorC2 * logR + kThermistorC3 * logR * logR * logR);
+  float t_f = (t_k - 273.15f) * 9.0f / 5.0f + 32.0f + kThermistorOffsetF;
+  return t_f;
+}
+
+void PollSensors() {
+  const unsigned long now = millis();
+  if (sensor_last_poll_ms != 0 && now - sensor_last_poll_ms < kSensorPollIntervalMs) return;
+  sensor_last_poll_ms = now;
+
+  // Battery voltage
+  const float v = ReadBatteryVoltage();
+  if (isfinite(v)) {
+    sensor_battery_v = v;
+    const float pct = (v - kBatteryVoltEmpty) / (kBatteryVoltFull - kBatteryVoltEmpty) * 100.0f;
+    sensor_battery_pct = constrain(pct, 0.0f, 100.0f);
+
+    // Store history point every kBatteryHistoryIntervalMs for discharge-rate estimation
+    if (battery_last_history_ms == 0 || now - battery_last_history_ms >= kBatteryHistoryIntervalMs) {
+      battery_last_history_ms = now;
+      battery_v_history[battery_v_history_head] = v;
+      battery_v_history_ms[battery_v_history_head] = now;
+      battery_v_history_head = (battery_v_history_head + 1) % kBatteryHistorySize;
+      if (battery_v_history_count < kBatteryHistorySize) battery_v_history_count++;
+
+      // Estimate time remaining: need at least 5 history points (~5 minutes)
+      if (battery_v_history_count >= 5) {
+        // Oldest point in circular buffer
+        const int oldest_idx = (battery_v_history_head - battery_v_history_count + kBatteryHistorySize) % kBatteryHistorySize;
+        const int newest_idx = (battery_v_history_head - 1 + kBatteryHistorySize) % kBatteryHistorySize;
+        const float v_old = battery_v_history[oldest_idx];
+        const float v_new = battery_v_history[newest_idx];
+        const unsigned long t_span_ms = battery_v_history_ms[newest_idx] - battery_v_history_ms[oldest_idx];
+        if (t_span_ms > 0) {
+          const float v_per_ms = (v_new - v_old) / (float)t_span_ms;  // negative when discharging
+          if (v_per_ms < -1e-7f) {  // only estimate if measurably discharging
+            const float remaining_v = v - kBatteryVoltEmpty;
+            sensor_battery_time_remaining_h = (remaining_v / (-v_per_ms)) / 3600000.0f;
+          } else {
+            sensor_battery_time_remaining_h = NAN;  // charging or stable
+          }
+        }
+      }
+    }
+  }
+
+  // Thermistor temperature
+  const float tf = ReadThermistorF();
+  if (isfinite(tf)) {
+    sensor_temp_f = tf;
+  }
+}
+
+// ---- Blink LEDs -------------------------------------------------------------
+
 void PollBlinkLeds() {
   // White: simple 1Hz square wave toggle
   static unsigned long lastWhiteMs = 0;
@@ -1752,6 +1987,7 @@ void loop() {
   static uint8_t displayPage = 0;
 
   PollBlinkLeds();
+  PollSensors();
   PollSerialCli();
   PollDevBoardButton();
   webServer.handleClient();

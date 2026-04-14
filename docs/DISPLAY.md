@@ -1,75 +1,79 @@
 # Display
 
-The WEMOS/LOLIN S2 Pico includes a built-in SSD1306 OLED.
-
 ## Hardware
+
 - Controller: SSD1306
-- Resolution: 128x32
+- Resolution: 128×32
 - I2C address: `0x3C`
-- I2C pins: SDA `GPIO8`, SCL `GPIO9`
-- Reset pin: `GPIO18`
+- SDA: GPIO8, SCL: GPIO9, Reset: GPIO18
 
 ## Initialization
-In `src/main.cpp`, the display is initialized with:
-- `Wire.begin(8, 9)`
-- `display.begin(SSD1306_SWITCHCAPVCC, 0x3C)`
 
-## Output
-The display shows:
-- Boot status
-- Wi-Fi scan/connection
-- IP address on success
-- Ping status for `RPIBOOSH` (OK/FAIL/TIMEOUT), last/min/max/avg, and time since last successful ping
-- Failsafe notices when BooshMain times out
-- Node trigger count
-- Firmware version / build timestamp
+```cpp
+Wire.begin(8, 9);
+display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+```
+
+Reset pin is set to GPIO18 before `begin()`.
+
+## Boot Messages
+
+During setup the OLED shows progress messages: OLED ready, Wi-Fi scan, connecting, IP address on success, or failure.
 
 ## Runtime Pages
-The OLED cycles pages every ~3 seconds (see `kDisplayCycleMs` in `src/main.cpp`):
 
-Ping page:
-- Host name
+Pages cycle every ~3 seconds (`kDisplayCycleMs`). The pylon rotates through 5 pages:
+
+### Page 1 — Ping
+
+```
+RPIBOOSH
+OK  last:7ms
+min:2 max:17
+since: 00:05:23
+```
+
 - Status: `OK`, `FAIL`, or `TIMEOUT` (no successful ping within `kPingTimeoutMs`)
-- `last` latency, `min/max` latency, and `since` in `HH:MM:SS`
+- Shows last/min/max RTT and elapsed time since last successful ping
 
-Wi-Fi debug page A:
-- `SSID`
-- `RSSI` (signal strength)
-- `IP` (DHCP success indicator)
-- `UP` in `HH:MM:SS`
+### Page 2 — Wi-Fi A
 
-Wi-Fi debug page B:
-- `RSN` (last disconnect reason code + short label)
-- `SSID`
-- `RSSI`
-- `IP`
+```
+SSID: MyNetwork
+RSSI: -58 dBm
+IP: 192.168.1.70
+UP: 02:32:03
+```
 
-Node page:
-- Node ID
-- Trigger count
-- Firmware semantic version
+### Page 3 — Wi-Fi B
 
-Firmware page:
-- Semantic version
-- Build date
-- Build time
+```
+RSN: 0 (none)
+SSID: MyNetwork
+RSSI: -58
+IP: 192.168.1.70
+```
 
-## Recent Changes
-- Ping page now indicates `TIMEOUT` when no successful ping has occurred within `kPingTimeoutMs`.
-- Wi-Fi pages include `UP` and ping `since` in `HH:MM:SS`.
-- Node page includes total trigger count.
-- Firmware page shows `0.0.1 <DATE> <TIME>` build identity.
+`RSN` shows the last Wi-Fi disconnect reason code and a short label.
 
-## BooshMain Visuals
-Display inversion is a prototype proxy for triggering the boosher solenoid.
+### Page 4 — Node
 
-When OSC `/rpiboosh/BooshMain` is ON (`[1]`), the OLED is inverted.
-- Inverted display = solenoid open / fire ON
+```
+PYLON5
+Triggers: 12
+v0.0.1
+```
 
-When OFF (`[0]`), the OLED returns to normal.
-- Normal display = solenoid closed / fire OFF
+### Page 5 — Firmware
 
-The same inversion behavior is used when the solenoid is driven from:
-- OSC
-- The dev-board `0`/BOOT button
-- The web UI / REST API
+```
+v0.0.1
+Apr 13 2026
+12:00:00
+```
+
+## Boosh Indicator
+
+When boosh is active (solenoid ON), the entire display inverts (white-on-black → black-on-white). This is the primary visual confirmation of a fire trigger.
+
+Trigger sources that cause inversion: OSC, HTTP API, web UI, dev-board button.
