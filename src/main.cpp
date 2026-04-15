@@ -118,6 +118,15 @@ uint32_t trigger_event_count = 0;
 uint32_t total_boosh_open_ms = 0;       // cumulative valve-open time across all events
 unsigned long boosh_open_since_ms = 0;  // millis() when current boosh event started
 unsigned long identify_until_ms = 0;    // non-zero while identify mode is active
+
+// ---- Sequence state ---------------------------------------------------------
+enum SeqType { SEQ_NONE, SEQ_PULSE_ONCE, SEQ_PULSE_5X, SEQ_STEAM };
+SeqType active_seq = SEQ_NONE;
+unsigned long seq_step_start_ms = 0;  // start of current on/off phase
+unsigned long seq_start_ms = 0;       // start of whole sequence
+int seq_pulse_idx = 0;                // pulses fired so far
+bool seq_phase_on = false;            // currently in on-phase
+bool seq_abort_flag = false;          // abort requested
 volatile bool current_ping_last_ok = false;
 volatile unsigned long last_ping_success_ms = 0;
 volatile bool ping_restored = false;  // set by ping task, cleared by main loop for registry re-announce
@@ -1236,10 +1245,16 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       <h1>Pylons Control</h1>
       <p><span id="solenoid" class="pill">Solenoid idle</span></p>
       <p id="fw-version"></p>
-      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
         <button id="trigger">Press and Hold Solenoid</button>
         <button id="identify-btn" style="background:linear-gradient(180deg,#b97af0 0,#7c3abf 100%);color:#fff">Blink LEDs (identify)</button>
         <span id="identify-status" style="color:var(--muted);font-size:14px"></span>
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+        <button id="seq-pulse-once-btn">Pulse once (50 ms)</button>
+        <button id="seq-pulse-5x-btn">Pulse 5&times; (50 ms)</button>
+        <button id="seq-steam-btn" style="background:linear-gradient(180deg,#e8832a 0,#b85010 100%);color:#fff">&#x1F682; Steam engine (hold)</button>
+        <span id="seq-status" style="color:var(--muted);font-size:14px"></span>
       </div>
     </div>
     <div class="panel" style="margin-top:16px">
@@ -1463,6 +1478,63 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       }
     });
 
+    // ---- Sequence buttons ---------------------------------------------------
+    const seqStatus = document.getElementById('seq-status');
+
+    async function runSeq(endpoint) {
+      try {
+        await fetchJson(endpoint, {method:'POST'});
+      } catch(e) {
+        seqStatus.textContent = 'failed: ' + esc(e.message);
+      }
+    }
+
+    document.getElementById('seq-pulse-once-btn').addEventListener('click', async () => {
+      seqStatus.textContent = '';
+      await runSeq('/api/sequence/pulse_once');
+    });
+
+    document.getElementById('seq-pulse-5x-btn').addEventListener('click', async () => {
+      seqStatus.textContent = '';
+      await runSeq('/api/sequence/pulse_5x');
+    });
+
+    // Steam engine: hold to run, release to abort
+    const steamBtn = document.getElementById('seq-steam-btn');
+    let steamActive = false;
+    let steamTimer = null;
+
+    async function startSteam() {
+      if (steamActive) return;
+      steamActive = true;
+      steamBtn.classList.add('held');
+      seqStatus.textContent = 'Running\u2026';
+      await runSeq('/api/sequence/steam');
+      // Auto-clear status after 5.5 s (sequence is 5 s)
+      steamTimer = setTimeout(() => {
+        seqStatus.textContent = '';
+        steamBtn.classList.remove('held');
+        steamActive = false;
+      }, 5500);
+    }
+
+    async function stopSteam() {
+      if (!steamActive) return;
+      steamActive = false;
+      if (steamTimer) { clearTimeout(steamTimer); steamTimer = null; }
+      steamBtn.classList.remove('held');
+      seqStatus.textContent = '';
+      await runSeq('/api/sequence/abort');
+    }
+
+    steamBtn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      steamBtn.setPointerCapture(e.pointerId);
+      void startSteam();
+    });
+    steamBtn.addEventListener('pointerup', () => void stopSteam());
+    steamBtn.addEventListener('pointercancel', () => void stopSteam());
+
     // ---- OTA upload ---------------------------------------------------------
     const otaFile   = document.getElementById('ota-file');
     const otaBtn    = document.getElementById('ota-btn');
@@ -1655,6 +1727,8 @@ void HandleConfigNodeApi() {
 
 void SetupWebServer();  // forward declaration
 void PingTask(void *);   // forward declaration
+void StartSequence(SeqType type);  // forward declaration
+void AbortSequence();              // forward declaration
 
 void HandleCaptivePortalRedirect() {
   webServer.sendHeader("Location", "http://10.1.2.3/");
@@ -1709,6 +1783,26 @@ void StopApMode() {
   Console.println("[AP] stopped");
 }
 
+void HandleSeqPulseOnceApi() {
+  StartSequence(SEQ_PULSE_ONCE);
+  webServer.send(200, "application/json", "{\"ok\":true,\"seq\":\"pulse_once\"}");
+}
+
+void HandleSeqPulse5xApi() {
+  StartSequence(SEQ_PULSE_5X);
+  webServer.send(200, "application/json", "{\"ok\":true,\"seq\":\"pulse_5x\"}");
+}
+
+void HandleSeqSteamApi() {
+  StartSequence(SEQ_STEAM);
+  webServer.send(200, "application/json", "{\"ok\":true,\"seq\":\"steam\"}");
+}
+
+void HandleSeqAbortApi() {
+  AbortSequence();
+  webServer.send(200, "application/json", "{\"ok\":true}");
+}
+
 void HandleIdentifyApi() {
   identify_until_ms = millis() + 10000;
   Console.println("[IDENTIFY] 10s blink started");
@@ -1722,6 +1816,7 @@ void HandleSolenoidOnApi() {
 }
 
 void HandleSolenoidOffApi() {
+  AbortSequence();
   SetBooshActive(false, "http");
   webServer.send(200, "application/json",
                  "{\"ok\":true,\"solenoid_active\":false,\"triggered_via\":\"http\"}");
@@ -1782,6 +1877,10 @@ void SetupWebServer() {
   webServer.on("/api/solenoid/trigger", HTTP_POST, HandleSolenoidOnApi);
   webServer.on("/api/ota", HTTP_POST, HandleOtaApi, HandleOtaUploadBody);
   webServer.on("/api/identify", HTTP_POST, HandleIdentifyApi);
+  webServer.on("/api/sequence/pulse_once", HTTP_POST, HandleSeqPulseOnceApi);
+  webServer.on("/api/sequence/pulse_5x", HTTP_POST, HandleSeqPulse5xApi);
+  webServer.on("/api/sequence/steam", HTTP_POST, HandleSeqSteamApi);
+  webServer.on("/api/sequence/abort", HTTP_POST, HandleSeqAbortApi);
   webServer.begin();
   web_server_started = true;
   Console.println("HTTP server listening on port 80");
@@ -2146,6 +2245,132 @@ void PollSensors() {
   }
 }
 
+// ---- Sequence engine --------------------------------------------------------
+// Drives timed solenoid pulse sequences without blocking the main loop.
+// Counts one trigger event per sequence start; individual sub-pulses don't
+// increment trigger_event_count so the counter stays meaningful.
+
+void SeqSetSolenoid(bool active) {
+  if (active && !display_inverted) {
+    boosh_open_since_ms = millis();
+  } else if (!active && display_inverted) {
+    if (boosh_open_since_ms > 0) {
+      total_boosh_open_ms += (uint32_t)(millis() - boosh_open_since_ms);
+      boosh_open_since_ms = 0;
+    }
+  }
+  boosh_failsafe_armed = false;
+  SetDisplayInverted(active);
+}
+
+void StartSequence(SeqType type) {
+  if (display_inverted) SeqSetSolenoid(false);
+  active_seq = type;
+  seq_step_start_ms = millis();
+  seq_start_ms = millis();
+  seq_pulse_idx = 0;
+  seq_phase_on = false;
+  seq_abort_flag = false;
+  trigger_event_count += 1;
+  Console.printf("[SEQ] start type=%d\n", (int)type);
+}
+
+void AbortSequence() {
+  if (active_seq == SEQ_NONE) return;
+  seq_abort_flag = true;
+}
+
+void PollSequence() {
+  if (active_seq == SEQ_NONE) return;
+
+  const unsigned long now = millis();
+  const unsigned long elapsed = now - seq_start_ms;
+
+  if (seq_abort_flag) {
+    SeqSetSolenoid(false);
+    active_seq = SEQ_NONE;
+    Console.println("[SEQ] aborted");
+    return;
+  }
+
+  // --- PULSE_ONCE: single 50 ms pulse ---
+  if (active_seq == SEQ_PULSE_ONCE) {
+    if (!seq_phase_on) {
+      SeqSetSolenoid(true);
+      seq_phase_on = true;
+      seq_step_start_ms = now;
+    } else if (now - seq_step_start_ms >= 50) {
+      SeqSetSolenoid(false);
+      active_seq = SEQ_NONE;
+    }
+    return;
+  }
+
+  // --- PULSE_5X: 5 × (50 ms on / 50 ms off) ---
+  if (active_seq == SEQ_PULSE_5X) {
+    if (seq_pulse_idx >= 5) {
+      SeqSetSolenoid(false);
+      active_seq = SEQ_NONE;
+      return;
+    }
+    if (!seq_phase_on) {
+      // off phase (or initial start): wait 50 ms between pulses (skip wait on first)
+      if (seq_pulse_idx == 0 || now - seq_step_start_ms >= 50) {
+        SeqSetSolenoid(true);
+        seq_phase_on = true;
+        seq_step_start_ms = now;
+      }
+    } else {
+      if (now - seq_step_start_ms >= 50) {
+        SeqSetSolenoid(false);
+        seq_phase_on = false;
+        seq_pulse_idx++;
+        seq_step_start_ms = now;
+      }
+    }
+    return;
+  }
+
+  // --- STEAM: exponential ramp 1→10 Hz over 4 s, then 1 s full open ---
+  if (active_seq == SEQ_STEAM) {
+    if (elapsed >= 5000) {
+      SeqSetSolenoid(false);
+      active_seq = SEQ_NONE;
+      Console.println("[SEQ] steam done");
+      return;
+    }
+    if (elapsed >= 4000) {
+      // Full-open phase
+      if (!display_inverted) {
+        SeqSetSolenoid(true);
+        Console.println("[SEQ] steam full open");
+      }
+      return;
+    }
+    // Ramp phase: f(t) = 10^(t/4), 1 Hz → 10 Hz
+    const float t_sec = elapsed / 1000.0f;
+    const float freq_hz = powf(10.0f, t_sec / 4.0f);
+    const uint32_t period_ms = (uint32_t)(1000.0f / freq_hz);
+    const uint32_t off_ms = period_ms > 50 ? period_ms - 50 : 0;
+
+    if (seq_phase_on) {
+      if (now - seq_step_start_ms >= 50) {
+        SeqSetSolenoid(false);
+        seq_phase_on = false;
+        seq_step_start_ms = now;
+      }
+    } else {
+      if (seq_pulse_idx == 0 || now - seq_step_start_ms >= off_ms) {
+        SeqSetSolenoid(true);
+        seq_phase_on = true;
+        seq_step_start_ms = now;
+        seq_pulse_idx++;
+      }
+    }
+    return;
+  }
+}
+
 // ---- Blink LEDs -------------------------------------------------------------
 
 void PollBlinkLeds() {
@@ -2272,6 +2497,7 @@ void loop() {
   static uint8_t displayPage = 0;
 
   PollBlinkLeds();
+  PollSequence();
   PollSensors();
   PollSerialCli();
   PollDevBoardButton();
