@@ -115,6 +115,9 @@ volatile uint32_t telemetry_ping_max_ms = 0;
 volatile uint32_t telemetry_ping_avg_ms = 0;
 volatile uint32_t telemetry_ping_count = 0;
 uint32_t trigger_event_count = 0;
+uint32_t total_boosh_open_ms = 0;       // cumulative valve-open time across all events
+unsigned long boosh_open_since_ms = 0;  // millis() when current boosh event started
+unsigned long identify_until_ms = 0;    // non-zero while identify mode is active
 volatile bool current_ping_last_ok = false;
 volatile unsigned long last_ping_success_ms = 0;
 volatile bool ping_restored = false;  // set by ping task, cleared by main loop for registry re-announce
@@ -1013,6 +1016,7 @@ void SetBooshActive(bool active, const char *source) {
   if (active) {
     if (!display_inverted) {
       trigger_event_count += 1;
+      boosh_open_since_ms = millis();
       Console.print("[TRIG] ");
       Console.print(source);
       Console.print(" -> event #");
@@ -1025,6 +1029,10 @@ void SetBooshActive(bool active, const char *source) {
   }
 
   if (display_inverted) {
+    if (boosh_open_since_ms > 0) {
+      total_boosh_open_ms += (uint32_t)(millis() - boosh_open_since_ms);
+      boosh_open_since_ms = 0;
+    }
     Console.print("[TRIG] ");
     Console.print(source);
     Console.println(" -> OFF");
@@ -1097,6 +1105,7 @@ String BuildTelemetryApiJson() {
   payload += "\"last_reset_reason\":\"" + JsonEscape(String(ResetReasonString(esp_reset_reason()))) + "\",";
   payload += "\"solenoid_active\":" + String(display_inverted ? "true" : "false") + ",";
   payload += "\"trigger_event_count\":" + String(trigger_event_count) + ",";
+  payload += "\"total_boosh_open_s\":" + String(total_boosh_open_ms / 1000.0f, 1) + ",";
   payload += "\"ap_enabled\":" + String(ap_enabled ? "true" : "false") + ",";
   payload += "\"ap_active\":" + String(ap_active ? "true" : "false") + ",";
   payload += "\"target_ip\":\"" + JsonEscape(target_ip_string) + "\",";
@@ -1227,7 +1236,11 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       <h1>Pylons Control</h1>
       <p><span id="solenoid" class="pill">Solenoid idle</span></p>
       <p id="fw-version"></p>
-      <button id="trigger">Press and Hold Solenoid</button>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+        <button id="trigger">Press and Hold Solenoid</button>
+        <button id="identify-btn" style="background:linear-gradient(180deg,#b97af0 0,#7c3abf 100%);color:#fff">Blink LEDs (identify)</button>
+        <span id="identify-status" style="color:var(--muted);font-size:14px"></span>
+      </div>
     </div>
     <div class="panel" style="margin-top:16px">
       <h2>Node Config</h2>
@@ -1313,6 +1326,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         ['Ping', `${data.telemetry.ping.last_ok ? 'OK' : 'FAIL'} / ${data.telemetry.ping.last_ms} ms`],
         ['Target IP', data.target_ip || '--'],
         ['Triggers', String(data.trigger_event_count)],
+        ['Valve open total', data.total_boosh_open_s != null ? data.total_boosh_open_s.toFixed(1) + ' s' : 'N/A'],
         ['Battery V', data.battery_voltage_v != null ? data.battery_voltage_v.toFixed(2) + ' V' : 'N/A'],
         ['Battery %', data.battery_charge_pct != null ? data.battery_charge_pct.toFixed(1) + ' %' : 'N/A'],
         ['Batt Time Left', data.battery_time_remaining_h != null ? data.battery_time_remaining_h.toFixed(1) + ' hr' : 'N/A'],
@@ -1430,6 +1444,25 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         status.innerHTML = `Save failed: ${esc(error.message)}`;
       }
     });
+    // ---- Identify -----------------------------------------------------------
+    const identifyBtn    = document.getElementById('identify-btn');
+    const identifyStatus = document.getElementById('identify-status');
+    identifyBtn.addEventListener('click', async () => {
+      identifyBtn.disabled = true;
+      identifyStatus.textContent = 'Blinking\u2026';
+      try {
+        await fetchJson('/api/identify', {method:'POST'});
+        identifyStatus.textContent = '10 s';
+        setTimeout(() => {
+          identifyStatus.textContent = '';
+          identifyBtn.disabled = false;
+        }, 10000);
+      } catch(e) {
+        identifyStatus.textContent = 'failed';
+        identifyBtn.disabled = false;
+      }
+    });
+
     // ---- OTA upload ---------------------------------------------------------
     const otaFile   = document.getElementById('ota-file');
     const otaBtn    = document.getElementById('ota-btn');
@@ -1676,6 +1709,12 @@ void StopApMode() {
   Console.println("[AP] stopped");
 }
 
+void HandleIdentifyApi() {
+  identify_until_ms = millis() + 10000;
+  Console.println("[IDENTIFY] 10s blink started");
+  webServer.send(200, "application/json", "{\"ok\":true,\"duration_s\":10}");
+}
+
 void HandleSolenoidOnApi() {
   SetBooshActive(true, "http");
   webServer.send(200, "application/json",
@@ -1742,6 +1781,7 @@ void SetupWebServer() {
   webServer.on("/api/solenoid/off", HTTP_POST, HandleSolenoidOffApi);
   webServer.on("/api/solenoid/trigger", HTTP_POST, HandleSolenoidOnApi);
   webServer.on("/api/ota", HTTP_POST, HandleOtaApi, HandleOtaUploadBody);
+  webServer.on("/api/identify", HTTP_POST, HandleIdentifyApi);
   webServer.begin();
   web_server_started = true;
   Console.println("HTTP server listening on port 80");
@@ -1786,7 +1826,7 @@ void setup() {
   // Green/Blue/Yellow: 5kHz PWM carrier, duty updated in loop() for sine wave
   ledcSetup(0, 5000, 8);
   ledcAttachPin(kLedGreenPin, 0);
-  ledcWrite(0, 0);
+  ledcWrite(0, 255);  // solid on at boot; PollBlinkLeds() transitions to sine wave
   ledcSetup(1, 5000, 8);
   ledcAttachPin(kLedBluePin, 1);
   ledcWrite(1, 0);
@@ -2119,12 +2159,22 @@ void PollBlinkLeds() {
     digitalWrite(kLedWhitePin, whiteState);
   }
 
-  // Green/Blue/Yellow: sine wave brightness 0-33%, 5kHz carrier via LEDC
+  // Green/Blue/Yellow: sine wave brightness, 5kHz carrier via LEDC
   const float t = now / 1000.0f;
-  constexpr float kMaxDuty = 0.66f * 255.0f;
-  ledcWrite(0, (uint8_t)(((1.0f + sinf(2.0f * M_PI * 0.4f * t)) / 2.0f) * kMaxDuty));  // green 0.4Hz
-  ledcWrite(1, (uint8_t)(((1.0f + sinf(2.0f * M_PI * 0.8f * t)) / 2.0f) * kMaxDuty));  // blue 0.8Hz
-  ledcWrite(2, (uint8_t)(((1.0f + sinf(2.0f * M_PI * 1.2f * t)) / 2.0f) * kMaxDuty));  // yellow 1.2Hz
+  if (identify_until_ms > 0 && now < identify_until_ms) {
+    // Identify mode: all three LEDs at 2 Hz, 120° phase offset, full brightness
+    constexpr float kIdDuty = 255.0f;
+    constexpr float kTwoPi = 2.0f * M_PI;
+    ledcWrite(0, (uint8_t)(((1.0f + sinf(kTwoPi * 2.0f * t + 0.0f * kTwoPi / 3.0f)) / 2.0f) * kIdDuty));
+    ledcWrite(1, (uint8_t)(((1.0f + sinf(kTwoPi * 2.0f * t + 1.0f * kTwoPi / 3.0f)) / 2.0f) * kIdDuty));
+    ledcWrite(2, (uint8_t)(((1.0f + sinf(kTwoPi * 2.0f * t + 2.0f * kTwoPi / 3.0f)) / 2.0f) * kIdDuty));
+  } else {
+    if (identify_until_ms > 0) identify_until_ms = 0;  // clear expired flag
+    constexpr float kMaxDuty = 0.66f * 255.0f;
+    ledcWrite(0, (uint8_t)(((1.0f + sinf(2.0f * M_PI * 0.4f * t)) / 2.0f) * kMaxDuty));  // green 0.4Hz
+    ledcWrite(1, (uint8_t)(((1.0f + sinf(2.0f * M_PI * 0.8f * t)) / 2.0f) * kMaxDuty));  // blue 0.8Hz
+    ledcWrite(2, (uint8_t)(((1.0f + sinf(2.0f * M_PI * 1.2f * t)) / 2.0f) * kMaxDuty));  // yellow 1.2Hz
+  }
 }
 
 // ---- Ping task (Core 0) -----------------------------------------------------
