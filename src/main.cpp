@@ -92,18 +92,19 @@ String pylon_id;
 String pylon_mdns_host;
 String pylon_description;
 String serial_cli_line;
-bool telemetry_ping_last_ok = false;
-bool telemetry_ping_has_data = false;
-uint32_t telemetry_ping_sent = 0;
-uint32_t telemetry_ping_lost = 0;
-uint32_t telemetry_ping_last_ms = 0;
-uint32_t telemetry_ping_min_ms = 0;
-uint32_t telemetry_ping_max_ms = 0;
-uint32_t telemetry_ping_avg_ms = 0;
-uint32_t telemetry_ping_count = 0;
+volatile bool telemetry_ping_last_ok = false;
+volatile bool telemetry_ping_has_data = false;
+volatile uint32_t telemetry_ping_sent = 0;
+volatile uint32_t telemetry_ping_lost = 0;
+volatile uint32_t telemetry_ping_last_ms = 0;
+volatile uint32_t telemetry_ping_min_ms = 0;
+volatile uint32_t telemetry_ping_max_ms = 0;
+volatile uint32_t telemetry_ping_avg_ms = 0;
+volatile uint32_t telemetry_ping_count = 0;
 uint32_t trigger_event_count = 0;
-bool current_ping_last_ok = false;
-unsigned long last_ping_success_ms = 0;
+volatile bool current_ping_last_ok = false;
+volatile unsigned long last_ping_success_ms = 0;
+volatile bool ping_restored = false;  // set by ping task, cleared by main loop for registry re-announce
 String target_ip_string = "";
 String web_log_text;
 String web_log_partial_line;
@@ -1508,6 +1509,7 @@ void HandleConfigNodeApi() {
 }
 
 void SetupWebServer();  // forward declaration
+void PingTask(void *);   // forward declaration
 
 void HandleCaptivePortalRedirect() {
   webServer.sendHeader("Location", "http://10.1.2.3/");
@@ -1761,6 +1763,10 @@ void setup() {
   if (ap_enabled) {
     SetupApMode();
   }
+
+  // Ping and hostname resolution run in a background task so the main loop
+  // never blocks on network I/O.
+  xTaskCreatePinnedToCore(PingTask, "ping", 4096, nullptr, 1, nullptr, 0);
 }
 
 void HandleOscMessage(OSCMessage &msg) {
@@ -1971,18 +1977,97 @@ void PollBlinkLeds() {
   ledcWrite(2, (uint8_t)(((1.0f + sinf(2.0f * M_PI * 1.2f * t)) / 2.0f) * kMaxDuty));  // yellow 1.2Hz
 }
 
-void loop() {
+// ---- Ping task (Core 0) -----------------------------------------------------
+// Runs hostname resolution and ICMP ping in a background FreeRTOS task so the
+// main loop (which handles OSC) never blocks waiting for network replies.
+
+void PingTask(void *) {
   static const char *kTargetHost = kPingTargetHost;
   static const char *kTargetHostMdns = "RPIBOOSH.local";
+  IPAddress targetIp;
+  bool hasIp = false;
+  unsigned long lastResolveMs = 0;
+  unsigned long lastPingMs = 0;
+  bool pingWasDown = false;
+  PingStats stats;
+
+  for (;;) {
+    if (WiFi.status() != WL_CONNECTED) {
+      hasIp = false;
+      pingWasDown = false;
+      stats = PingStats{};
+      vTaskDelay(pdMS_TO_TICKS(500));
+      continue;
+    }
+
+    const unsigned long now = millis();
+
+    if (!hasIp && now - lastResolveMs > 10000) {
+      lastResolveMs = now;
+      if (WiFi.hostByName(kTargetHost, targetIp) || WiFi.hostByName(kTargetHostMdns, targetIp)) {
+        hasIp = true;
+        target_ip_string = targetIp.toString();
+        Console.print("[Ping] Resolved ");
+        Console.print(kTargetHost);
+        Console.print(" -> ");
+        Console.println(target_ip_string);
+      } else {
+        Console.println("[Ping] Resolve failed, retrying in 10s");
+        vTaskDelay(pdMS_TO_TICKS(500));
+        continue;
+      }
+    }
+
+    if (!hasIp) {
+      vTaskDelay(pdMS_TO_TICKS(250));
+      continue;
+    }
+
+    if (now - lastPingMs >= 1000) {
+      lastPingMs = now;
+      telemetry_ping_sent += 1;
+      const bool ok = Ping.ping(targetIp, 1);
+      telemetry_ping_last_ok = ok;
+      current_ping_last_ok = ok;
+      if (ok) {
+        const uint32_t rtt = static_cast<uint32_t>(Ping.averageTime());
+        stats.last_ms = rtt;
+        stats.count += 1;
+        stats.sum_ms += rtt;
+        if (rtt < stats.min_ms) stats.min_ms = rtt;
+        if (rtt > stats.max_ms) stats.max_ms = rtt;
+        last_ping_success_ms = millis();
+        Console.print("[Ping] ");
+        Console.print(kTargetHost);
+        Console.print(" ");
+        Console.print(rtt);
+        Console.println("ms");
+        if (pingWasDown) {
+          pingWasDown = false;
+          ping_restored = true;  // main loop will re-announce to registry
+          Console.println("[Ping] restored");
+        }
+      } else {
+        telemetry_ping_lost += 1;
+        pingWasDown = true;
+        Console.println("[Ping] failed");
+      }
+      telemetry_ping_has_data = stats.has_data();
+      telemetry_ping_last_ms = stats.last_ms;
+      telemetry_ping_count = stats.count;
+      telemetry_ping_avg_ms = stats.avg_ms();
+      telemetry_ping_min_ms = telemetry_ping_has_data ? stats.min_ms : 0;
+      telemetry_ping_max_ms = telemetry_ping_has_data ? stats.max_ms : 0;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(10));  // yield; ping timing is driven by lastPingMs
+  }
+}
+
+// ---- Main loop --------------------------------------------------------------
+
+void loop() {
   static bool wasConnected = false;
-  static bool pingWasDown = false;
-  static IPAddress targetIp;
-  static bool hasIp = false;
-  static unsigned long lastResolveMs = 0;
-  static PingStats stats;
-  static bool lastOk = false;
-  static unsigned long lastPingMs = 0;
-  static unsigned long lastPingSuccessMs = 0;
   static unsigned long lastDisplayMs = 0;
   static uint8_t displayPage = 0;
 
@@ -2003,8 +2088,7 @@ void loop() {
   if (WiFi.status() != WL_CONNECTED) {
     if (wasConnected) {
       wasConnected = false;
-      pingWasDown = false;
-      hasIp = false;
+      ping_restored = false;
       target_ip_string = "";
       registry_announced = false;
       registry_next_attempt_ms = 0;
@@ -2032,6 +2116,7 @@ void loop() {
     Console.println("WiFi connected: scheduling registry announce.");
   }
   HandleRegistry(now);
+  PollOsc();  // drain any packets that arrived during registry HTTP
   if (!wifi_has_ip && wifi_connected_since_ms == 0) {
     wifi_connected_since_ms = now;
   }
@@ -2042,69 +2127,14 @@ void loop() {
     ShowStatus("Failsafe timeout", "BooshMain OFF");
     boosh_failsafe_note_until_ms = now + kBooshFailsafeNoteMs;
   }
-  if (!hasIp && now - lastResolveMs > 10000) {
-    lastResolveMs = now;
-    Console.println("Resolving RPIBOOSH...");
-    if (WiFi.hostByName(kTargetHost, targetIp) || WiFi.hostByName(kTargetHostMdns, targetIp)) {
-      hasIp = true;
-      target_ip_string = targetIp.toString();
-      Console.print("Resolved to ");
-      Console.println(targetIp);
-    } else {
-      Console.println("Resolve failed.");
-      ShowStatus("Resolve failed", "RPIBOOSH");
-      delay(1000);
-      return;
-    }
-  }
 
-  if (!hasIp) {
-    delay(250);
-    return;
-  }
-
-  if (now - lastPingMs >= 1000) {
-    lastPingMs = now;
-    telemetry_ping_sent += 1;
-    lastOk = Ping.ping(targetIp, 1);
-    telemetry_ping_last_ok = lastOk;
-    current_ping_last_ok = lastOk;
-    if (lastOk) {
-      uint32_t lastMs = static_cast<uint32_t>(Ping.averageTime());
-      stats.last_ms = lastMs;
-      stats.count += 1;
-      stats.sum_ms += lastMs;
-      if (lastMs < stats.min_ms) {
-        stats.min_ms = lastMs;
-      }
-      if (lastMs > stats.max_ms) {
-        stats.max_ms = lastMs;
-      }
-      lastPingSuccessMs = now;
-      last_ping_success_ms = now;
-      Console.print("Ping ");
-      Console.print(kTargetHost);
-      Console.print(" ");
-      Console.print(lastMs);
-      Console.println("ms");
-      if (pingWasDown) {
-        pingWasDown = false;
-        registry_announced = false;
-        registry_next_attempt_ms = now;
-        registry_consecutive_failures = 0;
-        Console.println("Ping restored: scheduling registry announce.");
-      }
-    } else {
-      telemetry_ping_lost += 1;
-      pingWasDown = true;
-      Console.println("Ping failed.");
-    }
-    telemetry_ping_has_data = stats.has_data();
-    telemetry_ping_last_ms = stats.last_ms;
-    telemetry_ping_count = stats.count;
-    telemetry_ping_avg_ms = stats.avg_ms();
-    telemetry_ping_min_ms = telemetry_ping_has_data ? stats.min_ms : 0;
-    telemetry_ping_max_ms = telemetry_ping_has_data ? stats.max_ms : 0;
+  // Ping runs in PingTask (background, Core 0). Check if it came back up.
+  if (ping_restored) {
+    ping_restored = false;
+    registry_announced = false;
+    registry_next_attempt_ms = now;
+    registry_consecutive_failures = 0;
+    Console.println("[Loop] ping restored: scheduling registry announce.");
   }
 
   if (boosh_failsafe_note_until_ms == 0 || now >= boosh_failsafe_note_until_ms) {
@@ -2116,15 +2146,24 @@ void loop() {
       displayPage = static_cast<uint8_t>((displayPage + 1) % 5);
     }
 
-    if (displayPage == 0) {
-      ShowPingStats("RPIBOOSH", stats, lastOk, lastPingSuccessMs, now);
-    } else if (displayPage == 1) {
+    {
+      PingStats disp_stats;
+      disp_stats.count = telemetry_ping_count;
+      disp_stats.min_ms = telemetry_ping_has_data ? telemetry_ping_min_ms : UINT32_MAX;
+      disp_stats.max_ms = telemetry_ping_max_ms;
+      disp_stats.sum_ms = static_cast<uint64_t>(telemetry_ping_avg_ms) * telemetry_ping_count;
+      disp_stats.last_ms = telemetry_ping_last_ms;
+      if (displayPage == 0) {
+        ShowPingStats("RPIBOOSH", disp_stats, current_ping_last_ok, last_ping_success_ms, now);
+      }
+    }
+    if (displayPage == 1) {
       ShowWifiMetricsPage(0, wifi_connected_since_ms, last_disconnect_reason);
     } else if (displayPage == 2) {
       ShowWifiMetricsPage(1, wifi_connected_since_ms, last_disconnect_reason);
     } else if (displayPage == 3) {
       ShowNodeConfigPage();
-    } else {
+    } else if (displayPage == 4) {
       ShowFirmwarePage();
     }
   }
