@@ -2103,6 +2103,18 @@
 		)
 		(uuid "fced7c4a-fc17-4a38-bccb-7497bb555d6e")
 	)
+	(rectangle
+		(start 41.91 38.1)
+		(end 119.38 151.13)
+		(stroke
+			(width 0)
+			(type dash)
+		)
+		(fill
+			(type none)
+		)
+		(uuid 2dc2e67a-fed0-4a97-86c1-3029faf0df6d)
+	)
 	(text_box "ESP32 POWERED VIA USB-C CABLE\nFROM DCDC BUCK 5V 35 OUTPUT"
 		(exclude_from_sim no)
 		(at 171.45 132.08 0)
@@ -2122,9 +2134,29 @@
 		)
 		(uuid "332fb4e9-54ce-49c9-856c-a8c2d91ea495")
 	)
+	(text "NOT POPULATED ON BAR PYLON\nAS NO LOCAL TANK FOR THERMO\nAND USING LINE POWER NOT BATTERY"
+		(exclude_from_sim no)
+		(at 81.026 146.812 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "348328b5-33c8-4c5d-bb3f-5ae2943b6f0b")
+	)
+	(text "ONE BOARD MISTAKENLY \nUSES 3X 1R HERE!"
+		(exclude_from_sim no)
+		(at 268.986 83.566 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "3e4bedfb-dafd-4892-be03-6c0fbb817026")
+	)
 	(text "https://www.wemos.cc/en/latest/s2/s2_pico.html mini wifi board v1.0.0 with OLED based ESP32-S2FN4R2"
 		(exclude_from_sim no)
-		(at 152.654 46.482 0)
+		(at 192.024 51.308 0)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -2858,7 +2890,7 @@
 				(justify right)
 			)
 		)
-		(property "Value" "1K"
+		(property "Value" "5.6K"
 			(at 251.46 97.7899 0)
 			(effects
 				(font
@@ -3064,7 +3096,7 @@
 				(justify right)
 			)
 		)
-		(property "Value" "1K"
+		(property "Value" "5.6K"
 			(at 233.68 97.7899 0)
 			(effects
 				(font
@@ -3476,7 +3508,7 @@
 				(justify right)
 			)
 		)
-		(property "Value" "1K"
+		(property "Value" "5.6K"
 			(at 269.24 97.7899 0)
 			(effects
 				(font

@@ -2610,6 +2610,16 @@
 		)
 		(uuid "4144bd00-7cdb-4d8e-bf28-18b2e926c084")
 	)
+	(text "ONE BOARD MISTAKENLY \nUSES 1R HERE!"
+		(exclude_from_sim no)
+		(at 215.9 54.864 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "4b00989e-ecd1-4574-b4fa-8506058df48e")
+	)
 	(text "BACK EMF PROTECTION"
 		(exclude_from_sim no)
 		(at 171.958 86.614 0)
@@ -4463,7 +4473,7 @@
 				)
 			)
 		)
-		(property "Value" "1K"
+		(property "Value" "2.2K"
 			(at 200.66 53.34 90)
 			(effects
 				(font
