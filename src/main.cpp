@@ -58,6 +58,11 @@ constexpr int kThermistorAvgSamples = 16;
 constexpr unsigned long kSensorPollIntervalMs = 5000;
 constexpr unsigned long kBatteryHistoryIntervalMs = 60000; // 1 min between battery history samples
 constexpr int kBatteryHistorySize = 20;             // 20 min of history for rate calc
+// Battery plot buffers (separate from the rate-estimation ring buffer above)
+constexpr int kBattPlotLongSize = 1440;             // 24 h × 60 min/h = 1440 points
+constexpr int kBattPlotShortSize = 180;             // 30 min × 2 pts/min (10 s interval)
+constexpr unsigned long kBattPlotLongIntervalMs  = 60000;  // 1 min
+constexpr unsigned long kBattPlotShortIntervalMs = 10000;  // 10 s
 constexpr uint8_t kOledAddress = 0x3C;
 constexpr int kScreenWidth = 128;
 constexpr int kScreenHeight = 32;
@@ -150,6 +155,14 @@ unsigned long battery_v_history_ms[kBatteryHistorySize];
 int battery_v_history_count = 0;
 int battery_v_history_head = 0;
 unsigned long battery_last_history_ms = 0;
+// Battery voltage plot buffers
+struct BattPlotPoint { uint32_t ms; float v; };
+BattPlotPoint battery_plot_long[kBattPlotLongSize];
+BattPlotPoint battery_plot_short[kBattPlotShortSize];
+int battery_plot_long_head = 0,  battery_plot_long_count  = 0;
+int battery_plot_short_head = 0, battery_plot_short_count = 0;
+unsigned long battery_plot_long_last_ms  = 0;
+unsigned long battery_plot_short_last_ms = 0;
 
 constexpr const char *kPrefsNamespace = "pylon_cfg";
 constexpr const char *kPrefsKeyId = "id";
@@ -1303,6 +1316,14 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       <section class="panel oled"><h2>OLED Node</h2><pre id="oled-node"></pre></section>
       <section class="panel oled"><h2>OLED Firmware</h2><pre id="oled-firmware"></pre></section>
     </div>
+    <div class="panel" style="margin-top:16px">
+      <h2>Battery Voltage — 30 min</h2>
+      <img id="chart-short" src="/api/chart/battery/short" style="width:100%;border-radius:8px;display:block" alt="30-min battery chart">
+    </div>
+    <div class="panel" style="margin-top:16px">
+      <h2>Battery Voltage — 24 h</h2>
+      <img id="chart-long" src="/api/chart/battery/long" style="width:100%;border-radius:8px;display:block" alt="24-h battery chart">
+    </div>
     <div class="grid" style="margin-top:16px">
       <section class="panel"><h2>Telemetry</h2><div id="meta" class="meta"></div></section>
       <section class="panel"><h2>Serial Console</h2><div id="log"><pre id="log-text"></pre></div></section>
@@ -1599,10 +1620,17 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       xhr.send(form);
     });
 
+    function refreshCharts() {
+      const t = Date.now();
+      document.getElementById('chart-short').src = '/api/chart/battery/short?t=' + t;
+      document.getElementById('chart-long').src  = '/api/chart/battery/long?t='  + t;
+    }
     refreshTelemetry();
     refreshLogs();
+    refreshCharts();
     setInterval(refreshTelemetry, 1000);
     setInterval(refreshLogs, 1500);
+    setInterval(refreshCharts, 15000);
   </script>
 </body>
 </html>
@@ -1822,6 +1850,125 @@ void HandleSolenoidOffApi() {
                  "{\"ok\":true,\"solenoid_active\":false,\"triggered_via\":\"http\"}");
 }
 
+// ---- Battery chart SVG ------------------------------------------------------
+
+String BuildBatterySvg(BattPlotPoint *buf, int head, int count, int capacity,
+                       unsigned long span_label_ms, const char *title) {
+  constexpr int W = 720, H = 200;
+  constexpr int PL = 46, PR = 12, PT = 20, PB = 30;  // padding
+  constexpr int PW = W - PL - PR;                      // plot width
+  constexpr int PH = H - PT - PB;                      // plot height
+  constexpr float V_MIN = 10.0f, V_MAX = 15.0f;
+
+  String s;
+  s.reserve(6000);
+  char buf8[48];
+
+  s += "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 ";
+  s += W; s += " "; s += H;
+  s += "' style='background:#080c12;display:block;width:100%;max-width:720px'>";
+
+  // Title
+  s += "<text x='"; s += W / 2; s += "' y='14' text-anchor='middle' "
+       "fill='#7a9bb5' font-size='11' font-family='monospace'>"; s += title; s += "</text>";
+
+  // Y gridlines and labels (10, 11, 12, 13, 14, 15 V)
+  for (int vv = (int)V_MIN; vv <= (int)V_MAX; ++vv) {
+    const float frac = (vv - V_MIN) / (V_MAX - V_MIN);
+    const int y = PT + PH - (int)(frac * PH);
+    snprintf(buf8, sizeof(buf8), "%d", y);
+    s += "<line x1='"; s += PL; s += "' y1='"; s += buf8;
+    s += "' x2='"; s += (W - PR); s += "' y2='"; s += buf8;
+    s += "' stroke='#1a2635' stroke-width='1'/>";
+    snprintf(buf8, sizeof(buf8), "%dV", vv);
+    s += "<text x='"; s += (PL - 4);
+    s += "' y='"; s += y + 4;
+    s += "' text-anchor='end' fill='#4a6175' font-size='10' font-family='monospace'>";
+    s += buf8; s += "</text>";
+  }
+
+  // X axis baseline
+  s += "<line x1='"; s += PL; s += "' y1='"; s += (PT + PH);
+  s += "' x2='"; s += (W - PR); s += "' y2='"; s += (PT + PH);
+  s += "' stroke='#273445' stroke-width='1'/>";
+
+  // X time labels (5 ticks)
+  for (int i = 0; i <= 4; ++i) {
+    const int x = PL + (int)((float)i / 4.0f * PW);
+    // time represented: fraction of span from oldest (left) to newest (right)
+    const unsigned long ago_ms = (unsigned long)((1.0f - (float)i / 4.0f) * span_label_ms);
+    if (ago_ms == 0) {
+      snprintf(buf8, sizeof(buf8), "now");
+    } else if (span_label_ms >= 3600000UL) {
+      snprintf(buf8, sizeof(buf8), "%ldh ago", (long)(ago_ms / 3600000UL));
+    } else {
+      snprintf(buf8, sizeof(buf8), "%ldm ago", (long)(ago_ms / 60000UL));
+    }
+    s += "<text x='"; s += x;
+    s += "' y='"; s += (PT + PH + 14);
+    s += "' text-anchor='middle' fill='#4a6175' font-size='10' font-family='monospace'>";
+    s += buf8; s += "</text>";
+  }
+
+  if (count < 2) {
+    s += "<text x='"; s += W / 2;
+    s += "' y='"; s += (H / 2 + 5);
+    s += "' text-anchor='middle' fill='#3a5060' font-size='13' font-family='monospace'>"
+         "No data yet</text>";
+    s += "</svg>";
+    return s;
+  }
+
+  // Map ring buffer to chronological order and find actual time span
+  const int oldest_idx = (head - count + capacity) % capacity;
+  const uint32_t t_oldest = buf[oldest_idx].ms;
+  const int newest_idx  = (head - 1 + capacity) % capacity;
+  const uint32_t t_span = buf[newest_idx].ms - t_oldest;
+  if (t_span == 0) {
+    s += "</svg>";
+    return s;
+  }
+
+  // Polyline
+  s += "<polyline fill='none' stroke='#4fb3ff' stroke-width='1.5' stroke-linejoin='round' points='";
+  for (int i = 0; i < count; ++i) {
+    const int idx = (oldest_idx + i) % capacity;
+    const float x_frac = (float)(buf[idx].ms - t_oldest) / (float)t_span;
+    const float y_frac = (buf[idx].v - V_MIN) / (V_MAX - V_MIN);
+    const int px = PL + (int)(x_frac * PW);
+    const int py = PT + PH - (int)(constrain(y_frac, 0.0f, 1.0f) * PH);
+    snprintf(buf8, sizeof(buf8), "%d,%d ", px, py);
+    s += buf8;
+  }
+  s += "'/>";
+
+  // Current value label at right edge
+  const float v_last = buf[newest_idx].v;
+  const float y_frac_last = (v_last - V_MIN) / (V_MAX - V_MIN);
+  const int py_last = PT + PH - (int)(constrain(y_frac_last, 0.0f, 1.0f) * PH);
+  snprintf(buf8, sizeof(buf8), "%.2fV", v_last);
+  s += "<text x='"; s += (W - PR + 2);
+  s += "' y='"; s += py_last + 4;
+  s += "' fill='#4fb3ff' font-size='10' font-family='monospace'>"; s += buf8; s += "</text>";
+
+  s += "</svg>";
+  return s;
+}
+
+void HandleChartBatteryLongApi() {
+  webServer.sendHeader("Cache-Control", "no-cache");
+  webServer.send(200, "image/svg+xml",
+    BuildBatterySvg(battery_plot_long, battery_plot_long_head, battery_plot_long_count,
+                    kBattPlotLongSize, 86400000UL, "Battery voltage — 24 h (1 min/sample)"));
+}
+
+void HandleChartBatteryShortApi() {
+  webServer.sendHeader("Cache-Control", "no-cache");
+  webServer.send(200, "image/svg+xml",
+    BuildBatterySvg(battery_plot_short, battery_plot_short_head, battery_plot_short_count,
+                    kBattPlotShortSize, 1800000UL, "Battery voltage — 30 min (10 s/sample)"));
+}
+
 // ---- OTA update handlers ----------------------------------------------------
 
 void HandleOtaUploadBody() {
@@ -1875,6 +2022,8 @@ void SetupWebServer() {
   webServer.on("/api/solenoid/on", HTTP_POST, HandleSolenoidOnApi);
   webServer.on("/api/solenoid/off", HTTP_POST, HandleSolenoidOffApi);
   webServer.on("/api/solenoid/trigger", HTTP_POST, HandleSolenoidOnApi);
+  webServer.on("/api/chart/battery/long",  HTTP_GET, HandleChartBatteryLongApi);
+  webServer.on("/api/chart/battery/short", HTTP_GET, HandleChartBatteryShortApi);
   webServer.on("/api/ota", HTTP_POST, HandleOtaApi, HandleOtaUploadBody);
   webServer.on("/api/identify", HTTP_POST, HandleIdentifyApi);
   webServer.on("/api/sequence/pulse_once", HTTP_POST, HandleSeqPulseOnceApi);
@@ -2235,6 +2384,20 @@ void PollSensors() {
           }
         }
       }
+    }
+
+    // Plot buffers (independent intervals from the rate-estimation buffer)
+    if (battery_plot_short_last_ms == 0 || now - battery_plot_short_last_ms >= kBattPlotShortIntervalMs) {
+      battery_plot_short_last_ms = now;
+      battery_plot_short[battery_plot_short_head] = {(uint32_t)now, v};
+      battery_plot_short_head = (battery_plot_short_head + 1) % kBattPlotShortSize;
+      if (battery_plot_short_count < kBattPlotShortSize) battery_plot_short_count++;
+    }
+    if (battery_plot_long_last_ms == 0 || now - battery_plot_long_last_ms >= kBattPlotLongIntervalMs) {
+      battery_plot_long_last_ms = now;
+      battery_plot_long[battery_plot_long_head] = {(uint32_t)now, v};
+      battery_plot_long_head = (battery_plot_long_head + 1) % kBattPlotLongSize;
+      if (battery_plot_long_count < kBattPlotLongSize) battery_plot_long_count++;
     }
   }
 
