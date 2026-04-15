@@ -43,8 +43,14 @@ constexpr float kBatteryVoltEmpty = 10.5f;  // 0%  (SLA discharged)
 constexpr float kThermistorC1 = 1.274219988e-03f;
 constexpr float kThermistorC2 = 2.171368266e-04f;
 constexpr float kThermistorC3 = 1.119659695e-07f;
-constexpr float kThermistorR1 = 10000.0f;          // R12 pull-down
-constexpr float kThermistorOffsetF = 11.17f;        // empirical manual offset from reference project
+constexpr float kThermistorR1 = 10000.0f;  // R12 pull-down
+// 2-point linear calibration derived from measured data (post kAdcCalFactor correction):
+//   actual 37.9°F @ reported 46.5°F,  actual 156.9°F @ reported 126.81°F
+//   slope = (156.9-37.9)/(126.81-46.5) = 1.482,  intercept = 37.9 - 1.482*46.5 = -31.0°F
+// Folding in the prior kThermistorOffsetF=11.17 (applied before reporting), constants become:
+//   kThermistorCalScale=1.482, kThermistorCalOffsetF = 37.9 - 1.482*(46.5-11.17) = -14.46°F
+constexpr float kThermistorCalScale = 1.482f;
+constexpr float kThermistorCalOffsetF = -14.46f;
 constexpr int kThermistorAvgSamples = 16;
 constexpr unsigned long kSensorPollIntervalMs = 5000;
 constexpr unsigned long kBatteryHistoryIntervalMs = 60000; // 1 min between battery history samples
@@ -1909,8 +1915,8 @@ float ReadThermistorF() {
   const float logR = logf(r_th);
   if (!isfinite(logR)) return NAN;
   float t_k = 1.0f / (kThermistorC1 + kThermistorC2 * logR + kThermistorC3 * logR * logR * logR);
-  float t_f = (t_k - 273.15f) * 9.0f / 5.0f + 32.0f + kThermistorOffsetF;
-  return t_f;
+  float t_f = (t_k - 273.15f) * 9.0f / 5.0f + 32.0f;
+  return t_f * kThermistorCalScale + kThermistorCalOffsetF;
 }
 
 void PollSensors() {
