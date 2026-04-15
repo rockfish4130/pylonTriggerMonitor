@@ -114,9 +114,9 @@ Trigger sources (all equivalent):
 
 ### Battery Sensing (IO3)
 
-Voltage divider: `BATTERY_SENSE_12V → R5(100 kΩ) → R8(27 kΩ) → GND`; junction feeds IO3 via R4(10 kΩ) protection resistor.
+Voltage divider: `BATTERY_SENSE_12V → R5(100 kΩ) → R8(22 kΩ) → GND`; junction feeds IO3 via R4(10 kΩ) protection resistor.
 
-- Scale factor: `(100k + 27k) / 27k ≈ 4.704×`
+- Scale factor: `(100k + 22k) / 22k ≈ 5.545×`
 - 100% = 12.7 V (SLA fully charged)
 - 0% = 10.5 V (SLA discharged)
 - Discharge rate estimated from a rolling 20-minute voltage history (1-min samples). Time-remaining shown in telemetry once 5+ samples are collected.

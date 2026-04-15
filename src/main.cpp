@@ -27,10 +27,10 @@ constexpr int kLedBluePin = 14;    // IO14 blue - 4Hz
 constexpr int kLedYellowPin = 13;  // IO13 yellow - 6Hz
 constexpr int kIo38Pin = 38;       // IO38 high = WiFi connected
 constexpr int kIo11Pin = 11;       // IO11 high = boosh active
-constexpr int kBatteryAdcPin = 3;  // IO3 ADC - battery voltage divider (R5=100k, R8=27k)
+constexpr int kBatteryAdcPin = 3;  // IO3 ADC - battery voltage divider (R5=100k, R8=22k)
 constexpr int kThermistorAdcPin = 4; // IO4 ADC - NTC thermistor (R12=10k pull-down, R13=10k series)
-// Battery voltage divider: Vbat → R5(100k) → junction → R8(27k) → GND; junction → R4(10k) → IO3
-constexpr float kBatteryDividerScale = (100000.0f + 27000.0f) / 27000.0f;  // ~4.704
+// Battery voltage divider: Vbat → R5(100k) → junction → R8(22k) → GND; junction → R4(10k) → IO3
+constexpr float kBatteryDividerScale = (100000.0f + 22000.0f) / 22000.0f;  // ~5.545
 constexpr float kBatteryAdcRef = 3.3f;
 constexpr float kBatteryAdcFullScale = 4095.0f;
 constexpr float kBatteryVoltFull = 12.7f;   // 100% (SLA fully charged)

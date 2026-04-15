@@ -49,16 +49,16 @@ BATTERY_SENSE_12V
         │
         ├──── C2 (100 nF to GND, filter cap)
         │
-       R8 (27 kΩ)
+       R8 (22 kΩ)
         │
        GND
 
 Junction (R5/R8) ──── R4 (10 kΩ) ──── IO3 (ADC)
 ```
 
-**Scale factor:** `(100k + 27k) / 27k = 4.704×`
+**Scale factor:** `(100k + 22k) / 22k = 5.545×`
 
-At full-scale ADC (3.3 V on IO3): `3.3 × 4.704 = 15.5 V` measurable max.
+At full-scale ADC (3.3 V on IO3): `3.3 × 5.545 = 18.3 V` measurable max.
 
 Calibration constants in `main.cpp`:
 ```cpp
