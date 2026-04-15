@@ -11,6 +11,7 @@
 #include <WebServer.h>
 #include <esp_mac.h>
 #include <esp_system.h>
+#include <Update.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <WiFiUdp.h>
@@ -1250,6 +1251,23 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         </div>
       </form>
     </div>
+    <div class="panel" style="margin-top:16px">
+      <h2>Firmware Update</h2>
+      <div class="meta">
+        <label>Firmware .bin
+          <input type="file" id="ota-file" accept=".bin" style="padding:8px 12px;cursor:pointer">
+        </label>
+        <div>
+          <div id="ota-progress-wrap" style="display:none;background:#0d131c;border-radius:8px;height:18px;overflow:hidden;border:1px solid var(--line);margin-bottom:8px">
+            <div id="ota-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--accent-2),var(--accent));transition:width .15s ease"></div>
+          </div>
+          <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+            <button id="ota-btn" disabled>Upload &amp; Flash</button>
+            <span id="ota-status" style="color:var(--muted);font-size:14px"></span>
+          </div>
+        </div>
+      </div>
+    </div>
     <div class="grid">
       <section class="panel oled"><h2>OLED Ping</h2><pre id="oled-ping"></pre></section>
       <section class="panel oled"><h2>OLED Wi-Fi</h2><pre id="oled-wifi"></pre></section>
@@ -1412,6 +1430,70 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         status.innerHTML = `Save failed: ${esc(error.message)}`;
       }
     });
+    // ---- OTA upload ---------------------------------------------------------
+    const otaFile   = document.getElementById('ota-file');
+    const otaBtn    = document.getElementById('ota-btn');
+    const otaStatus = document.getElementById('ota-status');
+    const otaWrap   = document.getElementById('ota-progress-wrap');
+    const otaBar    = document.getElementById('ota-progress-bar');
+
+    otaFile.addEventListener('change', () => {
+      otaBtn.disabled = !otaFile.files.length;
+      otaStatus.textContent = otaFile.files.length ? otaFile.files[0].name : '';
+    });
+
+    otaBtn.addEventListener('click', () => {
+      const file = otaFile.files[0];
+      if (!file) return;
+      if (!confirm(`Flash ${file.name} (${(file.size/1024).toFixed(1)} KB)?\nPylon will reboot after upload.`)) return;
+
+      otaBtn.disabled = true;
+      otaFile.disabled = true;
+      otaWrap.style.display = 'block';
+      otaBar.style.width = '0%';
+      otaStatus.textContent = 'Uploading\u2026';
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/ota');
+
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+          const pct = Math.round(e.loaded / e.total * 100);
+          otaBar.style.width = pct + '%';
+          otaStatus.textContent = `Uploading\u2026 ${pct}%`;
+        }
+      });
+
+      xhr.addEventListener('load', () => {
+        otaBar.style.width = '100%';
+        try {
+          const resp = JSON.parse(xhr.responseText);
+          if (resp.ok) {
+            otaBar.style.background = 'linear-gradient(90deg,#2a9d3e,#4ade70)';
+            otaStatus.textContent = 'Flashed! Pylon rebooting\u2026';
+          } else {
+            otaBar.style.background = '#c03a10';
+            otaStatus.textContent = 'Error: ' + esc(resp.error || 'unknown');
+            otaBtn.disabled = false;
+            otaFile.disabled = false;
+          }
+        } catch(_) {
+          otaStatus.textContent = 'Upload complete (no JSON response)';
+        }
+      });
+
+      xhr.addEventListener('error', () => {
+        otaBar.style.background = '#c03a10';
+        otaStatus.textContent = 'Upload failed (network error)';
+        otaBtn.disabled = false;
+        otaFile.disabled = false;
+      });
+
+      const form = new FormData();
+      form.append('firmware', file, file.name);
+      xhr.send(form);
+    });
+
     refreshTelemetry();
     refreshLogs();
     setInterval(refreshTelemetry, 1000);
@@ -1606,6 +1688,42 @@ void HandleSolenoidOffApi() {
                  "{\"ok\":true,\"solenoid_active\":false,\"triggered_via\":\"http\"}");
 }
 
+// ---- OTA update handlers ----------------------------------------------------
+
+void HandleOtaUploadBody() {
+  HTTPUpload &upload = webServer.upload();
+
+  if (upload.status == UPLOAD_FILE_START) {
+    Console.printf("[OTA] Start: %s (%u bytes)\n", upload.filename.c_str(), upload.totalSize);
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+      Console.printf("[OTA] begin() failed: %s\n", Update.errorString());
+    }
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+      Console.printf("[OTA] write() failed: %s\n", Update.errorString());
+    }
+  } else if (upload.status == UPLOAD_FILE_END) {
+    if (Update.end(true)) {
+      Console.printf("[OTA] Success: %u bytes written. Rebooting.\n", upload.totalSize);
+    } else {
+      Console.printf("[OTA] end() failed: %s\n", Update.errorString());
+    }
+  }
+}
+
+void HandleOtaApi() {
+  if (Update.hasError()) {
+    String err = Update.errorString();
+    webServer.send(500, "application/json",
+                   "{\"ok\":false,\"error\":\"" + err + "\"}");
+    Console.printf("[OTA] Aborted: %s\n", err.c_str());
+    return;
+  }
+  webServer.send(200, "application/json", "{\"ok\":true,\"rebooting\":true}");
+  delay(200);
+  ESP.restart();
+}
+
 void SetupWebServer() {
   if (web_server_started) {
     return;
@@ -1623,6 +1741,7 @@ void SetupWebServer() {
   webServer.on("/api/solenoid/on", HTTP_POST, HandleSolenoidOnApi);
   webServer.on("/api/solenoid/off", HTTP_POST, HandleSolenoidOffApi);
   webServer.on("/api/solenoid/trigger", HTTP_POST, HandleSolenoidOnApi);
+  webServer.on("/api/ota", HTTP_POST, HandleOtaApi, HandleOtaUploadBody);
   webServer.begin();
   web_server_started = true;
   Console.println("HTTP server listening on port 80");
