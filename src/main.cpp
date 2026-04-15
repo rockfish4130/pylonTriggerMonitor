@@ -30,7 +30,11 @@ constexpr int kIo11Pin = 11;       // IO11 high = boosh active
 constexpr int kBatteryAdcPin = 3;  // IO3 ADC - battery voltage divider (R5=100k, R8=22k)
 constexpr int kThermistorAdcPin = 4; // IO4 ADC - NTC thermistor (R12=10k pull-down, R13=10k series)
 // Battery voltage divider: Vbat → R5(100k) → junction → R8(22k) → GND; junction → R4(10k) → IO3
-constexpr float kBatteryDividerScale = (100000.0f + 22000.0f) / 22000.0f;  // ~5.545
+constexpr float kBatteryDividerScale = (100000.0f + 22000.0f) / 22000.0f;  // ~5.545 theoretical
+// ESP32-S2 ADC effective Vref is ~2.9V, not 3.3V. This causes raw counts to read ~23% high.
+// kAdcCalFactor corrects both battery and thermistor readings. Derived from measured battery data:
+// 10V→12.32, 11V→13.54, 12V→14.80, 13V→16.09, 14V→17.35 reported (mean ratio 1.234, factor=1/1.234)
+constexpr float kAdcCalFactor = 0.810f;
 constexpr float kBatteryAdcRef = 3.3f;
 constexpr float kBatteryAdcFullScale = 4095.0f;
 constexpr float kBatteryVoltFull = 12.7f;   // 100% (SLA fully charged)
@@ -1885,7 +1889,7 @@ float ReadBatteryVoltage() {
   raw >>= 4;  // divide by 16
   if (raw <= 0) return NAN;
   const float v_adc = raw * kBatteryAdcRef / kBatteryAdcFullScale;
-  return v_adc * kBatteryDividerScale;
+  return v_adc * kBatteryDividerScale * kAdcCalFactor;
 }
 
 float ReadThermistorF() {
@@ -1899,7 +1903,8 @@ float ReadThermistorF() {
   if (raw <= 0 || raw >= 4095) return NAN;
   // Steinhart-Hart: thermistor is upper element, R1 is pull-down
   // Vadc = Vcc * R1 / (Rth + R1)  → Rth = R1*(4095/raw - 1)
-  const float r_th = kThermistorR1 * (kBatteryAdcFullScale / (float)raw - 1.0f);
+  // Apply kAdcCalFactor: ADC raw is ~23% high due to ESP32-S2 Vref; dividing raw corrects the ratio.
+  const float r_th = kThermistorR1 * (kBatteryAdcFullScale / ((float)raw * kAdcCalFactor) - 1.0f);
   if (r_th <= 0.0f) return NAN;
   const float logR = logf(r_th);
   if (!isfinite(logR)) return NAN;
