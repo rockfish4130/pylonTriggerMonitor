@@ -1248,7 +1248,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pylons</title>
+  <title>Pylons Control</title>
   <style>
     :root{color-scheme:dark;background:#0a0d12;--ink:#e7edf6;--muted:#9db0c7;--panel:#121821;--panel-2:#0f141c;--accent:#4fb3ff;--accent-2:#1e7bbf;--line:#273445}
     *{box-sizing:border-box} body{margin:0;font-family:Georgia,serif;color:var(--ink);background:
@@ -1274,7 +1274,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
 <body>
   <main>
     <div class="panel">
-      <h1>Pylons Control</h1>
+      <h1 id="page-title">Pylons Control</h1>
       <p><span id="solenoid" class="pill">Solenoid idle</span></p>
       <p id="fw-version"></p>
       <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
@@ -1391,6 +1391,9 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       ];
       document.getElementById('meta').innerHTML = rows.map(([k,v]) => `<div class="row"><strong>${k}</strong><span>${v}</span></div>`).join('');
       document.getElementById('fw-version').textContent = `FW ${data.fw_version}`;
+      const title = `${data.pylon_id} Pylons Control`;
+      document.getElementById('page-title').textContent = title;
+      document.title = title;
       const pill = document.getElementById('solenoid');
       pill.textContent = data.solenoid_active ? 'Solenoid active' : 'Solenoid idle';
       pill.className = data.solenoid_active ? 'pill active' : 'pill';
