@@ -10,6 +10,7 @@
 #include <Preferences.h>
 #include <WebServer.h>
 #include <esp_mac.h>
+#include <esp_system.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <WiFiUdp.h>
@@ -44,13 +45,14 @@ constexpr float kThermistorC1 = 1.274219988e-03f;
 constexpr float kThermistorC2 = 2.171368266e-04f;
 constexpr float kThermistorC3 = 1.119659695e-07f;
 constexpr float kThermistorR1 = 10000.0f;  // R12 pull-down
-// 2-point linear calibration derived from measured data (post kAdcCalFactor correction):
-//   actual 37.9°F @ reported 46.5°F,  actual 156.9°F @ reported 126.81°F
-//   slope = (156.9-37.9)/(126.81-46.5) = 1.482,  intercept = 37.9 - 1.482*46.5 = -31.0°F
-// Folding in the prior kThermistorOffsetF=11.17 (applied before reporting), constants become:
-//   kThermistorCalScale=1.482, kThermistorCalOffsetF = 37.9 - 1.482*(46.5-11.17) = -14.46°F
-constexpr float kThermistorCalScale = 1.482f;
-constexpr float kThermistorCalOffsetF = -14.46f;
+// 2-point linear calibration on raw S-H output (post kAdcCalFactor, no prior offset):
+//   actual 48.3°F  @ S-H base 37.73°F  (backed out from PYLONS 41.46°F reading)
+//   actual 116.0°F @ S-H base 112.0°F  (backed out from PYLONS 151.5°F reading)
+//   slope = (116.0-48.3)/(112.0-37.73) = 0.9116
+//   intercept = 48.3 - 0.9116*37.73 = 13.92°F
+// Note: 156.9°F reference point was rejected — thermistor not equilibrated during that test.
+constexpr float kThermistorCalScale = 0.9116f;
+constexpr float kThermistorCalOffsetF = 13.92f;
 constexpr int kThermistorAvgSamples = 16;
 constexpr unsigned long kSensorPollIntervalMs = 5000;
 constexpr unsigned long kBatteryHistoryIntervalMs = 60000; // 1 min between battery history samples
@@ -274,6 +276,22 @@ String JsonEscape(const String &input) {
     out += c;
   }
   return out;
+}
+
+const char *ResetReasonString(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON:   return "power-on";
+    case ESP_RST_EXT:       return "external-pin";
+    case ESP_RST_SW:        return "software";
+    case ESP_RST_PANIC:     return "panic/crash";
+    case ESP_RST_INT_WDT:   return "interrupt-watchdog";
+    case ESP_RST_TASK_WDT:  return "task-watchdog";
+    case ESP_RST_WDT:       return "watchdog";
+    case ESP_RST_DEEPSLEEP: return "deep-sleep-wakeup";
+    case ESP_RST_BROWNOUT:  return "brownout";
+    case ESP_RST_SDIO:      return "SDIO";
+    default:                return "unknown";
+  }
 }
 
 String ToLowerAscii(String value) {
@@ -1075,6 +1093,7 @@ String BuildTelemetryApiJson() {
   payload += "\"fw_build_time\":\"" + JsonEscape(String(kFirmwareBuildTime)) + "\",";
   payload += "\"uptime\":\"" + JsonEscape(FormatDurationHms(static_cast<uint32_t>(now / 1000))) + "\",";
   payload += "\"uptime_hms\":\"" + JsonEscape(FormatDurationHms(static_cast<uint32_t>(now / 1000))) + "\",";
+  payload += "\"last_reset_reason\":\"" + JsonEscape(String(ResetReasonString(esp_reset_reason()))) + "\",";
   payload += "\"solenoid_active\":" + String(display_inverted ? "true" : "false") + ",";
   payload += "\"trigger_event_count\":" + String(trigger_event_count) + ",";
   payload += "\"ap_enabled\":" + String(ap_enabled ? "true" : "false") + ",";
@@ -1280,7 +1299,8 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         ['Battery %', data.battery_charge_pct != null ? data.battery_charge_pct.toFixed(1) + ' %' : 'N/A'],
         ['Batt Time Left', data.battery_time_remaining_h != null ? data.battery_time_remaining_h.toFixed(1) + ' hr' : 'N/A'],
         ['Temperature', data.temperature_f != null ? data.temperature_f.toFixed(1) + ' °F' : 'N/A'],
-        ['Uptime', data.telemetry.uptime_hms]
+        ['Uptime', data.telemetry.uptime_hms],
+        ['Last Reset', data.last_reset_reason || '--']
       ];
       document.getElementById('meta').innerHTML = rows.map(([k,v]) => `<div class="row"><strong>${k}</strong><span>${v}</span></div>`).join('');
       document.getElementById('fw-version').textContent = `FW ${data.fw_version}`;
@@ -1982,7 +2002,7 @@ void PollBlinkLeds() {
 
   // Green/Blue/Yellow: sine wave brightness 0-33%, 5kHz carrier via LEDC
   const float t = now / 1000.0f;
-  constexpr float kMaxDuty = 0.33f * 255.0f;
+  constexpr float kMaxDuty = 0.66f * 255.0f;
   ledcWrite(0, (uint8_t)(((1.0f + sinf(2.0f * M_PI * 0.4f * t)) / 2.0f) * kMaxDuty));  // green 0.4Hz
   ledcWrite(1, (uint8_t)(((1.0f + sinf(2.0f * M_PI * 0.8f * t)) / 2.0f) * kMaxDuty));  // blue 0.8Hz
   ledcWrite(2, (uint8_t)(((1.0f + sinf(2.0f * M_PI * 1.2f * t)) / 2.0f) * kMaxDuty));  // yellow 1.2Hz
