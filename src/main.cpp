@@ -1034,6 +1034,25 @@ void ShowFirmwarePage() {
   RenderDisplayPage(BuildFirmwarePageLines());
 }
 
+void ShowIdentifyScreen(uint8_t phase) {
+  // Clear and draw centered "IDENTIFY" label
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(28, 12);
+  display.print("IDENTIFY");
+
+  // 8×8 checkerboard XOR overlay — alternating phase gives crawling animation
+  for (int x = 0; x < 128; x += 8) {
+    for (int y = 0; y < 32; y += 8) {
+      if (((x / 8 + y / 8) % 2) == phase) {
+        display.fillRect(x, y, 8, 8, SSD1306_INVERSE);
+      }
+    }
+  }
+  display.display();
+}
+
 void SetBooshActive(bool active, const char *source) {
   if (active) {
     if (!display_inverted) {
@@ -2658,6 +2677,8 @@ void loop() {
   static bool wasConnected = false;
   static unsigned long lastDisplayMs = 0;
   static uint8_t displayPage = 0;
+  static unsigned long lastIdentMs = 0;
+  static uint8_t identPhase = 0;
 
   PollBlinkLeds();
   PollSequence();
@@ -2726,7 +2747,14 @@ void loop() {
     Console.println("[Loop] ping restored: scheduling registry announce.");
   }
 
-  if (boosh_failsafe_note_until_ms == 0 || now >= boosh_failsafe_note_until_ms) {
+  // Identify mode: override normal display with animated checkerboard at 5 Hz
+  if (identify_until_ms > 0 && now < identify_until_ms) {
+    if (now - lastIdentMs >= 200) {
+      lastIdentMs = now;
+      identPhase ^= 1;
+      ShowIdentifyScreen(identPhase);
+    }
+  } else if (boosh_failsafe_note_until_ms == 0 || now >= boosh_failsafe_note_until_ms) {
     boosh_failsafe_note_until_ms = 0;
     if (lastDisplayMs == 0) {
       lastDisplayMs = now;
