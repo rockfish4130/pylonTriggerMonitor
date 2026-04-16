@@ -103,10 +103,10 @@ unsigned long boosh_failsafe_note_until_ms = 0;
 unsigned long wifi_connected_since_ms = 0;
 uint8_t last_disconnect_reason = WIFI_REASON_UNSPECIFIED;
 bool wifi_has_ip = false;
-bool registry_announced = false;
-unsigned long registry_last_success_ms = 0;
-unsigned long registry_next_attempt_ms = 0;
-uint8_t registry_consecutive_failures = 0;
+volatile bool registry_announced = false;
+volatile unsigned long registry_last_success_ms = 0;
+volatile unsigned long registry_next_attempt_ms = 0;
+volatile uint8_t registry_consecutive_failures = 0;
 String pylon_id;
 String pylon_mdns_host;
 String pylon_description;
@@ -135,7 +135,6 @@ bool seq_phase_on = false;            // currently in on-phase
 bool seq_abort_flag = false;          // abort requested
 volatile bool current_ping_last_ok = false;
 volatile unsigned long last_ping_success_ms = 0;
-volatile bool ping_restored = false;  // set by ping task, cleared by main loop for registry re-announce
 String target_ip_string = "";
 String web_log_text;
 String web_log_partial_line;
@@ -1079,6 +1078,129 @@ DisplayPageLines BuildSensorStatusPageLines() {
 
 void ShowSensorStatusPage() {
   RenderDisplayPage(BuildSensorStatusPageLines());
+}
+
+// Big stats view: "73F  13.3V  75%" — large digits, smaller units.
+// Numbers sit at y=8 (size 2, 16px tall → bottom at y=24).
+// Units sit at y=16 (size 1, 8px tall → bottom at y=24, bottom-aligned).
+void ShowBigStatsPage() {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+
+  constexpr int yNum  = 8;   // top of size-2 digits (16px tall, ends y=24)
+  constexpr int yUnit = 16;  // top of size-1 units  ( 8px tall, ends y=24)
+  constexpr int kGap  = 4;   // px between sections
+
+  int x = 0;
+
+  // --- Temperature ---
+  char tempBuf[5];
+  if (isfinite(sensor_temp_f)) {
+    snprintf(tempBuf, sizeof(tempBuf), "%d", static_cast<int>(roundf(sensor_temp_f)));
+  } else {
+    snprintf(tempBuf, sizeof(tempBuf), "--");
+  }
+  display.setTextSize(2);
+  display.setCursor(x, yNum);
+  display.print(tempBuf);
+  x = display.getCursorX();
+  display.setTextSize(1);
+  display.setCursor(x, yUnit);
+  display.print("F");
+  x = display.getCursorX() + kGap;
+
+  // --- Voltage ---
+  char voltBuf[7];
+  if (isfinite(sensor_battery_v)) {
+    snprintf(voltBuf, sizeof(voltBuf), "%.1f", sensor_battery_v);
+  } else {
+    snprintf(voltBuf, sizeof(voltBuf), "--");
+  }
+  display.setTextSize(2);
+  display.setCursor(x, yNum);
+  display.print(voltBuf);
+  x = display.getCursorX();
+  display.setTextSize(1);
+  display.setCursor(x, yUnit);
+  display.print("V");
+  x = display.getCursorX() + kGap;
+
+  // --- Battery % ---
+  char pctBuf[5];
+  if (isfinite(sensor_battery_pct)) {
+    snprintf(pctBuf, sizeof(pctBuf), "%d", static_cast<int>(roundf(sensor_battery_pct)));
+  } else {
+    snprintf(pctBuf, sizeof(pctBuf), "--");
+  }
+  display.setTextSize(2);
+  display.setCursor(x, yNum);
+  display.print(pctBuf);
+  x = display.getCursorX();
+  display.setTextSize(1);
+  display.setCursor(x, yUnit);
+  display.print("%");
+
+  display.display();
+}
+
+// Battery remaining view: "4hr  3min" — size-3 digits, size-1 units subscripted.
+// Digits at y=0 (size 3, 24px tall). Units at y=24 (size 1, 8px tall).
+// Content is centered horizontally.
+void ShowBatteryRemainingPage() {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+
+  constexpr int yNum  = 0;   // size-3 digits (24px tall, ends y=24)
+  constexpr int yUnit = 24;  // size-1 units  ( 8px tall, ends y=32)
+  constexpr int kGap  = 6;   // px between hr-section and min-section
+
+  if (!isfinite(sensor_battery_time_remaining_h)) {
+    // No data — show "--" centered
+    display.setTextSize(3);
+    display.setCursor(46, yNum);
+    display.print("--");
+    display.display();
+    return;
+  }
+
+  const float hours_f = sensor_battery_time_remaining_h;
+  const int hrs = static_cast<int>(hours_f);
+  const int mins = static_cast<int>((hours_f - hrs) * 60.0f + 0.5f);
+
+  // Measure widths to center the whole thing.
+  // size-3 char: 18px wide. size-1 char: 6px wide.
+  char hrsBuf[4];
+  char minsBuf[3];
+  snprintf(hrsBuf,  sizeof(hrsBuf),  "%d", hrs);
+  snprintf(minsBuf, sizeof(minsBuf), "%d", mins);
+  const int hrsW  = static_cast<int>(strlen(hrsBuf))  * 18;
+  const int minsW = static_cast<int>(strlen(minsBuf)) * 18;
+  const int hrUnitW  = 2 * 6;   // "hr"
+  const int minUnitW = 3 * 6;   // "min"
+  const int totalW = hrsW + hrUnitW + kGap + minsW + minUnitW;
+  int x = (128 - totalW) / 2;
+  if (x < 0) x = 0;
+
+  // Hours digit(s)
+  display.setTextSize(3);
+  display.setCursor(x, yNum);
+  display.print(hrsBuf);
+  x = display.getCursorX();
+  display.setTextSize(1);
+  display.setCursor(x, yUnit);
+  display.print("hr");
+  x += hrUnitW + kGap;
+
+  // Minutes digit(s)
+  display.setTextSize(3);
+  display.setCursor(x, yNum);
+  display.print(minsBuf);
+  x = display.getCursorX();
+  display.setTextSize(1);
+  display.setCursor(x, yUnit);
+  display.print("min");
+
+  display.display();
 }
 
 void ShowIdentifyScreen(uint8_t phase) {
@@ -2249,6 +2371,7 @@ void setup() {
   LogBootStep("Boot: WiFi STA mode");
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
   WiFi.setSleep(false);
   WiFi.disconnect(false, false);
   delay(100);
@@ -2807,8 +2930,10 @@ void PingTask(void *) {
         Console.println("ms");
         if (pingWasDown) {
           pingWasDown = false;
-          ping_restored = true;  // main loop will re-announce to registry
-          Console.println("[Ping] restored");
+          registry_announced = false;
+          registry_next_attempt_ms = millis();
+          registry_consecutive_failures = 0;
+          Console.println("[Ping] restored: scheduling registry re-announce");
         }
       } else {
         telemetry_ping_lost += 1;
@@ -2822,6 +2947,9 @@ void PingTask(void *) {
       telemetry_ping_min_ms = telemetry_ping_has_data ? stats.min_ms : 0;
       telemetry_ping_max_ms = telemetry_ping_has_data ? stats.max_ms : 0;
     }
+
+    // Registry HTTP runs here (Core 0) so it never blocks OSC on the main loop.
+    HandleRegistry(millis());
 
     vTaskDelay(pdMS_TO_TICKS(10));  // yield; ping timing is driven by lastPingMs
   }
@@ -2853,25 +2981,50 @@ void loop() {
   }
 
   if (WiFi.status() != WL_CONNECTED) {
+    static unsigned long disconnected_since_ms = 0;
+    static unsigned long last_reconnect_attempt_ms = 0;
+    static unsigned long last_disconnect_display_ms = 0;
+    const unsigned long now_dc = millis();
+
     if (wasConnected) {
       wasConnected = false;
-      ping_restored = false;
+      disconnected_since_ms = now_dc;
+      last_reconnect_attempt_ms = 0;
       target_ip_string = "";
       registry_announced = false;
       registry_next_attempt_ms = 0;
       registry_consecutive_failures = 0;
       Console.println("WiFi disconnected: registry state reset.");
     }
-    if (ap_active) {
-      ShowStatus("AP mode", "PYLON_" + pylon_id);
-      delay(100);
-    } else {
-      ShowStatus("WiFi lost", "Reconnecting");
-      delay(1000);
+    if (disconnected_since_ms == 0) {
+      disconnected_since_ms = now_dc;  // boot with no WiFi
+    }
+
+    const unsigned long offline_ms = now_dc - disconnected_since_ms;
+
+    // Escalating reconnect: nudge WiFi stack every 3 min, reboot after 10 min.
+    if (!ap_active) {
+      if (offline_ms >= 600000UL) {
+        Console.println("[WiFi] Offline 10 min — rebooting.");
+        ESP.restart();
+      } else if (offline_ms >= 180000UL && now_dc - last_reconnect_attempt_ms >= 60000UL) {
+        last_reconnect_attempt_ms = now_dc;
+        Console.println("[WiFi] Offline 3+ min — forcing reconnect.");
+        WiFi.reconnect();
+      }
+    }
+
+    // Update display at ~4 Hz without blocking.
+    if (now_dc - last_disconnect_display_ms >= 250) {
+      last_disconnect_display_ms = now_dc;
+      if (ap_active) {
+        ShowStatus("AP mode", "PYLON_" + pylon_id);
+      } else {
+        ShowStatus("WiFi lost", "Reconnecting");
+      }
     }
     return;
   }
-
   PollOsc();
   const unsigned long now = millis();
   if (!wasConnected) {
@@ -2879,11 +3032,13 @@ void loop() {
     registry_announced = false;
     registry_next_attempt_ms = now;
     registry_consecutive_failures = 0;
+    RestartMdnsIfConnected();
+    oscUdp.stop();
+    oscUdp.begin(kOscPort);
     SetupWebServer();
-    Console.println("WiFi connected: scheduling registry announce.");
+    Console.println("WiFi connected: mDNS/OSC/web restarted, registry announce scheduled.");
   }
-  HandleRegistry(now);
-  PollOsc();  // drain any packets that arrived during registry HTTP
+  // Registry HTTP is handled in PingTask (Core 0) — no blocking call here.
   if (!wifi_has_ip && wifi_connected_since_ms == 0) {
     wifi_connected_since_ms = now;
   }
@@ -2893,15 +3048,6 @@ void loop() {
     Console.println("Failsafe: BooshMain timeout -> forcing OFF.");
     ShowStatus("Failsafe timeout", "BooshMain OFF");
     boosh_failsafe_note_until_ms = now + kBooshFailsafeNoteMs;
-  }
-
-  // Ping runs in PingTask (background, Core 0). Check if it came back up.
-  if (ping_restored) {
-    ping_restored = false;
-    registry_announced = false;
-    registry_next_attempt_ms = now;
-    registry_consecutive_failures = 0;
-    Console.println("[Loop] ping restored: scheduling registry announce.");
   }
 
   // Identify mode: override normal display with animated checkerboard at 5 Hz
@@ -2917,17 +3063,20 @@ void loop() {
       lastDisplayMs = now;
     } else if (now - lastDisplayMs >= kDisplayCycleMs) {
       lastDisplayMs = now;
-      displayPage = static_cast<uint8_t>((displayPage + 1) % 5);
-      // Slots 1 and 3 are "other" pages — advance through them as we enter each slot
-      if (displayPage == 1 || displayPage == 3) {
+      displayPage = static_cast<uint8_t>((displayPage + 1) % 4);
+      // Slot 3 is the "other" slot — advance sub-page each time we enter it
+      if (displayPage == 3) {
         displayOtherIdx = static_cast<uint8_t>((displayOtherIdx + 1) % 5);
       }
     }
 
-    // Slots 0, 2, 4 (3/5 = 60%) → sensor status page
-    // Slots 1, 3 (2/5 = 40%) → cycle through ping/wifi/node/firmware via displayOtherIdx
-    if (displayPage == 0 || displayPage == 2 || displayPage == 4) {
-      ShowSensorStatusPage();
+    // Slot 0, 1 (2/4 = 50%) → big stats (temp / voltage / pct)
+    // Slot 2    (1/4 = 25%) → battery remaining (hr/min)
+    // Slot 3    (1/4 = 25%) → other pages cycled evenly (ping/wifi/wifi-detail/node/firmware)
+    if (displayPage == 0 || displayPage == 1) {
+      ShowBigStatsPage();
+    } else if (displayPage == 2) {
+      ShowBatteryRemainingPage();
     } else {
       // displayOtherIdx: 0=ping, 1=wifi, 2=wifi detail, 3=node, 4=firmware
       if (displayOtherIdx == 0) {
