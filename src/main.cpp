@@ -1080,58 +1080,138 @@ void ShowSensorStatusPage() {
   RenderDisplayPage(BuildSensorStatusPageLines());
 }
 
-// Big stats view: "73F  13.3V  75%" — large digits, smaller units.
-// Numbers sit at y=8 (size 2, 16px tall → bottom at y=24).
-// Units sit at y=16 (size 1, 8px tall → bottom at y=24, bottom-aligned).
-void ShowBigStatsPage() {
+// View 1: "73F  13.3V" — size-3 digits fill the 32px screen height.
+// Digits at y=0 (size 3, 24px tall, ends y=24).
+// Units  at y=24 (size 1, 8px tall, ends y=32) — subscripted, bottom-aligned.
+// Gap between sections is computed from remaining space so content is spread evenly.
+void ShowTempVoltagePage() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
 
-  constexpr int yNum  = 8;   // top of size-2 digits (16px tall, ends y=24)
-  constexpr int yUnit = 16;  // top of size-1 units  ( 8px tall, ends y=24)
-  constexpr int kGap  = 4;   // px between sections
+  constexpr int yNum  = 0;   // size-3 digits (24px tall, ends y=24)
+  constexpr int yUnit = 24;  // size-1 units  ( 8px tall, ends y=32)
 
-  int x = 0;
-
-  // --- Temperature ---
   char tempBuf[5];
   if (isfinite(sensor_temp_f)) {
     snprintf(tempBuf, sizeof(tempBuf), "%d", static_cast<int>(roundf(sensor_temp_f)));
   } else {
     snprintf(tempBuf, sizeof(tempBuf), "--");
   }
-  display.setTextSize(2);
-  display.setCursor(x, yNum);
-  display.print(tempBuf);
-  x = display.getCursorX();
-  display.setTextSize(1);
-  display.setCursor(x, yUnit);
-  display.print("F");
-  x = display.getCursorX() + kGap;
-
-  // --- Voltage ---
   char voltBuf[7];
   if (isfinite(sensor_battery_v)) {
     snprintf(voltBuf, sizeof(voltBuf), "%.1f", sensor_battery_v);
   } else {
     snprintf(voltBuf, sizeof(voltBuf), "--");
   }
-  display.setTextSize(2);
+
+  // size-3: 18px/char. size-1: 6px/char.
+  const int tempW = static_cast<int>(strlen(tempBuf)) * 18;
+  const int voltW = static_cast<int>(strlen(voltBuf)) * 18;
+  const int totalContent = tempW + 6 /*F*/ + voltW + 6 /*V*/;
+  int gap = (128 - totalContent) / 2;
+  if (gap < 2) gap = 2;
+
+  int x = 0;
+
+  display.setTextSize(3);
+  display.setCursor(x, yNum);
+  display.print(tempBuf);
+  x = display.getCursorX();
+  display.setTextSize(1);
+  display.setCursor(x, yUnit);
+  display.print("F");
+  x += 6 + gap;
+
+  display.setTextSize(3);
   display.setCursor(x, yNum);
   display.print(voltBuf);
   x = display.getCursorX();
   display.setTextSize(1);
   display.setCursor(x, yUnit);
   display.print("V");
-  x = display.getCursorX() + kGap;
 
-  // --- Battery % ---
+  display.display();
+}
+
+// View 2: "4hr 3min 74%" — size-2 digits, size-1 units, single centered row.
+// Digits at y=8 (size 2, 16px tall, ends y=24).
+// Units  at y=16 (size 1, 8px tall, ends y=24) — bottom-aligned with digits.
+// Shows "N/A" for time if value is missing or negative (nonsense reading).
+void ShowBatteryTimePctPage() {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+
+  constexpr int yNum  = 8;   // size-2 digits (16px tall, ends y=24)
+  constexpr int yUnit = 16;  // size-1 units  ( 8px tall, ends y=24)
+  constexpr int kGap  = 4;   // px between sections
+
+  // Determine time display strings.
+  char hrsBuf[5];
+  char minsBuf[3];
+  bool timeValid = isfinite(sensor_battery_time_remaining_h) &&
+                   sensor_battery_time_remaining_h >= 0.0f;
+  if (timeValid) {
+    const int hrs  = static_cast<int>(sensor_battery_time_remaining_h);
+    const int mins = static_cast<int>((sensor_battery_time_remaining_h - hrs) * 60.0f + 0.5f);
+    snprintf(hrsBuf,  sizeof(hrsBuf),  "%d", hrs);
+    snprintf(minsBuf, sizeof(minsBuf), "%d", mins);
+  } else {
+    snprintf(hrsBuf,  sizeof(hrsBuf),  "--");
+    snprintf(minsBuf, sizeof(minsBuf), "");
+  }
+
   char pctBuf[5];
   if (isfinite(sensor_battery_pct)) {
     snprintf(pctBuf, sizeof(pctBuf), "%d", static_cast<int>(roundf(sensor_battery_pct)));
   } else {
     snprintf(pctBuf, sizeof(pctBuf), "--");
   }
+
+  // Measure total width to center. size-2: 12px/char. size-1: 6px/char.
+  int totalW;
+  if (timeValid) {
+    const int hrsW  = static_cast<int>(strlen(hrsBuf))  * 12;
+    const int minsW = static_cast<int>(strlen(minsBuf)) * 12;
+    const int pctW  = static_cast<int>(strlen(pctBuf))  * 12;
+    totalW = hrsW + 2*6/*hr*/ + kGap + minsW + 3*6/*min*/ + kGap + pctW + 6/*%*/;
+  } else {
+    // "N/A" at size 2 + pct
+    const int naW  = static_cast<int>(strlen(hrsBuf)) * 12;
+    const int pctW = static_cast<int>(strlen(pctBuf)) * 12;
+    totalW = naW + kGap + pctW + 6/*%*/;
+  }
+  int x = (128 - totalW) / 2;
+  if (x < 0) x = 0;
+
+  if (timeValid) {
+    // Hours
+    display.setTextSize(2);
+    display.setCursor(x, yNum);
+    display.print(hrsBuf);
+    x = display.getCursorX();
+    display.setTextSize(1);
+    display.setCursor(x, yUnit);
+    display.print("hr");
+    x += 2*6 + kGap;
+
+    // Minutes
+    display.setTextSize(2);
+    display.setCursor(x, yNum);
+    display.print(minsBuf);
+    x = display.getCursorX();
+    display.setTextSize(1);
+    display.setCursor(x, yUnit);
+    display.print("min");
+    x += 3*6 + kGap;
+  } else {
+    // N/A
+    display.setTextSize(2);
+    display.setCursor(x, yNum);
+    display.print(hrsBuf);  // "N/A"
+    x = display.getCursorX() + kGap;
+  }
+
+  // Battery %
   display.setTextSize(2);
   display.setCursor(x, yNum);
   display.print(pctBuf);
@@ -1139,66 +1219,6 @@ void ShowBigStatsPage() {
   display.setTextSize(1);
   display.setCursor(x, yUnit);
   display.print("%");
-
-  display.display();
-}
-
-// Battery remaining view: "4hr  3min" — size-3 digits, size-1 units subscripted.
-// Digits at y=0 (size 3, 24px tall). Units at y=24 (size 1, 8px tall).
-// Content is centered horizontally.
-void ShowBatteryRemainingPage() {
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-
-  constexpr int yNum  = 0;   // size-3 digits (24px tall, ends y=24)
-  constexpr int yUnit = 24;  // size-1 units  ( 8px tall, ends y=32)
-  constexpr int kGap  = 6;   // px between hr-section and min-section
-
-  if (!isfinite(sensor_battery_time_remaining_h)) {
-    // No data — show "--" centered
-    display.setTextSize(3);
-    display.setCursor(46, yNum);
-    display.print("--");
-    display.display();
-    return;
-  }
-
-  const float hours_f = sensor_battery_time_remaining_h;
-  const int hrs = static_cast<int>(hours_f);
-  const int mins = static_cast<int>((hours_f - hrs) * 60.0f + 0.5f);
-
-  // Measure widths to center the whole thing.
-  // size-3 char: 18px wide. size-1 char: 6px wide.
-  char hrsBuf[4];
-  char minsBuf[3];
-  snprintf(hrsBuf,  sizeof(hrsBuf),  "%d", hrs);
-  snprintf(minsBuf, sizeof(minsBuf), "%d", mins);
-  const int hrsW  = static_cast<int>(strlen(hrsBuf))  * 18;
-  const int minsW = static_cast<int>(strlen(minsBuf)) * 18;
-  const int hrUnitW  = 2 * 6;   // "hr"
-  const int minUnitW = 3 * 6;   // "min"
-  const int totalW = hrsW + hrUnitW + kGap + minsW + minUnitW;
-  int x = (128 - totalW) / 2;
-  if (x < 0) x = 0;
-
-  // Hours digit(s)
-  display.setTextSize(3);
-  display.setCursor(x, yNum);
-  display.print(hrsBuf);
-  x = display.getCursorX();
-  display.setTextSize(1);
-  display.setCursor(x, yUnit);
-  display.print("hr");
-  x += hrUnitW + kGap;
-
-  // Minutes digit(s)
-  display.setTextSize(3);
-  display.setCursor(x, yNum);
-  display.print(minsBuf);
-  x = display.getCursorX();
-  display.setTextSize(1);
-  display.setCursor(x, yUnit);
-  display.print("min");
 
   display.display();
 }
@@ -3070,13 +3090,13 @@ void loop() {
       }
     }
 
-    // Slot 0, 1 (2/4 = 50%) → big stats (temp / voltage / pct)
-    // Slot 2    (1/4 = 25%) → battery remaining (hr/min)
+    // Slot 0, 1 (2/4 = 50%) → temp + voltage (large size-3 digits)
+    // Slot 2    (1/4 = 25%) → battery time remaining + pct
     // Slot 3    (1/4 = 25%) → other pages cycled evenly (ping/wifi/wifi-detail/node/firmware)
     if (displayPage == 0 || displayPage == 1) {
-      ShowBigStatsPage();
+      ShowTempVoltagePage();
     } else if (displayPage == 2) {
-      ShowBatteryRemainingPage();
+      ShowBatteryTimePctPage();
     } else {
       // displayOtherIdx: 0=ping, 1=wifi, 2=wifi detail, 3=node, 4=firmware
       if (displayOtherIdx == 0) {
