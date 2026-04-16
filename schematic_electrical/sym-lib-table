@@ -6,4 +6,5 @@
   (lib (name "plusroc_12v_5v_usbc")(type "KiCad")(uri "${KIPRJMOD}/symbols/plusroc_12v_5v_usbc.kicad_sym")(options "")(descr ""))
   (lib (name "drok_ntc_10k_b3950")(type "KiCad")(uri "${KIPRJMOD}/symbols/drok_ntc_10k_b3950.kicad_sym")(options "")(descr ""))
   (lib (name "wgcd_spst_illum_toggle")(type "KiCad")(uri "${KIPRJMOD}/symbols/wgcd_spst_illum_toggle.kicad_sym")(options "")(descr ""))
+  (lib (name "AB_800T-QT24")(type "KiCad")(uri "${KIPRJMOD}/symbols/AB_800T-QT24.kicad_sym")(options "")(descr ""))
 )

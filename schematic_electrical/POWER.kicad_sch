@@ -1217,16 +1217,54 @@
 		)
 	)
 	(junction
+		(at 107.95 54.61)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "0a9f02d8-9c05-481d-a915-3a9891abe968")
+	)
+	(junction
+		(at 185.42 128.27)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "10145cd6-f2b9-474a-93da-f9e6d81d1c59")
+	)
+	(junction
 		(at 180.34 72.39)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "49af2e46-4bb6-4202-ad5d-7cd7cc7ce648")
 	)
 	(junction
+		(at 72.39 68.58)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "68805abf-9cb7-471e-97c4-e9b36ce82be8")
+	)
+	(junction
 		(at 167.64 72.39)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "e28061e4-c32a-43a3-a291-4e13679b2a63")
+	)
+	(wire
+		(pts
+			(xy 185.42 128.27) (xy 97.79 128.27)
+		)
+		(stroke
+			(width 0.508)
+			(type default)
+		)
+		(uuid "04e608aa-ad41-42e6-8d00-87f8d3230907")
+	)
+	(wire
+		(pts
+			(xy 97.79 128.27) (xy 97.79 68.58)
+		)
+		(stroke
+			(width 0.508)
+			(type default)
+		)
+		(uuid "05db6964-d883-4b91-9785-031cc5021713")
 	)
 	(wire
 		(pts
@@ -1260,6 +1298,16 @@
 	)
 	(wire
 		(pts
+			(xy 97.79 68.58) (xy 72.39 68.58)
+		)
+		(stroke
+			(width 0.508)
+			(type default)
+		)
+		(uuid "2124c0c9-e229-4663-8284-8173decb6848")
+	)
+	(wire
+		(pts
 			(xy 248.92 72.39) (xy 248.92 55.88)
 		)
 		(stroke
@@ -1270,7 +1318,7 @@
 	)
 	(wire
 		(pts
-			(xy 72.39 66.04) (xy 72.39 69.85)
+			(xy 72.39 66.04) (xy 72.39 68.58)
 		)
 		(stroke
 			(width 0.508)
@@ -1350,6 +1398,16 @@
 	)
 	(wire
 		(pts
+			(xy 72.39 54.61) (xy 107.95 54.61)
+		)
+		(stroke
+			(width 0.508)
+			(type default)
+		)
+		(uuid "6169ebf6-ac46-40f7-ac22-dce09200fbbe")
+	)
+	(wire
+		(pts
 			(xy 162.56 88.9) (xy 167.64 88.9)
 		)
 		(stroke
@@ -1387,6 +1445,16 @@
 			(type default)
 		)
 		(uuid "9f6e26c5-1a25-4f10-876e-cd339e597ae4")
+	)
+	(wire
+		(pts
+			(xy 72.39 68.58) (xy 72.39 69.85)
+		)
+		(stroke
+			(width 0.508)
+			(type default)
+		)
+		(uuid "c32794aa-1201-48e6-be76-a5b6608a4a1b")
 	)
 	(wire
 		(pts
@@ -1464,6 +1532,16 @@
 		)
 		(uuid "63d627b6-adbd-4f58-95d8-9d04c30b86b3")
 	)
+	(text "FABRICATION NOTE: GND NODE WILL GANG\n16-GA FROM BATTERY-\n16-GA FROM DCDC-\n16-GA FROM DEUTCH 2-PIN- (EXT SUPPLY OPTION)\n16-GA FROM DEUTCH 3-PIN- (SOLENOID)\n2X 28-GA FROM TOGGLE LED GNDS\n1x 28-GA FROM PCB RED TERMINAL-"
+		(exclude_from_sim no)
+		(at 129.54 136.398 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "8b6c2996-2c7f-45c6-a421-1281f3cea5ec")
+	)
 	(text "ARM SWITCH\nRED LED"
 		(exclude_from_sim no)
 		(at 211.074 81.788 0)
@@ -1503,6 +1581,16 @@
 			)
 		)
 		(uuid "d2581b62-be6a-4bd5-af26-3aa804119a0b")
+	)
+	(text "FABRICATION NOTE: \nBOOSHMAN VEHICLE DCDC\nUSES LEADS FOR +5V USB AND GND\nDIRECTLY TO THE ESP32 BOARD.\nNO USB-C CABLE USED."
+		(exclude_from_sim no)
+		(at 215.646 139.446 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "dca69d65-c7fa-40b0-a86a-fc4f5fec1e57")
 	)
 	(global_label "USBC_5V_TO_RASPBERRY_PI"
 		(shape output)
@@ -1545,72 +1633,6 @@
 				)
 				(justify right)
 				(hide yes)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:+12V")
-		(at 72.39 54.61 0)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "19861ff0-942f-4f60-8ce4-4730c13f19d2")
-		(property "Reference" "#PWR03"
-			(at 72.39 58.42 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Value" "+12V"
-			(at 72.39 49.53 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 72.39 54.61 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 72.39 54.61 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"+12V\""
-			(at 72.39 54.61 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "1"
-			(uuid "850d6db7-57b1-4abb-ab8e-f70a7fc55159")
-		)
-		(instances
-			(project "pylons_boosh_remote_reciver"
-				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/6657731a-46b5-42dc-8611-bac46a2b6e5c"
-					(reference "#PWR03")
-					(unit 1)
-				)
 			)
 		)
 	)
@@ -1892,18 +1914,17 @@
 		(in_bom yes)
 		(on_board yes)
 		(dnp no)
-		(fields_autoplaced yes)
 		(uuid "58d7ff18-d8ec-4498-90b1-93fd270eddeb")
 		(property "Reference" "F1"
-			(at 119.38 66.04 90)
+			(at 119.38 76.962 90)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
 			)
 		)
-		(property "Value" "Fuse"
-			(at 119.38 68.58 90)
+		(property "Value" "Fuse 10A MINI AUTO BLADE"
+			(at 119.38 79.502 90)
 			(effects
 				(font
 					(size 1.27 1.27)

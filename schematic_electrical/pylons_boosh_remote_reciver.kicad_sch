@@ -139,6 +139,44 @@
 		)
 	)
 	(sheet
+		(at 48.26 93.98)
+		(size 12.7 3.81)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "b24d42a2-b819-4d3a-a71f-6b9dc6d378ef")
+		(property "Sheetname" "EXPANSION_BUTTONS_LAMPS"
+			(at 48.26 93.2684 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "EXPANSION_BUTTONS_LAMPS.kicad_sch"
+			(at 48.26 98.3746 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "pylons_boosh_remote_reciver"
+				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455"
+					(page "6")
+				)
+			)
+		)
+	)
+	(sheet
 		(at 44.45 81.28)
 		(size 12.7 3.81)
 		(fields_autoplaced yes)
