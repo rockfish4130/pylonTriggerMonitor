@@ -33,27 +33,23 @@ constexpr int kBatteryAdcPin = 3;  // IO3 ADC - battery voltage divider (R5=100k
 constexpr int kThermistorAdcPin = 4; // IO4 ADC - NTC thermistor (R12=10k pull-down, R13=10k series)
 // Battery voltage divider: Vbat → R5(100k) → junction → R8(22k) → GND; junction → R4(10k) → IO3
 constexpr float kBatteryDividerScale = (100000.0f + 22000.0f) / 22000.0f;  // ~5.545 theoretical
-// ESP32-S2 ADC effective Vref is ~2.9V, not 3.3V. This causes raw counts to read ~23% high.
-// kAdcCalFactor corrects both battery and thermistor readings. Derived from measured battery data:
-// 10V→12.32, 11V→13.54, 12V→14.80, 13V→16.09, 14V→17.35 reported (mean ratio 1.234, factor=1/1.234)
-constexpr float kAdcCalFactor = 0.810f;
-constexpr float kBatteryAdcRef = 3.3f;
-constexpr float kBatteryAdcFullScale = 4095.0f;
-constexpr float kBatteryVoltFull = 12.7f;   // 100% (SLA fully charged)
-constexpr float kBatteryVoltEmpty = 10.5f;  // 0%  (SLA discharged)
+// ADC readings use analogReadMilliVolts() which applies the on-chip eFuse factory calibration
+// automatically. kAdcCalFactor is no longer needed.
+constexpr float kThermistorVccMv = 3300.0f;  // pull-up supply voltage in mV
+constexpr float kBatteryVoltEmpty = 11.2f;  // 0%  (LiFePO4 4S discharged, used for time-remaining estimate)
 // Steinhart-Hart coefficients for thermistor - from empirical calibration in boosh_box_esp32_remote_thermo
 constexpr float kThermistorC1 = 1.274219988e-03f;
 constexpr float kThermistorC2 = 2.171368266e-04f;
 constexpr float kThermistorC3 = 1.119659695e-07f;
 constexpr float kThermistorR1 = 10000.0f;  // R12 pull-down
-// 2-point linear calibration on raw S-H output (post kAdcCalFactor, no prior offset):
-//   actual 48.3°F  @ S-H base 37.73°F  (backed out from PYLONS 41.46°F reading)
-//   actual 116.0°F @ S-H base 112.0°F  (backed out from PYLONS 151.5°F reading)
-//   slope = (116.0-48.3)/(112.0-37.73) = 0.9116
-//   intercept = 48.3 - 0.9116*37.73 = 13.92°F
-// Note: 156.9°F reference point was rejected — thermistor not equilibrated during that test.
-constexpr float kThermistorCalScale = 0.9116f;
-constexpr float kThermistorCalOffsetF = 13.92f;
+// 2-point linear calibration on raw S-H output (applied after Steinhart-Hart).
+// Derived from 2-point measurement on TIKI1 with analogReadMilliVolts() ADC:
+//   cold: raw 36.63°F, reference 36.00°F
+//   warm: raw 74.48°F, reference 73.00°F
+// scale  = (73.0 - 36.0) / (74.48 - 36.63) = 37.0 / 37.85 = 0.9775
+// offset = 36.0 - 36.63 * 0.9775 = +0.20°F
+constexpr float kThermistorCalScale = 0.9775f;
+constexpr float kThermistorCalOffsetF = 0.20f;
 constexpr int kThermistorAvgSamples = 16;
 constexpr unsigned long kSensorPollIntervalMs = 5000;
 constexpr unsigned long kBatteryHistoryIntervalMs = 60000; // 1 min between battery history samples
@@ -1045,6 +1041,46 @@ void ShowFirmwarePage() {
   RenderDisplayPage(BuildFirmwarePageLines());
 }
 
+DisplayPageLines BuildSensorStatusPageLines() {
+  DisplayPageLines page;
+  page.line1 = TrimForDisplay(pylon_id, 21);
+
+  if (isfinite(sensor_temp_f)) {
+    float tempC = (sensor_temp_f - 32.0f) * 5.0f / 9.0f;
+    char buf[22];
+    snprintf(buf, sizeof(buf), "Temp %.1fF %.1fC", sensor_temp_f, tempC);
+    page.line2 = buf;
+  } else {
+    page.line2 = "Temp --";
+  }
+
+  if (isfinite(sensor_battery_v) && isfinite(sensor_battery_pct)) {
+    char buf[22];
+    snprintf(buf, sizeof(buf), "Batt %.2fV  %.0f%%", sensor_battery_v, sensor_battery_pct);
+    page.line3 = buf;
+  } else if (isfinite(sensor_battery_v)) {
+    char buf[22];
+    snprintf(buf, sizeof(buf), "Batt %.2fV  --%% ", sensor_battery_v);
+    page.line3 = buf;
+  } else {
+    page.line3 = "Batt --";
+  }
+
+  if (isfinite(sensor_battery_time_remaining_h)) {
+    char buf[22];
+    snprintf(buf, sizeof(buf), "Left %.1fh", sensor_battery_time_remaining_h);
+    page.line4 = buf;
+  } else {
+    page.line4 = "Left --";
+  }
+
+  return page;
+}
+
+void ShowSensorStatusPage() {
+  RenderDisplayPage(BuildSensorStatusPageLines());
+}
+
 void ShowIdentifyScreen(uint8_t phase) {
   // Clear and draw centered "IDENTIFY" label
   display.clearDisplay();
@@ -1111,6 +1147,7 @@ String BuildDisplayPagesJson(unsigned long now_ms) {
   const DisplayPageLines wifiB = BuildWifiMetricsPageLines(1, wifi_connected_since_ms, last_disconnect_reason);
   const DisplayPageLines node = BuildNodeConfigPageLines();
   const DisplayPageLines firmware = BuildFirmwarePageLines();
+  const DisplayPageLines status = BuildSensorStatusPageLines();
 
   auto encodePage = [](const DisplayPageLines &page) {
     String out = "[";
@@ -1123,8 +1160,9 @@ String BuildDisplayPagesJson(unsigned long now_ms) {
   };
 
   String json;
-  json.reserve(512);
+  json.reserve(600);
   json += "\"display_pages\":{";
+  json += "\"status\":" + encodePage(status) + ",";
   json += "\"ping\":" + encodePage(ping) + ",";
   json += "\"wifi\":" + encodePage(wifiA) + ",";
   json += "\"wifi_detail\":" + encodePage(wifiB) + ",";
@@ -1340,6 +1378,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       </div>
     </div>
     <div class="grid">
+      <section class="panel oled"><h2>OLED Status</h2><pre id="oled-status"></pre></section>
       <section class="panel oled"><h2>OLED Ping</h2><pre id="oled-ping"></pre></section>
       <section class="panel oled"><h2>OLED Wi-Fi</h2><pre id="oled-wifi"></pre></section>
       <section class="panel oled"><h2>OLED Wi-Fi Detail</h2><pre id="oled-wifi-detail"></pre></section>
@@ -1416,6 +1455,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       const pill = document.getElementById('solenoid');
       pill.textContent = data.solenoid_active ? 'Solenoid active' : 'Solenoid idle';
       pill.className = data.solenoid_active ? 'pill active' : 'pill';
+      setPage('oled-status', data.display_pages.status);
       setPage('oled-ping', data.display_pages.ping);
       setPage('oled-wifi', data.display_pages.wifi);
       setPage('oled-wifi-detail', data.display_pages.wifi_detail);
@@ -2402,32 +2442,66 @@ void PollOsc() {
 
 // ---- Sensor readings --------------------------------------------------------
 
+// LiFePO4 4S OCV → SOC lookup table (open-circuit / resting voltage).
+// The flat plateau (~13.1–13.4 V) is the dominant feature of this chemistry;
+// a simple 2-point linear fit is badly wrong across most of the usable range.
+// Points are ordered low→high voltage; interpolate linearly between them.
+struct BattSocPoint { float v; float pct; };
+static const BattSocPoint kLiFePO4SocTable[] = {
+  { 11.20f,   0.0f },
+  { 12.00f,   1.0f },
+  { 12.80f,   5.0f },
+  { 13.00f,  10.0f },
+  { 13.08f,  20.0f },
+  { 13.12f,  30.0f },
+  { 13.16f,  40.0f },
+  { 13.20f,  50.0f },
+  { 13.24f,  60.0f },
+  { 13.28f,  70.0f },
+  { 13.32f,  80.0f },
+  { 13.40f,  90.0f },
+  { 13.60f,  99.0f },
+  { 14.40f, 100.0f },
+};
+
+float BatteryVoltToSocPct(float v) {
+  constexpr int n = sizeof(kLiFePO4SocTable) / sizeof(kLiFePO4SocTable[0]);
+  if (v <= kLiFePO4SocTable[0].v)     return kLiFePO4SocTable[0].pct;
+  if (v >= kLiFePO4SocTable[n - 1].v) return kLiFePO4SocTable[n - 1].pct;
+  for (int i = 1; i < n; ++i) {
+    if (v <= kLiFePO4SocTable[i].v) {
+      const float t = (v - kLiFePO4SocTable[i - 1].v) /
+                      (kLiFePO4SocTable[i].v - kLiFePO4SocTable[i - 1].v);
+      return kLiFePO4SocTable[i - 1].pct + t * (kLiFePO4SocTable[i].pct - kLiFePO4SocTable[i - 1].pct);
+    }
+  }
+  return 100.0f;
+}
+
 float ReadBatteryVoltage() {
-  // Average 16 samples to reduce ADC noise
-  int32_t raw = 0;
+  // Average 16 samples; analogReadMilliVolts() applies on-chip eFuse ADC calibration
+  int32_t sum_mv = 0;
   for (int i = 0; i < 16; ++i) {
-    raw += analogRead(kBatteryAdcPin);
+    sum_mv += analogReadMilliVolts(kBatteryAdcPin);
     delayMicroseconds(100);
   }
-  raw >>= 4;  // divide by 16
-  if (raw <= 0) return NAN;
-  const float v_adc = raw * kBatteryAdcRef / kBatteryAdcFullScale;
-  return v_adc * kBatteryDividerScale * kAdcCalFactor;
+  const float v_adc = (sum_mv / 16.0f) / 1000.0f;
+  if (v_adc <= 0.0f) return NAN;
+  return v_adc * kBatteryDividerScale;
 }
 
 float ReadThermistorF() {
-  // Average 16 samples (same pattern as reference project)
-  int32_t raw = 0;
+  // Average 16 samples; analogReadMilliVolts() applies on-chip eFuse ADC calibration
+  int32_t sum_mv = 0;
   for (int i = 0; i < kThermistorAvgSamples; ++i) {
-    raw += analogRead(kThermistorAdcPin);
+    sum_mv += analogReadMilliVolts(kThermistorAdcPin);
     delayMicroseconds(100);
   }
-  raw >>= 4;
-  if (raw <= 0 || raw >= 4095) return NAN;
-  // Steinhart-Hart: thermistor is upper element, R1 is pull-down
-  // Vadc = Vcc * R1 / (Rth + R1)  → Rth = R1*(4095/raw - 1)
-  // Apply kAdcCalFactor: ADC raw is ~23% high due to ESP32-S2 Vref; dividing raw corrects the ratio.
-  const float r_th = kThermistorR1 * (kBatteryAdcFullScale / ((float)raw * kAdcCalFactor) - 1.0f);
+  const float v_mv = sum_mv / (float)kThermistorAvgSamples;
+  if (v_mv <= 0.0f || v_mv >= kThermistorVccMv) return NAN;
+  // Thermistor is upper element, R1 (10k) is pull-down
+  // Vadc = Vcc * R1 / (Rth + R1)  →  Rth = R1 * (Vcc - Vadc) / Vadc
+  const float r_th = kThermistorR1 * (kThermistorVccMv - v_mv) / v_mv;
   if (r_th <= 0.0f) return NAN;
   const float logR = logf(r_th);
   if (!isfinite(logR)) return NAN;
@@ -2445,8 +2519,7 @@ void PollSensors() {
   const float v = ReadBatteryVoltage();
   if (isfinite(v)) {
     sensor_battery_v = v;
-    const float pct = (v - kBatteryVoltEmpty) / (kBatteryVoltFull - kBatteryVoltEmpty) * 100.0f;
-    sensor_battery_pct = constrain(pct, 0.0f, 100.0f);
+    sensor_battery_pct = constrain(BatteryVoltToSocPct(v), 0.0f, 100.0f);
 
     // Store history point every kBatteryHistoryIntervalMs for discharge-rate estimation
     if (battery_last_history_ms == 0 || now - battery_last_history_ms >= kBatteryHistoryIntervalMs) {
@@ -2759,7 +2832,8 @@ void PingTask(void *) {
 void loop() {
   static bool wasConnected = false;
   static unsigned long lastDisplayMs = 0;
-  static uint8_t displayPage = 0;
+  static uint8_t displayPage = 0;    // 0-4; slots 0,2,4=status(60%), 1,3=other pages
+  static uint8_t displayOtherIdx = 0; // cycles 0-4 through non-status pages
   static unsigned long lastIdentMs = 0;
   static uint8_t identPhase = 0;
 
@@ -2844,27 +2918,35 @@ void loop() {
     } else if (now - lastDisplayMs >= kDisplayCycleMs) {
       lastDisplayMs = now;
       displayPage = static_cast<uint8_t>((displayPage + 1) % 5);
-    }
-
-    {
-      PingStats disp_stats;
-      disp_stats.count = telemetry_ping_count;
-      disp_stats.min_ms = telemetry_ping_has_data ? telemetry_ping_min_ms : UINT32_MAX;
-      disp_stats.max_ms = telemetry_ping_max_ms;
-      disp_stats.sum_ms = static_cast<uint64_t>(telemetry_ping_avg_ms) * telemetry_ping_count;
-      disp_stats.last_ms = telemetry_ping_last_ms;
-      if (displayPage == 0) {
-        ShowPingStats("RPIBOOSH", disp_stats, current_ping_last_ok, last_ping_success_ms, now);
+      // Slots 1 and 3 are "other" pages — advance through them as we enter each slot
+      if (displayPage == 1 || displayPage == 3) {
+        displayOtherIdx = static_cast<uint8_t>((displayOtherIdx + 1) % 5);
       }
     }
-    if (displayPage == 1) {
-      ShowWifiMetricsPage(0, wifi_connected_since_ms, last_disconnect_reason);
-    } else if (displayPage == 2) {
-      ShowWifiMetricsPage(1, wifi_connected_since_ms, last_disconnect_reason);
-    } else if (displayPage == 3) {
-      ShowNodeConfigPage();
-    } else if (displayPage == 4) {
-      ShowFirmwarePage();
+
+    // Slots 0, 2, 4 (3/5 = 60%) → sensor status page
+    // Slots 1, 3 (2/5 = 40%) → cycle through ping/wifi/node/firmware via displayOtherIdx
+    if (displayPage == 0 || displayPage == 2 || displayPage == 4) {
+      ShowSensorStatusPage();
+    } else {
+      // displayOtherIdx: 0=ping, 1=wifi, 2=wifi detail, 3=node, 4=firmware
+      if (displayOtherIdx == 0) {
+        PingStats disp_stats;
+        disp_stats.count = telemetry_ping_count;
+        disp_stats.min_ms = telemetry_ping_has_data ? telemetry_ping_min_ms : UINT32_MAX;
+        disp_stats.max_ms = telemetry_ping_max_ms;
+        disp_stats.sum_ms = static_cast<uint64_t>(telemetry_ping_avg_ms) * telemetry_ping_count;
+        disp_stats.last_ms = telemetry_ping_last_ms;
+        ShowPingStats("RPIBOOSH", disp_stats, current_ping_last_ok, last_ping_success_ms, now);
+      } else if (displayOtherIdx == 1) {
+        ShowWifiMetricsPage(0, wifi_connected_since_ms, last_disconnect_reason);
+      } else if (displayOtherIdx == 2) {
+        ShowWifiMetricsPage(1, wifi_connected_since_ms, last_disconnect_reason);
+      } else if (displayOtherIdx == 3) {
+        ShowNodeConfigPage();
+      } else {
+        ShowFirmwarePage();
+      }
     }
   }
 
