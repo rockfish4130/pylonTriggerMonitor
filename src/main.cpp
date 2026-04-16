@@ -52,8 +52,8 @@ constexpr float kThermistorCalScale = 0.9775f;
 constexpr float kThermistorCalOffsetF = 0.20f;
 constexpr int kThermistorAvgSamples = 16;
 constexpr unsigned long kSensorPollIntervalMs = 5000;
-constexpr unsigned long kBatteryHistoryIntervalMs = 60000; // 1 min between battery history samples
-constexpr int kBatteryHistorySize = 20;             // 20 min of history for rate calc
+constexpr unsigned long kBatteryHistoryIntervalMs = 300000; // 5 min between battery history samples
+constexpr int kBatteryHistorySize = 72;             // 72 points = 6 hours of history for rate calc
 // Battery plot buffers (separate from the rate-estimation ring buffer above)
 constexpr int kBattPlotLongSize = 1440;             // 24 h × 60 min/h = 1440 points
 constexpr int kBattPlotShortSize = 180;             // 30 min × 2 pts/min (10 s interval)
@@ -1080,11 +1080,12 @@ void ShowSensorStatusPage() {
   RenderDisplayPage(BuildSensorStatusPageLines());
 }
 
-// View 1: "73F  13.3V" — size-3 digits fill the 32px screen height.
+// View 1: "42F  75%" — temp °F and battery pct, size-3 digits.
+// Temp is shown as "-" if sensor is disconnected (outside -40..200°F).
 // Digits at y=0 (size 3, 24px tall, ends y=24).
-// Units  at y=24 (size 1, 8px tall, ends y=32) — subscripted, bottom-aligned.
-// Gap between sections is computed from remaining space so content is spread evenly.
-void ShowTempVoltagePage() {
+// Units  at y=24 (size 1, 8px tall, ends y=32) — subscripted.
+// Horizontal gap is computed from remaining width so content is spread evenly.
+void ShowTempPctPage() {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
 
@@ -1092,22 +1093,25 @@ void ShowTempVoltagePage() {
   constexpr int yUnit = 24;  // size-1 units  ( 8px tall, ends y=32)
 
   char tempBuf[5];
-  if (isfinite(sensor_temp_f)) {
+  const bool tempValid = isfinite(sensor_temp_f) &&
+                         sensor_temp_f >= -40.0f && sensor_temp_f <= 200.0f;
+  if (tempValid) {
     snprintf(tempBuf, sizeof(tempBuf), "%d", static_cast<int>(roundf(sensor_temp_f)));
   } else {
-    snprintf(tempBuf, sizeof(tempBuf), "--");
+    snprintf(tempBuf, sizeof(tempBuf), "-");
   }
-  char voltBuf[7];
-  if (isfinite(sensor_battery_v)) {
-    snprintf(voltBuf, sizeof(voltBuf), "%.1f", sensor_battery_v);
+
+  char pctBuf[5];
+  if (isfinite(sensor_battery_pct)) {
+    snprintf(pctBuf, sizeof(pctBuf), "%d", static_cast<int>(roundf(sensor_battery_pct)));
   } else {
-    snprintf(voltBuf, sizeof(voltBuf), "--");
+    snprintf(pctBuf, sizeof(pctBuf), "--");
   }
 
   // size-3: 18px/char. size-1: 6px/char.
   const int tempW = static_cast<int>(strlen(tempBuf)) * 18;
-  const int voltW = static_cast<int>(strlen(voltBuf)) * 18;
-  const int totalContent = tempW + 6 /*F*/ + voltW + 6 /*V*/;
+  const int pctW  = static_cast<int>(strlen(pctBuf))  * 18;
+  const int totalContent = tempW + 6/*F*/ + pctW + 6/*%*/;
   int gap = (128 - totalContent) / 2;
   if (gap < 2) gap = 2;
 
@@ -1124,101 +1128,65 @@ void ShowTempVoltagePage() {
 
   display.setTextSize(3);
   display.setCursor(x, yNum);
-  display.print(voltBuf);
-  x = display.getCursorX();
-  display.setTextSize(1);
-  display.setCursor(x, yUnit);
-  display.print("V");
-
-  display.display();
-}
-
-// View 2: "4hr 3min 74%" — size-2 digits, size-1 units, single centered row.
-// Digits at y=8 (size 2, 16px tall, ends y=24).
-// Units  at y=16 (size 1, 8px tall, ends y=24) — bottom-aligned with digits.
-// Shows "N/A" for time if value is missing or negative (nonsense reading).
-void ShowBatteryTimePctPage() {
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-
-  constexpr int yNum  = 8;   // size-2 digits (16px tall, ends y=24)
-  constexpr int yUnit = 16;  // size-1 units  ( 8px tall, ends y=24)
-  constexpr int kGap  = 4;   // px between sections
-
-  // Determine time display strings.
-  char hrsBuf[5];
-  char minsBuf[3];
-  bool timeValid = isfinite(sensor_battery_time_remaining_h) &&
-                   sensor_battery_time_remaining_h >= 0.0f;
-  if (timeValid) {
-    const int hrs  = static_cast<int>(sensor_battery_time_remaining_h);
-    const int mins = static_cast<int>((sensor_battery_time_remaining_h - hrs) * 60.0f + 0.5f);
-    snprintf(hrsBuf,  sizeof(hrsBuf),  "%d", hrs);
-    snprintf(minsBuf, sizeof(minsBuf), "%d", mins);
-  } else {
-    snprintf(hrsBuf,  sizeof(hrsBuf),  "--");
-    snprintf(minsBuf, sizeof(minsBuf), "");
-  }
-
-  char pctBuf[5];
-  if (isfinite(sensor_battery_pct)) {
-    snprintf(pctBuf, sizeof(pctBuf), "%d", static_cast<int>(roundf(sensor_battery_pct)));
-  } else {
-    snprintf(pctBuf, sizeof(pctBuf), "--");
-  }
-
-  // Measure total width to center. size-2: 12px/char. size-1: 6px/char.
-  int totalW;
-  if (timeValid) {
-    const int hrsW  = static_cast<int>(strlen(hrsBuf))  * 12;
-    const int minsW = static_cast<int>(strlen(minsBuf)) * 12;
-    const int pctW  = static_cast<int>(strlen(pctBuf))  * 12;
-    totalW = hrsW + 2*6/*hr*/ + kGap + minsW + 3*6/*min*/ + kGap + pctW + 6/*%*/;
-  } else {
-    // "N/A" at size 2 + pct
-    const int naW  = static_cast<int>(strlen(hrsBuf)) * 12;
-    const int pctW = static_cast<int>(strlen(pctBuf)) * 12;
-    totalW = naW + kGap + pctW + 6/*%*/;
-  }
-  int x = (128 - totalW) / 2;
-  if (x < 0) x = 0;
-
-  if (timeValid) {
-    // Hours
-    display.setTextSize(2);
-    display.setCursor(x, yNum);
-    display.print(hrsBuf);
-    x = display.getCursorX();
-    display.setTextSize(1);
-    display.setCursor(x, yUnit);
-    display.print("hr");
-    x += 2*6 + kGap;
-
-    // Minutes
-    display.setTextSize(2);
-    display.setCursor(x, yNum);
-    display.print(minsBuf);
-    x = display.getCursorX();
-    display.setTextSize(1);
-    display.setCursor(x, yUnit);
-    display.print("min");
-    x += 3*6 + kGap;
-  } else {
-    // N/A
-    display.setTextSize(2);
-    display.setCursor(x, yNum);
-    display.print(hrsBuf);  // "N/A"
-    x = display.getCursorX() + kGap;
-  }
-
-  // Battery %
-  display.setTextSize(2);
-  display.setCursor(x, yNum);
   display.print(pctBuf);
   x = display.getCursorX();
   display.setTextSize(1);
   display.setCursor(x, yUnit);
   display.print("%");
+
+  display.display();
+}
+
+// View 2: "HH:MM  13.5V" — battery time remaining and voltage, size-2 digits.
+// Time shown as "--" when unavailable or negative (nonsense estimate).
+// Digits at y=8 (size 2, 16px tall, ends y=24).
+// "V" unit at y=16 (size 1, 8px, ends y=24) — bottom-aligned with digits.
+// Centered horizontally.
+void ShowTimeVoltagePage() {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+
+  constexpr int yNum  = 8;   // size-2 digits (16px tall, ends y=24)
+  constexpr int yUnit = 16;  // size-1 unit   ( 8px tall, ends y=24)
+  constexpr int kGap  = 6;   // px between time and voltage sections
+
+  // Time remaining as "H:MM" (or "HH:MM", "HHH:MM")
+  char timeBuf[9];
+  const bool timeValid = isfinite(sensor_battery_time_remaining_h) &&
+                         sensor_battery_time_remaining_h >= 0.0f;
+  if (timeValid) {
+    const int total_mins = static_cast<int>(sensor_battery_time_remaining_h * 60.0f + 0.5f);
+    snprintf(timeBuf, sizeof(timeBuf), "%d:%02d", total_mins / 60, total_mins % 60);
+  } else {
+    snprintf(timeBuf, sizeof(timeBuf), "--");
+  }
+
+  char voltBuf[7];
+  if (isfinite(sensor_battery_v)) {
+    snprintf(voltBuf, sizeof(voltBuf), "%.1f", sensor_battery_v);
+  } else {
+    snprintf(voltBuf, sizeof(voltBuf), "--");
+  }
+
+  // size-2: 12px/char.  "V" at size-1: 6px.
+  const int timeW = static_cast<int>(strlen(timeBuf)) * 12;
+  const int voltW = static_cast<int>(strlen(voltBuf)) * 12;
+  const int totalW = timeW + kGap + voltW + 6/*V*/;
+  int x = (128 - totalW) / 2;
+  if (x < 0) x = 0;
+
+  display.setTextSize(2);
+  display.setCursor(x, yNum);
+  display.print(timeBuf);
+  x += timeW + kGap;
+
+  display.setTextSize(2);
+  display.setCursor(x, yNum);
+  display.print(voltBuf);
+  x = display.getCursorX();
+  display.setTextSize(1);
+  display.setCursor(x, yUnit);
+  display.print("V");
 
   display.display();
 }
@@ -2672,21 +2640,33 @@ void PollSensors() {
       battery_v_history_head = (battery_v_history_head + 1) % kBatteryHistorySize;
       if (battery_v_history_count < kBatteryHistorySize) battery_v_history_count++;
 
-      // Estimate time remaining: need at least 5 history points (~5 minutes)
-      if (battery_v_history_count >= 5) {
-        // Oldest point in circular buffer
-        const int oldest_idx = (battery_v_history_head - battery_v_history_count + kBatteryHistorySize) % kBatteryHistorySize;
-        const int newest_idx = (battery_v_history_head - 1 + kBatteryHistorySize) % kBatteryHistorySize;
-        const float v_old = battery_v_history[oldest_idx];
-        const float v_new = battery_v_history[newest_idx];
-        const unsigned long t_span_ms = battery_v_history_ms[newest_idx] - battery_v_history_ms[oldest_idx];
-        if (t_span_ms > 0) {
-          const float v_per_ms = (v_new - v_old) / (float)t_span_ms;  // negative when discharging
-          if (v_per_ms < -1e-7f) {  // only estimate if measurably discharging
-            const float remaining_v = v - kBatteryVoltEmpty;
-            sensor_battery_time_remaining_h = (remaining_v / (-v_per_ms)) / 3600000.0f;
+      // Estimate time remaining via linear regression over all history points.
+      // Requires 12 samples (~1 hour) for a stable slope on a slow-discharge LiFePO4 pack.
+      if (battery_v_history_count >= 12) {
+        const int n = battery_v_history_count;
+        const int oldest_idx = (battery_v_history_head - n + kBatteryHistorySize) % kBatteryHistorySize;
+        const unsigned long t0 = battery_v_history_ms[oldest_idx];  // anchor to reduce magnitude
+        double sum_x = 0, sum_y = 0, sum_xy = 0, sum_x2 = 0;
+        for (int i = 0; i < n; i++) {
+          const int idx = (oldest_idx + i) % kBatteryHistorySize;
+          const double x = (battery_v_history_ms[idx] - t0) / 1000.0;  // seconds since oldest
+          const double y = battery_v_history[idx];
+          sum_x  += x;
+          sum_y  += y;
+          sum_xy += x * y;
+          sum_x2 += x * x;
+        }
+        const double denom = n * sum_x2 - sum_x * sum_x;
+        if (denom > 0.0) {
+          const double slope_v_per_s = (n * sum_xy - sum_x * sum_y) / denom;
+          // Threshold: 5e-7 V/s ≈ 0.0018 V/hr — catches batteries lasting up to ~1200 h
+          if (slope_v_per_s < -5e-7) {
+            const double remaining_v = v - kBatteryVoltEmpty;
+            const double hours = remaining_v / (-slope_v_per_s * 3600.0);
+            sensor_battery_time_remaining_h = static_cast<float>(
+                hours < 0.0 ? -1.0 : (hours > 500.0 ? 500.0 : hours));
           } else {
-            sensor_battery_time_remaining_h = NAN;  // charging or stable
+            sensor_battery_time_remaining_h = NAN;  // charging or not measurably discharging
           }
         }
       }
@@ -3090,13 +3070,13 @@ void loop() {
       }
     }
 
-    // Slot 0, 1 (2/4 = 50%) → temp + voltage (large size-3 digits)
-    // Slot 2    (1/4 = 25%) → battery time remaining + pct
+    // Slot 0, 1 (2/4 = 50%) → temp °F + battery pct (size-3)
+    // Slot 2    (1/4 = 25%) → time remaining HH:MM + voltage (size-2)
     // Slot 3    (1/4 = 25%) → other pages cycled evenly (ping/wifi/wifi-detail/node/firmware)
     if (displayPage == 0 || displayPage == 1) {
-      ShowTempVoltagePage();
+      ShowTempPctPage();
     } else if (displayPage == 2) {
-      ShowBatteryTimePctPage();
+      ShowTimeVoltagePage();
     } else {
       // displayOtherIdx: 0=ping, 1=wifi, 2=wifi detail, 3=node, 4=firmware
       if (displayOtherIdx == 0) {
