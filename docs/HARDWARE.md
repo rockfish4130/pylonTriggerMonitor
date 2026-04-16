@@ -60,25 +60,23 @@ Junction (R5/R8) ──── R4 (10 kΩ) ──── IO3 (ADC)
 
 At full-scale ADC (3.3 V on IO3): `3.3 × 5.545 = 18.3 V` measurable max.
 
-**ADC calibration:** The ESP32-S2 ADC effective Vref is ~2.9 V, not 3.3 V, causing raw counts to read ~23% high. An empirical correction factor `kAdcCalFactor = 0.810` is applied to both battery and thermistor readings. This was derived from measured data:
+**ADC calibration:** Firmware uses `analogReadMilliVolts()` which applies the per-chip eFuse factory calibration baked in at the Espressif factory. No software correction factor is needed. Verified against a bench power supply across the operating range:
 
-| Actual (V) | Reported before cal (V) | Ratio |
-|------------|------------------------|-------|
-| 10.0 | 12.32 | 1.232 |
-| 11.0 | 13.54 | 1.231 |
-| 12.0 | 14.80 | 1.233 |
-| 13.0 | 16.09 | 1.238 |
-| 14.0 | 17.35 | 1.239 |
+| PSU (V) | Reported (V) | Error |
+|---------|-------------|-------|
+| 8.00 | 7.99 | −0.01 V |
+| 11.00 | 11.01 | +0.01 V |
+| 12.00 | 12.03 | +0.03 V |
+| 13.30 | 13.38 | +0.08 V |
+| 14.00 | 14.11 | +0.11 V |
 
-Mean overcounting factor: 1.234 → `kAdcCalFactor = 1/1.234 = 0.810`
+Max error <0.8% — within resistor tolerance of the R5/R8 divider. No software trim applied.
 
-Calibration constants in `main.cpp`:
+Battery % thresholds in `main.cpp` — adjust for battery chemistry:
 ```cpp
-constexpr float kAdcCalFactor     = 0.810f;  // empirical ESP32-S2 ADC Vref correction
-constexpr float kBatteryVoltFull  = 12.7f;   // 100% — SLA fully charged
-constexpr float kBatteryVoltEmpty = 10.5f;   // 0%   — SLA discharged
+constexpr float kBatteryVoltFull  = 13.6f;   // 100% — LiFePO4 4S fully charged
+constexpr float kBatteryVoltEmpty = 11.2f;   // 0%   — LiFePO4 4S discharged
 ```
-Adjust `kBatteryVoltFull`/`kBatteryVoltEmpty` if using a different chemistry (LiFePO4, Li-Ion, etc.).
 
 ## Thermistor Circuit
 
@@ -96,14 +94,28 @@ THERMO_SENSOR_N junction ──── R13 (10 kΩ) ──── IO4 (ADC)
 
 Thermistor is the upper element; R12 is the pull-down. ADC reads the divided voltage.
 
-Resistance formula: `Rth = R12 × (4095 / ADC_raw − 1)`
+Resistance formula (voltage-direct, using `analogReadMilliVolts()`):
+`Rth = R12 × (Vcc_mv − Vadc_mv) / Vadc_mv`
 
 Steinhart-Hart coefficients (empirically calibrated, shared with `boosh_box_esp32_remote_thermo`):
 ```cpp
 c1 = 1.274219988e-03
 c2 = 2.171368266e-04
 c3 = 1.119659695e-07
-manual_offset = +11.17 °F
+```
+
+**2-point linear calibration** applied after Steinhart-Hart, derived on TIKI1 with `analogReadMilliVolts()` ADC:
+
+| Raw S-H (°F) | Reference (°F) |
+|-------------|----------------|
+| 36.63 | 36.00 |
+| 74.48 | 73.00 |
+
+`scale = 0.9775`, `offset = +0.20 °F`
+
+```cpp
+constexpr float kThermistorCalScale    = 0.9775f;
+constexpr float kThermistorCalOffsetF  = 0.20f;
 ```
 
 ## LED Drive Circuit
