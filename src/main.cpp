@@ -119,6 +119,7 @@ unsigned long boosh_failsafe_start_ms = 0;
 unsigned long boosh_failsafe_note_until_ms = 0;
 unsigned long boosh_failsafe_timeout_ms = kBooshFailsafeTimeoutMs;  // runtime, persisted in NVS
 int pylon_index = 0;  // sequencing index reported in telemetry; persisted in NVS; default 0
+unsigned long barmode_seq_max_ms = 30000;  // btn1 double-tap seq max hold duration; BARMODE NVS; default 30s
 unsigned long wifi_connected_since_ms = 0;
 uint8_t last_disconnect_reason = WIFI_REASON_UNSPECIFIED;
 bool wifi_has_ip = false;
@@ -205,6 +206,7 @@ constexpr const char *kPrefsKeyUserSsid = "usr_ssid";
 constexpr const char *kPrefsKeyUserPass = "usr_pass";
 constexpr const char *kPrefsKeyFailsafeMs = "failsafe_ms";
 constexpr const char *kPrefsKeyIndex = "pylon_idx";
+constexpr const char *kPrefsKeySeqMaxMs = "seq_max_ms";
 constexpr uint32_t kBooshFailsafeMinMs  = 1000;
 constexpr uint32_t kBooshFailsafeMaxMs  = 60000;
 
@@ -426,6 +428,7 @@ bool SavePylonConfig() {
   prefs.putString(kPrefsKeyUserPass, user_wifi_pass);
   prefs.putUInt(kPrefsKeyFailsafeMs, static_cast<uint32_t>(boosh_failsafe_timeout_ms));
   prefs.putInt(kPrefsKeyIndex, pylon_index);
+  prefs.putUInt(kPrefsKeySeqMaxMs, static_cast<uint32_t>(barmode_seq_max_ms));
   prefs.end();
   return true;
 }
@@ -484,6 +487,7 @@ void LoadPylonConfig() {
   user_wifi_pass = prefs.getString(kPrefsKeyUserPass, "");
   boosh_failsafe_timeout_ms = prefs.getUInt(kPrefsKeyFailsafeMs, kBooshFailsafeTimeoutMs);
   pylon_index = prefs.getInt(kPrefsKeyIndex, 0);
+  barmode_seq_max_ms = prefs.getUInt(kPrefsKeySeqMaxMs, 30000);
   stored_desc.trim();
 
   const bool unprogrammed = stored_id.length() == 0;
@@ -539,6 +543,7 @@ void PrintCliHelp() {
   Console.println("  set wifi_pass <value>  (user WiFi password)");
   Console.println("  set failsafe_s <value> (solenoid failsafe timeout in seconds, 1-60)");
   Console.println("  set index <value>      (barmode sequence index, 0=default)");
+  Console.println("  set seq_max_s <value>  (barmode btn1 seq max hold, 1-120s, default 30)");
   Console.println("  clear nvs          (erase saved id/host/desc)");
 }
 
@@ -653,9 +658,21 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
     pylon_index = (int)value.toInt();
     changed = true;
     if (log_output) Console.printf("[CFG] pylon_index set: %d\n", pylon_index);
+  } else if (field == "seq_max_s" || field == "seq_max_ms") {
+    const float secs = value.toFloat();
+    const unsigned long ms = (field == "seq_max_ms")
+        ? static_cast<unsigned long>(secs)
+        : static_cast<unsigned long>(secs * 1000.0f);
+    if (ms < 1000 || ms > 120000) {
+      if (log_output) Console.println("[CFG] seq_max_s out of range (1-120s)");
+      return false;
+    }
+    barmode_seq_max_ms = ms;
+    changed = true;
+    if (log_output) Console.printf("[CFG] seq_max_ms set: %lu\n", barmode_seq_max_ms);
   } else {
     if (log_output) {
-      Console.println("[CFG] unknown set field. use id|host|desc|node|ap|failsafe_s|index");
+      Console.println("[CFG] unknown set field. use id|host|desc|node|ap|failsafe_s|index|seq_max_s");
     }
     return false;
   }
@@ -689,7 +706,8 @@ String BuildConfigApiJson() {
   payload += "\"ap_active\":" + String(ap_active ? "true" : "false") + ",";
   payload += "\"wifi_ssid\":\"" + JsonEscape(user_wifi_ssid) + "\",";
   payload += "\"failsafe_ms\":" + String(boosh_failsafe_timeout_ms) + ",";
-  payload += "\"pylon_index\":" + String(pylon_index);
+  payload += "\"pylon_index\":" + String(pylon_index) + ",";
+  payload += "\"seq_max_ms\":" + String(barmode_seq_max_ms);
   payload += "}";
   return payload;
 }
@@ -1379,6 +1397,7 @@ String BuildTelemetryApiJson() {
   payload += "\"ap_active\":" + String(ap_active ? "true" : "false") + ",";
   payload += "\"barmode_active\":" + String(barmode_active ? "true" : "false") + ",";
   payload += "\"pylon_index\":" + String(pylon_index) + ",";
+  payload += "\"seq_max_ms\":" + String(barmode_seq_max_ms) + ",";
   payload += "\"wifi_ssid\":\"" + JsonEscape(user_wifi_ssid) + "\",";
   payload += "\"failsafe_ms\":" + String(boosh_failsafe_timeout_ms) + ",";
   payload += "\"target_ip\":\"" + JsonEscape(target_ip_string) + "\",";
@@ -1537,6 +1556,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           <span style="color:var(--muted);font-size:13px">Solenoid Safety</span>
           <label>Failsafe timeout (s) <input id="cfg-failsafe-s" name="failsafe_s" type="number" min="1" max="60" step="0.1" style="width:80px"></label>
           <label>Index <input id="cfg-index" name="index" type="number" min="0" max="99" step="1" style="width:60px"> <span style="color:var(--muted);font-size:12px">(barmode sequence order; 0=default)</span></label>
+          <div id="cfg-seq-max-wrap" style="display:none"><label>Seq max (s) <input id="cfg-seq-max-s" name="seq_max_s" type="number" min="1" max="120" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(barmode btn1 hold timeout)</span></label></div>
         </div>
         <div style="border-top:1px solid var(--line);padding-top:10px;display:flex;align-items:center;gap:10px">
           <input type="checkbox" id="cfg-ap" style="width:18px;height:18px;margin:0;cursor:pointer;accent-color:var(--accent)">
@@ -1667,6 +1687,11 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       const idxInput = document.getElementById('cfg-index');
       if (idxInput && document.activeElement !== idxInput)
         idxInput.value = data.pylon_index != null ? data.pylon_index : 0;
+      const seqWrap = document.getElementById('cfg-seq-max-wrap');
+      if (seqWrap) seqWrap.style.display = data.barmode_active ? '' : 'none';
+      const seqInput = document.getElementById('cfg-seq-max-s');
+      if (seqInput && document.activeElement !== seqInput)
+        seqInput.value = data.seq_max_ms != null ? Math.round(data.seq_max_ms / 1000) : 30;
       const apBox = document.getElementById('cfg-ap');
       if (apBox && document.activeElement !== apBox) apBox.checked = !!data.ap_enabled;
     }
@@ -1682,7 +1707,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     }
     const triggerButton = document.getElementById('trigger');
     const configForm = document.getElementById('config-form');
-    const configInputs = ['cfg-id', 'cfg-host', 'cfg-description', 'cfg-node', 'cfg-wifi-ssid', 'cfg-wifi-pass', 'cfg-failsafe-s', 'cfg-index']
+    const configInputs = ['cfg-id', 'cfg-host', 'cfg-description', 'cfg-node', 'cfg-wifi-ssid', 'cfg-wifi-pass', 'cfg-failsafe-s', 'cfg-index', 'cfg-seq-max-s']
       .map((id) => document.getElementById(id))
       .filter(Boolean);
     let holdActive = false;
@@ -1750,6 +1775,8 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       if (failsafeS) body.set('failsafe_s', failsafeS);
       const idxVal = document.getElementById('cfg-index').value.trim();
       if (idxVal !== '') body.set('index', idxVal);
+      const seqMaxVal = document.getElementById('cfg-seq-max-s').value.trim();
+      if (seqMaxVal !== '') body.set('seq_max_s', seqMaxVal);
       try {
         const result = await fetchJson('/api/config', {
           method:'POST',
@@ -2020,10 +2047,11 @@ void HandleConfigPostApi() {
   const bool has_wifi_pass   = webServer.hasArg("wifi_pass");
   const bool has_failsafe_s  = webServer.hasArg("failsafe_s");
   const bool has_index       = webServer.hasArg("index");
+  const bool has_seq_max_s   = webServer.hasArg("seq_max_s");
 
   if (!has_node && !has_id && !has_host && !has_desc &&
-      !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index) {
-    SendApiError(400, "expected one of: node, id, host, description, wifi_ssid, wifi_pass, failsafe_s, index");
+      !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index && !has_seq_max_s) {
+    SendApiError(400, "expected one of: node, id, host, description, wifi_ssid, wifi_pass, failsafe_s, index, seq_max_s");
     return;
   }
 
@@ -2047,6 +2075,7 @@ void HandleConfigPostApi() {
   if (has_wifi_pass)  ok = ok && SetConfigFieldValue("wifi_pass",  webServer.arg("wifi_pass"));
   if (has_failsafe_s) ok = ok && SetConfigFieldValue("failsafe_s", webServer.arg("failsafe_s"));
   if (has_index)      ok = ok && SetConfigFieldValue("index",      webServer.arg("index"));
+  if (has_seq_max_s)  ok = ok && SetConfigFieldValue("seq_max_s",  webServer.arg("seq_max_s"));
 
   if (!ok) {
     SendApiError(400, "invalid config value");
@@ -3312,7 +3341,7 @@ void PollBarModeButtons() {
 
       // Sequence ticker: fire one group (same pylon_index) per 100ms step
       if (btn1_seq_active) {
-        if (!btn_stable[1] || now - btn1_seq_start_ms >= 5000) {
+        if (!btn_stable[1] || now - btn1_seq_start_ms >= barmode_seq_max_ms) {
           btn1_seq_active = false;
           Console.println("[BarMode] Btn1 seq ended");
         } else if (now - btn1_seq_last_fire_ms >= btn1_seq_delay_ms) {
