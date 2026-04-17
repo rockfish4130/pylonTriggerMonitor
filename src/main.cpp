@@ -118,6 +118,7 @@ bool boosh_failsafe_armed = false;
 unsigned long boosh_failsafe_start_ms = 0;
 unsigned long boosh_failsafe_note_until_ms = 0;
 unsigned long boosh_failsafe_timeout_ms = kBooshFailsafeTimeoutMs;  // runtime, persisted in NVS
+int pylon_index = 0;  // sequencing index reported in telemetry; persisted in NVS; default 0
 unsigned long wifi_connected_since_ms = 0;
 uint8_t last_disconnect_reason = WIFI_REASON_UNSPECIFIED;
 bool wifi_has_ip = false;
@@ -203,6 +204,7 @@ constexpr const char *kPrefsKeyAp = "ap_en";
 constexpr const char *kPrefsKeyUserSsid = "usr_ssid";
 constexpr const char *kPrefsKeyUserPass = "usr_pass";
 constexpr const char *kPrefsKeyFailsafeMs = "failsafe_ms";
+constexpr const char *kPrefsKeyIndex = "pylon_idx";
 constexpr uint32_t kBooshFailsafeMinMs  = 1000;
 constexpr uint32_t kBooshFailsafeMaxMs  = 60000;
 
@@ -423,6 +425,7 @@ bool SavePylonConfig() {
   prefs.putString(kPrefsKeyUserSsid, user_wifi_ssid);
   prefs.putString(kPrefsKeyUserPass, user_wifi_pass);
   prefs.putUInt(kPrefsKeyFailsafeMs, static_cast<uint32_t>(boosh_failsafe_timeout_ms));
+  prefs.putInt(kPrefsKeyIndex, pylon_index);
   prefs.end();
   return true;
 }
@@ -480,6 +483,7 @@ void LoadPylonConfig() {
   user_wifi_ssid = prefs.getString(kPrefsKeyUserSsid, "");
   user_wifi_pass = prefs.getString(kPrefsKeyUserPass, "");
   boosh_failsafe_timeout_ms = prefs.getUInt(kPrefsKeyFailsafeMs, kBooshFailsafeTimeoutMs);
+  pylon_index = prefs.getInt(kPrefsKeyIndex, 0);
   stored_desc.trim();
 
   const bool unprogrammed = stored_id.length() == 0;
@@ -534,6 +538,7 @@ void PrintCliHelp() {
   Console.println("  set wifi_ssid <value>  (user WiFi SSID fallback)");
   Console.println("  set wifi_pass <value>  (user WiFi password)");
   Console.println("  set failsafe_s <value> (solenoid failsafe timeout in seconds, 1-60)");
+  Console.println("  set index <value>      (barmode sequence index, 0=default)");
   Console.println("  clear nvs          (erase saved id/host/desc)");
 }
 
@@ -644,9 +649,13 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
     if (log_output) {
       Console.printf("[CFG] failsafe_ms set: %lu\n", boosh_failsafe_timeout_ms);
     }
+  } else if (field == "index") {
+    pylon_index = (int)value.toInt();
+    changed = true;
+    if (log_output) Console.printf("[CFG] pylon_index set: %d\n", pylon_index);
   } else {
     if (log_output) {
-      Console.println("[CFG] unknown set field. use id|host|desc|node|ap|failsafe_s");
+      Console.println("[CFG] unknown set field. use id|host|desc|node|ap|failsafe_s|index");
     }
     return false;
   }
@@ -679,7 +688,8 @@ String BuildConfigApiJson() {
   payload += "\"ap_enabled\":" + String(ap_enabled ? "true" : "false") + ",";
   payload += "\"ap_active\":" + String(ap_active ? "true" : "false") + ",";
   payload += "\"wifi_ssid\":\"" + JsonEscape(user_wifi_ssid) + "\",";
-  payload += "\"failsafe_ms\":" + String(boosh_failsafe_timeout_ms);
+  payload += "\"failsafe_ms\":" + String(boosh_failsafe_timeout_ms) + ",";
+  payload += "\"pylon_index\":" + String(pylon_index);
   payload += "}";
   return payload;
 }
@@ -774,6 +784,7 @@ String BuildRegistryPayload() {
            + String(kOscAddrPulseSingle) + "\",\""
            + String(kOscAddrPulseTrain)  + "\",\""
            + String(kOscAddrSteam)       + "\"],";
+  payload += "\"pylon_index\":" + String(pylon_index) + ",";
   payload += "\"roles\":[\"boosh_main\"],";
   payload += "\"fw_version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
   payload += "\"firmware_version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
@@ -1367,6 +1378,7 @@ String BuildTelemetryApiJson() {
   payload += "\"ap_enabled\":" + String(ap_enabled ? "true" : "false") + ",";
   payload += "\"ap_active\":" + String(ap_active ? "true" : "false") + ",";
   payload += "\"barmode_active\":" + String(barmode_active ? "true" : "false") + ",";
+  payload += "\"pylon_index\":" + String(pylon_index) + ",";
   payload += "\"wifi_ssid\":\"" + JsonEscape(user_wifi_ssid) + "\",";
   payload += "\"failsafe_ms\":" + String(boosh_failsafe_timeout_ms) + ",";
   payload += "\"target_ip\":\"" + JsonEscape(target_ip_string) + "\",";
@@ -1524,6 +1536,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         <div style="border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
           <span style="color:var(--muted);font-size:13px">Solenoid Safety</span>
           <label>Failsafe timeout (s) <input id="cfg-failsafe-s" name="failsafe_s" type="number" min="1" max="60" step="0.1" style="width:80px"></label>
+          <label>Index <input id="cfg-index" name="index" type="number" min="0" max="99" step="1" style="width:60px"> <span style="color:var(--muted);font-size:12px">(barmode sequence order; 0=default)</span></label>
         </div>
         <div style="border-top:1px solid var(--line);padding-top:10px;display:flex;align-items:center;gap:10px">
           <input type="checkbox" id="cfg-ap" style="width:18px;height:18px;margin:0;cursor:pointer;accent-color:var(--accent)">
@@ -1651,6 +1664,9 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       const fsInput = document.getElementById('cfg-failsafe-s');
       if (fsInput && document.activeElement !== fsInput)
         fsInput.value = data.failsafe_ms != null ? (data.failsafe_ms / 1000).toFixed(1) : '5.0';
+      const idxInput = document.getElementById('cfg-index');
+      if (idxInput && document.activeElement !== idxInput)
+        idxInput.value = data.pylon_index != null ? data.pylon_index : 0;
       const apBox = document.getElementById('cfg-ap');
       if (apBox && document.activeElement !== apBox) apBox.checked = !!data.ap_enabled;
     }
@@ -1666,7 +1682,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     }
     const triggerButton = document.getElementById('trigger');
     const configForm = document.getElementById('config-form');
-    const configInputs = ['cfg-id', 'cfg-host', 'cfg-description', 'cfg-node', 'cfg-wifi-ssid', 'cfg-wifi-pass', 'cfg-failsafe-s']
+    const configInputs = ['cfg-id', 'cfg-host', 'cfg-description', 'cfg-node', 'cfg-wifi-ssid', 'cfg-wifi-pass', 'cfg-failsafe-s', 'cfg-index']
       .map((id) => document.getElementById(id))
       .filter(Boolean);
     let holdActive = false;
@@ -1732,6 +1748,8 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       if (wifiPass) body.set('wifi_pass', wifiPass);
       const failsafeS = document.getElementById('cfg-failsafe-s').value.trim();
       if (failsafeS) body.set('failsafe_s', failsafeS);
+      const idxVal = document.getElementById('cfg-index').value.trim();
+      if (idxVal !== '') body.set('index', idxVal);
       try {
         const result = await fetchJson('/api/config', {
           method:'POST',
@@ -2001,10 +2019,11 @@ void HandleConfigPostApi() {
   const bool has_wifi_ssid   = webServer.hasArg("wifi_ssid");
   const bool has_wifi_pass   = webServer.hasArg("wifi_pass");
   const bool has_failsafe_s  = webServer.hasArg("failsafe_s");
+  const bool has_index       = webServer.hasArg("index");
 
   if (!has_node && !has_id && !has_host && !has_desc &&
-      !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s) {
-    SendApiError(400, "expected one of: node, id, host, description, wifi_ssid, wifi_pass, failsafe_s");
+      !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index) {
+    SendApiError(400, "expected one of: node, id, host, description, wifi_ssid, wifi_pass, failsafe_s, index");
     return;
   }
 
@@ -2027,6 +2046,7 @@ void HandleConfigPostApi() {
   if (has_wifi_ssid)  ok = ok && SetConfigFieldValue("wifi_ssid",  webServer.arg("wifi_ssid"));
   if (has_wifi_pass)  ok = ok && SetConfigFieldValue("wifi_pass",  webServer.arg("wifi_pass"));
   if (has_failsafe_s) ok = ok && SetConfigFieldValue("failsafe_s", webServer.arg("failsafe_s"));
+  if (has_index)      ok = ok && SetConfigFieldValue("index",      webServer.arg("index"));
 
   if (!ok) {
     SendApiError(400, "invalid config value");
@@ -3084,6 +3104,12 @@ void PollSosBlueLed() {
   ledcWrite(1, (step % 2 == 0) ? 200 : 0);
 }
 
+// Pylon target with its sequence index for ordered sequential firing.
+struct PylonTarget {
+  IPAddress ip;
+  int seq_idx;  // pylon_index value from registry
+};
+
 // Low-level: build and send one OSC float packet to a single IP.
 void SendOscFloatToIP(const char *addr, float value, IPAddress dest) {
   const size_t addr_len = strlen(addr);
@@ -3103,6 +3129,52 @@ void SendOscFloatToIP(const char *addr, float value, IPAddress dest) {
   oscUdp.beginPacket(dest, kOscPort);
   oscUdp.write(pkt, pkt_len);
   oscUdp.endPacket();
+}
+
+// Extracts (IP, pylon_index) pairs from registry JSON, sorted ascending by pylon_index.
+// Ties (same index) stay grouped together. Returns count (max maxCount).
+int ExtractRegistryTargets(PylonTarget *dest, int maxCount) {
+  String json;
+  if (xSemaphoreTake(barmode_registry_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+    json = barmode_registry_json;
+    xSemaphoreGive(barmode_registry_mutex);
+  }
+  int count = 0, search = 0;
+  while (count < maxCount) {
+    int ip_pos = json.indexOf("\"ip\":\"", search);
+    if (ip_pos < 0) break;
+    ip_pos += 6;
+    int ip_end = json.indexOf('"', ip_pos);
+    if (ip_end < 0) break;
+    String ip_str = json.substring(ip_pos, ip_end);
+    search = ip_end + 1;
+    if (ip_str.length() < 7 || ip_str.indexOf('.') < 0) continue;
+    IPAddress addr;
+    if (!addr.fromString(ip_str)) continue;
+
+    // Find pylon_index within ±400 chars of this ip field (same JSON object)
+    int win_start = max(0, ip_pos - 400);
+    int win_end   = min((int)json.length(), ip_end + 400);
+    String window = json.substring(win_start, win_end);
+    int pi = window.indexOf("\"pylon_index\":");
+    int seq_idx = 0;
+    if (pi >= 0) seq_idx = window.substring(pi + 14).toInt();
+
+    dest[count].ip      = addr;
+    dest[count].seq_idx = seq_idx;
+    count++;
+  }
+  // Insertion sort by seq_idx (N ≤ 16, stable)
+  for (int i = 1; i < count; i++) {
+    PylonTarget key = dest[i];
+    int j = i - 1;
+    while (j >= 0 && dest[j].seq_idx > key.seq_idx) {
+      dest[j + 1] = dest[j];
+      j--;
+    }
+    dest[j + 1] = key;
+  }
+  return count;
 }
 
 // Extracts IPs from cached registry JSON into dest[]. Returns count (max maxCount).
@@ -3200,30 +3272,30 @@ void PollBarModeButtons() {
     // Normal: single fire on press. Double-tap (second press ≤300ms after release) + hold:
     // fires to each pylon sequentially 100ms apart, looping, until released or 5s max.
     {
-      static unsigned long btn1_release_ms = 0;
-      static bool     btn1_seq_active       = false;
+      static unsigned long btn1_release_ms      = 0;
+      static bool          btn1_seq_active       = false;
       static unsigned long btn1_seq_start_ms     = 0;
-      static unsigned long btn1_seq_last_fire_ms  = 0;
-      static IPAddress btn1_seq_ips[16];
-      static int       btn1_seq_ip_count    = 0;
-      static int       btn1_seq_ip_idx      = 0;
+      static unsigned long btn1_seq_last_fire_ms = 0;
+      static PylonTarget   btn1_seq_targets[16];
+      static int           btn1_seq_count        = 0;
+      static int           btn1_seq_group        = 0;  // index of current group start in sorted targets[]
 
       const bool rising  = btn_stable[1] && !btn_prev_stable[1];
       const bool falling = !btn_stable[1] && btn_prev_stable[1];
 
       if (rising) {
         if (btn1_release_ms > 0 && now - btn1_release_ms <= 300) {
-          // Double-tap: enter sequential looping mode
-          btn1_seq_ip_count = ExtractRegistryIPs(btn1_seq_ips, 16);
-          if (btn1_seq_ip_count > 0) {
+          // Double-tap: enter index-ordered sequential looping mode
+          btn1_seq_count = ExtractRegistryTargets(btn1_seq_targets, 16);
+          if (btn1_seq_count > 0) {
             btn1_seq_active      = true;
             btn1_seq_start_ms    = now;
             btn1_seq_last_fire_ms = now - 100;  // fire immediately on first poll
-            btn1_seq_ip_idx      = 0;
-            Console.printf("[BarMode] Btn1 seq: %d pylons\n", btn1_seq_ip_count);
+            btn1_seq_group       = 0;
+            Console.printf("[BarMode] Btn1 seq: %d pylons\n", btn1_seq_count);
           }
         } else {
-          // Normal single fire
+          // Normal single fire to all pylons simultaneously
           SendOscFloatToAllPylons(kOscAddrPulseSingle, 1.0f);
         }
       }
@@ -3236,16 +3308,25 @@ void PollBarModeButtons() {
         }
       }
 
-      // Sequence ticker
+      // Sequence ticker: fire one group (same pylon_index) per 100ms step
       if (btn1_seq_active) {
         if (!btn_stable[1] || now - btn1_seq_start_ms >= 5000) {
           btn1_seq_active = false;
           Console.println("[BarMode] Btn1 seq ended");
         } else if (now - btn1_seq_last_fire_ms >= 100) {
           btn1_seq_last_fire_ms = now;
-          SendOscFloatToIP(kOscAddrPulseSingle, 1.0f, btn1_seq_ips[btn1_seq_ip_idx]);
-          Console.printf("[BarMode] Btn1 seq → pylon %d/%d\n", btn1_seq_ip_idx + 1, btn1_seq_ip_count);
-          btn1_seq_ip_idx = (btn1_seq_ip_idx + 1) % btn1_seq_ip_count;
+          // Fire all targets in current group (same seq_idx)
+          const int cur_val = btn1_seq_targets[btn1_seq_group].seq_idx;
+          int fired = 0;
+          for (int g = btn1_seq_group;
+               g < btn1_seq_count && btn1_seq_targets[g].seq_idx == cur_val; g++) {
+            SendOscFloatToIP(kOscAddrPulseSingle, 1.0f, btn1_seq_targets[g].ip);
+            fired++;
+          }
+          // Advance group pointer (wrap)
+          btn1_seq_group += fired;
+          if (btn1_seq_group >= btn1_seq_count) btn1_seq_group = 0;
+          Console.printf("[BarMode] Btn1 seq idx=%d fired=%d\n", cur_val, fired);
         }
       }
     }
