@@ -3084,26 +3084,12 @@ void PollSosBlueLed() {
   ledcWrite(1, (step % 2 == 0) ? 200 : 0);
 }
 
-// Sends an OSC message with a single float arg to all pylons in the cached registry.
-// Skips silently if registry is empty (not yet fetched). Self is included via registry.
-// Called from Core 1; oscUdp send path is non-blocking.
-void SendOscFloatToAllPylons(const char *addr, float value) {
-  // Copy registry JSON under mutex
-  String json;
-  if (xSemaphoreTake(barmode_registry_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-    json = barmode_registry_json;
-    xSemaphoreGive(barmode_registry_mutex);
-  }
-  if (json.length() == 0) {
-    Console.printf("[BarMode] SendOsc %s: registry empty, skipping\n", addr);
-    return;
-  }
-
-  // Build OSC packet: addr (null-padded to 4-byte boundary) + ",f\0\0" + float BE
+// Low-level: build and send one OSC float packet to a single IP.
+void SendOscFloatToIP(const char *addr, float value, IPAddress dest) {
   const size_t addr_len = strlen(addr);
-  const size_t addr_pad = (addr_len + 4) & ~3u;  // includes null, rounds up to multiple of 4
-  const size_t pkt_len  = addr_pad + 4 + 4;       // + type tag + float
-  uint8_t pkt[40];                                 // max addr_pad=28 for longest address
+  const size_t addr_pad = (addr_len + 4) & ~3u;
+  const size_t pkt_len  = addr_pad + 8;
+  uint8_t pkt[40];
   memset(pkt, 0, sizeof(pkt));
   memcpy(pkt, addr, addr_len);
   pkt[addr_pad]     = ',';
@@ -3114,11 +3100,20 @@ void SendOscFloatToAllPylons(const char *addr, float value) {
   pkt[addr_pad + 5] = (uint8_t)(conv.u >> 16);
   pkt[addr_pad + 6] = (uint8_t)(conv.u >> 8);
   pkt[addr_pad + 7] = (uint8_t)(conv.u);
+  oscUdp.beginPacket(dest, kOscPort);
+  oscUdp.write(pkt, pkt_len);
+  oscUdp.endPacket();
+}
 
-  // Extract IPs from registry JSON: search for "ip":"..." entries
-  int sent = 0;
-  int idx = 0;
-  while (true) {
+// Extracts IPs from cached registry JSON into dest[]. Returns count (max maxCount).
+int ExtractRegistryIPs(IPAddress *dest, int maxCount) {
+  String json;
+  if (xSemaphoreTake(barmode_registry_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+    json = barmode_registry_json;
+    xSemaphoreGive(barmode_registry_mutex);
+  }
+  int count = 0, idx = 0;
+  while (count < maxCount) {
     int pos = json.indexOf("\"ip\":\"", idx);
     if (pos < 0) break;
     pos += 6;
@@ -3126,15 +3121,26 @@ void SendOscFloatToAllPylons(const char *addr, float value) {
     if (end < 0) break;
     String ip = json.substring(pos, end);
     idx = end + 1;
-    if (ip.length() < 7 || ip.indexOf('.') < 0) continue;  // sanity check
-    IPAddress dest;
-    if (!dest.fromString(ip)) continue;
-    oscUdp.beginPacket(dest, kOscPort);
-    oscUdp.write(pkt, pkt_len);
-    oscUdp.endPacket();
-    sent++;
+    if (ip.length() < 7 || ip.indexOf('.') < 0) continue;
+    IPAddress a;
+    if (!a.fromString(ip)) continue;
+    dest[count++] = a;
   }
-  Console.printf("[BarMode] SendOsc %s %.1f → %d pylons\n", addr, value, sent);
+  return count;
+}
+
+// Sends an OSC message with a single float arg to all pylons in the cached registry.
+// Skips silently if registry is empty (not yet fetched). Self is included via registry.
+// Called from Core 1; oscUdp send path is non-blocking.
+void SendOscFloatToAllPylons(const char *addr, float value) {
+  IPAddress ips[16];
+  const int count = ExtractRegistryIPs(ips, 16);
+  if (count == 0) {
+    Console.printf("[BarMode] SendOsc %s: registry empty, skipping\n", addr);
+    return;
+  }
+  for (int i = 0; i < count; i++) SendOscFloatToIP(addr, value, ips[i]);
+  Console.printf("[BarMode] SendOsc %s %.1f → %d pylons\n", addr, value, count);
 }
 
 // LED chase pattern while button 0 is held: blue→yellow→green, 100 ms per step.
@@ -3190,9 +3196,58 @@ void PollBarModeButtons() {
       display.invertDisplay(false);
     }
 
-    // Button 1 — BooshPulseSingle (rising edge only)
-    if (btn_stable[1] && !btn_prev_stable[1]) {
-      SendOscFloatToAllPylons(kOscAddrPulseSingle, 1.0f);
+    // Button 1 — BooshPulseSingle
+    // Normal: single fire on press. Double-tap (second press ≤300ms after release) + hold:
+    // fires to each pylon sequentially 100ms apart, looping, until released or 5s max.
+    {
+      static unsigned long btn1_release_ms = 0;
+      static bool     btn1_seq_active       = false;
+      static unsigned long btn1_seq_start_ms     = 0;
+      static unsigned long btn1_seq_last_fire_ms  = 0;
+      static IPAddress btn1_seq_ips[16];
+      static int       btn1_seq_ip_count    = 0;
+      static int       btn1_seq_ip_idx      = 0;
+
+      const bool rising  = btn_stable[1] && !btn_prev_stable[1];
+      const bool falling = !btn_stable[1] && btn_prev_stable[1];
+
+      if (rising) {
+        if (btn1_release_ms > 0 && now - btn1_release_ms <= 300) {
+          // Double-tap: enter sequential looping mode
+          btn1_seq_ip_count = ExtractRegistryIPs(btn1_seq_ips, 16);
+          if (btn1_seq_ip_count > 0) {
+            btn1_seq_active      = true;
+            btn1_seq_start_ms    = now;
+            btn1_seq_last_fire_ms = now - 100;  // fire immediately on first poll
+            btn1_seq_ip_idx      = 0;
+            Console.printf("[BarMode] Btn1 seq: %d pylons\n", btn1_seq_ip_count);
+          }
+        } else {
+          // Normal single fire
+          SendOscFloatToAllPylons(kOscAddrPulseSingle, 1.0f);
+        }
+      }
+
+      if (falling) {
+        btn1_release_ms = now;
+        if (btn1_seq_active) {
+          btn1_seq_active = false;
+          Console.println("[BarMode] Btn1 seq stopped");
+        }
+      }
+
+      // Sequence ticker
+      if (btn1_seq_active) {
+        if (!btn_stable[1] || now - btn1_seq_start_ms >= 5000) {
+          btn1_seq_active = false;
+          Console.println("[BarMode] Btn1 seq ended");
+        } else if (now - btn1_seq_last_fire_ms >= 100) {
+          btn1_seq_last_fire_ms = now;
+          SendOscFloatToIP(kOscAddrPulseSingle, 1.0f, btn1_seq_ips[btn1_seq_ip_idx]);
+          Console.printf("[BarMode] Btn1 seq → pylon %d/%d\n", btn1_seq_ip_idx + 1, btn1_seq_ip_count);
+          btn1_seq_ip_idx = (btn1_seq_ip_idx + 1) % btn1_seq_ip_count;
+        }
+      }
     }
 
     // Button 2 — BooshPulseTrain (rising edge only)
