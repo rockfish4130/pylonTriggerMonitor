@@ -2379,6 +2379,11 @@ void PollDevBoardButton() {
 }
 
 void setup() {
+  // Green LED on immediately as a power/boot indicator — before anything else.
+  ledcSetup(0, 5000, 8);
+  ledcAttachPin(kLedGreenPin, 0);
+  ledcWrite(0, 255);
+
   USB.begin();
   Serial.begin(115200);
   esp_task_wdt_delete(NULL);  // remove loopTask from watchdog; blocking calls (ping, HTTP) are intentional
@@ -2401,10 +2406,7 @@ void setup() {
 
   pinMode(kLedWhitePin, OUTPUT);
   digitalWrite(kLedWhitePin, LOW);
-  // Green/Blue/Yellow: 5kHz PWM carrier, duty updated in loop() for sine wave
-  ledcSetup(0, 5000, 8);
-  ledcAttachPin(kLedGreenPin, 0);
-  ledcWrite(0, 255);  // solid on at boot; PollBlinkLeds() transitions to sine wave
+  // Green already on from top of setup(). Blue/Yellow: 5kHz PWM carrier, duty updated in loop().
   ledcSetup(1, 5000, 8);
   ledcAttachPin(kLedBluePin, 1);
   ledcWrite(1, 0);
