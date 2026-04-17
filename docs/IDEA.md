@@ -40,9 +40,9 @@ PYLON866C	PYLON866C.local	192.168.4.39	Yes	0	No	2026-04-15 14:25:01
 
 ==========
 
-how robust is the wifi client? does it auto retry, auto rejoin, etc?
-goal is to make it quite robust to varied conditions.
-
+how robust is PYLON as a  wifi client? does it auto retry, auto rejoin, etc?
+goal is to make it quite robust to varied challenging conditions.
+any recommended changes?
 
 =========
 
@@ -55,3 +55,38 @@ Just a question. Do not edit code.
 
 PYLON should also display to OLED: temperature, battery V, battery charge %, battery time left on a single display page.
 Should spend about 60% of time on this page.
+
+
+========
+
+Add a special mode called BARMODE.
+Certain specific PYLONs will be set to Bar Mode, because they have additional hardware peripherals and corresponding added firmware features.
+BARMODE is activated when the Description field contains the text "BARMODE ENABLED"
+In BARMODE: the blue LED pulses similar to Moorse Code: --- ... ---
+
+In BARMODE: there are 4 buttons: N=0-3, wired as drawn in this schematic.
+Anytime these N=0-3 buttons are pressed, the YELLOW LED is held solid, and the GREEN LED blinks N+1 times.
+
+Any questions?
+=======
+In BARMODE:
+PYLON needs to be aware of all the other PYLONs that are online. This can be queried from rpi_python_control which exposes a REST API of the PYLONs registry.
+PYLON should periodially query that.
+
+PYLON should expose on the WEB UI an index of known PYLONs just like the "PYLON Registry" at http://rpiboosh.local/status (this is the WEB UI of rpi_python_control)
+
+Note that low-latency responsiveness of PYLON to OSC remains top priority.
+
+Any questions?
+
+
+When you think it's working, go ahead and OTA to BARBAR. Then inspect BARBAR's web UI to verify.
+
+=======
+PYLONs
+should service 3 additional OSC addresses, and these actions are the same as the 3 existing web buttons:
+/pylon/BooshPulseSingle (maps to API 50 msec pulse once) with arg 1.0. triggers a single action. no need for another message with arg 0.0
+/pylon/BooshPulseTrain (to 5x 50ms) with arg 1.0. triggers a single action. no need for another message with arg 0.0
+/pylon/BooshSteam   (to steam engine) with arg 1.0 starts the action and leaves it running.   /pylon/BooshSteam 0.0 stops the action.
+
+Any questions?
