@@ -92,6 +92,18 @@ constexpr const char *kTelemetryBatteryVoltageDefault = "N/A";
 constexpr const char *kTelemetryBatteryChargePercentDefault = "N/A";
 constexpr size_t kWebLogBufferMaxChars = 8192;
 
+// ---- Bar Mode ---------------------------------------------------------------
+// Activated when pylon_description contains kBarModeToken.
+// Features: SOS blue LED pattern; 4 buttons on IO1/IO2/IO5/IO6 that drive a
+// yellow-solid + green-blink(N+1) feedback sequence.
+constexpr const char *kBarModeToken = "BARMODE ENABLED";
+constexpr int kBarModeButtonPins[4] = {1, 2, 5, 6};  // IO1, IO2, IO5, IO6 (active HIGH, INPUT_PULLDOWN)
+// SOS Morse timing (unit = 150 ms): dot=1u, dash=3u, elem-gap=1u, letter-gap=3u, word-gap=7u
+constexpr unsigned long kSosUnitMs = 150;
+// Bar button blink sequence timing
+constexpr unsigned long kBarBlinkOnMs  = 250;
+constexpr unsigned long kBarBlinkOffMs = 250;
+
 Adafruit_SSD1306 display(kScreenWidth, kScreenHeight, &Wire, kOledReset);
 WiFiUDP oscUdp;
 WebServer webServer(80);
@@ -125,6 +137,8 @@ uint32_t trigger_event_count = 0;
 uint32_t total_boosh_open_ms = 0;       // cumulative valve-open time across all events
 unsigned long boosh_open_since_ms = 0;  // millis() when current boosh event started
 unsigned long identify_until_ms = 0;    // non-zero while identify mode is active
+bool barmode_active = false;            // true when description contains kBarModeToken
+bool barmode_seq_active = false;        // true while button blink sequence is playing
 
 // ---- Sequence state ---------------------------------------------------------
 enum SeqType { SEQ_NONE, SEQ_PULSE_ONCE, SEQ_PULSE_5X, SEQ_STEAM };
@@ -558,9 +572,14 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
   } else if (field == "desc" || field == "description") {
     pylon_description = value;
     changed = true;
+    barmode_active = pylon_description.indexOf(kBarModeToken) >= 0;
+    if (barmode_active) {
+      for (int i = 0; i < 4; i++) pinMode(kBarModeButtonPins[i], INPUT_PULLDOWN);
+    }
     if (log_output) {
       Console.print("[CFG] desc set: ");
       Console.println(pylon_description);
+      if (barmode_active) Console.println("[BarMode] ACTIVE");
     }
   } else if (field == "node") {
     const String new_id = NormalizePylonId(value);
@@ -2344,6 +2363,11 @@ void setup() {
   }
   serial_cli_line.reserve(192);
   LoadPylonConfig();
+  barmode_active = pylon_description.indexOf(kBarModeToken) >= 0;
+  if (barmode_active) {
+    for (int i = 0; i < 4; i++) pinMode(kBarModeButtonPins[i], INPUT_PULLDOWN);
+    Console.println("[BarMode] ACTIVE — buttons on IO1,IO2,IO5,IO6");
+  }
   PrintCliHelp();
   pinMode(kDevBoardButtonPin, INPUT_PULLUP);
   pinMode(kBatteryAdcPin, INPUT);
@@ -2873,6 +2897,115 @@ void PollSequence() {
   }
 }
 
+// ---- Bar Mode LEDs & Buttons ------------------------------------------------
+
+// SOS Morse pattern for blue LED: ... --- ...
+// Flat alternating array: [0]=ON duration, [1]=OFF duration, [2]=ON, ...
+// Timing unit = kSosUnitMs (150 ms). dot=1u, dash=3u, elem-gap=1u, letter-gap=3u, word-gap=7u
+static const uint16_t kSosMorseMs[] = {
+  // S: dot dot dot
+  150, 150,   // dot, elem-gap
+  150, 150,   // dot, elem-gap
+  150, 450,   // dot, letter-gap (3u)
+  // O: dash dash dash
+  450, 150,   // dash, elem-gap
+  450, 150,   // dash, elem-gap
+  450, 450,   // dash, letter-gap (3u)
+  // S: dot dot dot
+  150, 150,   // dot, elem-gap
+  150, 150,   // dot, elem-gap
+  150, 1050,  // dot, word-gap (7u)
+};
+constexpr int kSosMorseMsCount = (int)(sizeof(kSosMorseMs) / sizeof(kSosMorseMs[0]));
+
+// Drives the blue LED (LEDC channel 1) with the SOS pattern.
+// Called every loop iteration when barmode_active; no-op otherwise.
+void PollSosBlueLed() {
+  if (!barmode_active) return;
+  static int step = 0;
+  static unsigned long step_start_ms = 0;
+  const unsigned long now = millis();
+  if (step_start_ms == 0) step_start_ms = now;  // first call init
+
+  if (now - step_start_ms >= kSosMorseMs[step]) {
+    step = (step + 1) % kSosMorseMsCount;
+    step_start_ms = now;
+  }
+  // Even step = ON, odd step = OFF
+  ledcWrite(1, (step % 2 == 0) ? 200 : 0);
+}
+
+// Scans the 4 bar-mode buttons and drives the yellow-solid + green-blink(N+1) sequence.
+// Green = LEDC channel 0, Yellow = LEDC channel 2.
+// Sets barmode_seq_active so PollBlinkLeds() yields those channels.
+void PollBarModeButtons() {
+  if (!barmode_active) return;
+
+  const unsigned long now = millis();
+
+  // Per-button debounce
+  static bool btn_last_raw[4] = {};
+  static bool btn_stable[4]   = {};
+  static unsigned long btn_change_ms[4] = {};
+
+  for (int i = 0; i < 4; i++) {
+    const bool raw = digitalRead(kBarModeButtonPins[i]) == HIGH;
+    if (raw != btn_last_raw[i]) {
+      btn_last_raw[i] = raw;
+      btn_change_ms[i] = now;
+    }
+    if (now - btn_change_ms[i] >= 20) {
+      btn_stable[i] = raw;
+    }
+  }
+
+  // Blink sequence state machine
+  // seq_state: 0=idle, 1=green ON, 2=green OFF (gap between blinks)
+  static uint8_t seq_state = 0;
+  static int seq_blinks_left = 0;
+  static unsigned long seq_step_ms = 0;
+
+  if (seq_state == 0) {
+    barmode_seq_active = false;
+    // Detect first stable press; ignore while a button is still held from last trigger
+    static bool btn_was_stable[4] = {};
+    for (int i = 0; i < 4; i++) {
+      const bool rising = btn_stable[i] && !btn_was_stable[i];
+      btn_was_stable[i] = btn_stable[i];
+      if (rising) {
+        seq_blinks_left = i + 1;
+        seq_state = 1;
+        seq_step_ms = now;
+        barmode_seq_active = true;
+        ledcWrite(2, 200);  // yellow solid ON
+        ledcWrite(0, 200);  // green ON (first blink)
+        Console.printf("[BarMode] Button %d → yellow solid, green ×%d\n", i, i + 1);
+        break;
+      }
+    }
+  } else if (seq_state == 1) {  // green ON phase
+    if (now - seq_step_ms >= kBarBlinkOnMs) {
+      ledcWrite(0, 0);  // green OFF
+      seq_blinks_left--;
+      if (seq_blinks_left == 0) {
+        // Sequence complete
+        ledcWrite(2, 0);  // yellow OFF
+        seq_state = 0;
+        barmode_seq_active = false;
+      } else {
+        seq_state = 2;
+        seq_step_ms = now;
+      }
+    }
+  } else if (seq_state == 2) {  // gap between blinks
+    if (now - seq_step_ms >= kBarBlinkOffMs) {
+      ledcWrite(0, 200);  // green ON
+      seq_state = 1;
+      seq_step_ms = now;
+    }
+  }
+}
+
 // ---- Blink LEDs -------------------------------------------------------------
 
 void PollBlinkLeds() {
@@ -2898,9 +3031,14 @@ void PollBlinkLeds() {
   } else {
     if (identify_until_ms > 0) identify_until_ms = 0;  // clear expired flag
     constexpr float kMaxDuty = 0.66f * 255.0f;
-    ledcWrite(0, (uint8_t)(((1.0f + sinf(2.0f * M_PI * 0.4f * t)) / 2.0f) * kMaxDuty));  // green 0.4Hz
-    ledcWrite(1, (uint8_t)(((1.0f + sinf(2.0f * M_PI * 0.8f * t)) / 2.0f) * kMaxDuty));  // blue 0.8Hz
-    ledcWrite(2, (uint8_t)(((1.0f + sinf(2.0f * M_PI * 1.2f * t)) / 2.0f) * kMaxDuty));  // yellow 1.2Hz
+    // In barmode: green/yellow are owned by PollBarModeButtons(); blue by PollSosBlueLed().
+    if (!barmode_seq_active) {
+      ledcWrite(0, (uint8_t)(((1.0f + sinf(2.0f * M_PI * 0.4f * t)) / 2.0f) * kMaxDuty));  // green 0.4Hz
+      ledcWrite(2, (uint8_t)(((1.0f + sinf(2.0f * M_PI * 1.2f * t)) / 2.0f) * kMaxDuty));  // yellow 1.2Hz
+    }
+    if (!barmode_active) {
+      ledcWrite(1, (uint8_t)(((1.0f + sinf(2.0f * M_PI * 0.8f * t)) / 2.0f) * kMaxDuty));  // blue 0.8Hz
+    }
   }
 }
 
@@ -3007,6 +3145,8 @@ void loop() {
   static uint8_t identPhase = 0;
 
   PollBlinkLeds();
+  PollSosBlueLed();
+  PollBarModeButtons();
   PollSequence();
   PollSensors();
   PollSerialCli();
