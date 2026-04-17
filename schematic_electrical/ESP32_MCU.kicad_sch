@@ -1514,6 +1514,10 @@
 		(uuid "e4440fdb-5841-4e11-a03a-41daaa8a00ff")
 	)
 	(no_connect
+		(at 180.34 81.28)
+		(uuid "26fb3773-0f1a-4e62-a590-3df349c7d6c0")
+	)
+	(no_connect
 		(at 180.34 96.52)
 		(uuid "3b9bfc15-2ad2-4318-b904-7632de345e81")
 	)
@@ -1562,16 +1566,6 @@
 			(type default)
 		)
 		(uuid "00aab940-4093-4bdb-b776-aee562ce5927")
-	)
-	(wire
-		(pts
-			(xy 266.7 86.36) (xy 266.7 92.71)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "0206917e-04de-47f7-b801-12675dc18ee2")
 	)
 	(wire
 		(pts
@@ -1675,6 +1669,16 @@
 	)
 	(wire
 		(pts
+			(xy 180.34 88.9) (xy 266.7 88.9)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "2c30d49e-a0e9-4c15-830d-4f081aaf9771")
+	)
+	(wire
+		(pts
 			(xy 161.29 119.38) (xy 161.29 146.05)
 		)
 		(stroke
@@ -1682,16 +1686,6 @@
 			(type default)
 		)
 		(uuid "2d2f3543-584c-4bd1-bfe8-3cc883a235af")
-	)
-	(wire
-		(pts
-			(xy 180.34 81.28) (xy 231.14 81.28)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "2e8c5bd7-cd38-48b2-9c04-8cd4d6bf003e")
 	)
 	(wire
 		(pts
@@ -1785,13 +1779,13 @@
 	)
 	(wire
 		(pts
-			(xy 231.14 81.28) (xy 231.14 92.71)
+			(xy 180.34 83.82) (xy 231.14 83.82)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "5484a546-6e6f-49bf-b6f5-3ea760cfe656")
+		(uuid "57e509ba-0006-476c-9d6d-e9ffe97fe923")
 	)
 	(wire
 		(pts
@@ -1832,6 +1826,16 @@
 			(type default)
 		)
 		(uuid "6137e7f4-bf28-4e7a-a7a8-b94222b13001")
+	)
+	(wire
+		(pts
+			(xy 231.14 83.82) (xy 231.14 92.71)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "697e5cfb-bb93-44db-8a8b-e8e9033518c1")
 	)
 	(wire
 		(pts
@@ -1885,16 +1889,6 @@
 	)
 	(wire
 		(pts
-			(xy 180.34 83.82) (xy 248.92 83.82)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "7f89ccae-23d9-4d53-bb63-e70b0bd9aea8")
-	)
-	(wire
-		(pts
 			(xy 80.01 118.11) (xy 80.01 115.57)
 		)
 		(stroke
@@ -1935,16 +1929,6 @@
 	)
 	(wire
 		(pts
-			(xy 248.92 83.82) (xy 248.92 92.71)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "973c2e04-902c-4b12-b6de-310a868ba261")
-	)
-	(wire
-		(pts
 			(xy 140.97 63.5) (xy 142.24 63.5)
 		)
 		(stroke
@@ -1975,13 +1959,13 @@
 	)
 	(wire
 		(pts
-			(xy 137.16 76.2) (xy 142.24 76.2)
+			(xy 266.7 88.9) (xy 266.7 92.71)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "9cc4b699-0eff-4ae0-94f7-ed7ee64d4491")
+		(uuid "9ecb1a64-e6a9-40fa-a916-31da91172890")
 	)
 	(wire
 		(pts
@@ -2015,13 +1999,13 @@
 	)
 	(wire
 		(pts
-			(xy 137.16 43.18) (xy 193.04 43.18)
+			(xy 180.34 86.36) (xy 248.92 86.36)
 		)
 		(stroke
 			(width 0)
 			(type default)
 		)
-		(uuid "a9cfbb15-bffb-4ed0-b2d8-e92593c3769b")
+		(uuid "a9e4f50a-209c-4f32-bb4a-3c67dbdf98a3")
 	)
 	(wire
 		(pts
@@ -2065,16 +2049,6 @@
 	)
 	(wire
 		(pts
-			(xy 180.34 86.36) (xy 266.7 86.36)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "b65ddf86-0fa5-461d-beff-181c44dacb3b")
-	)
-	(wire
-		(pts
 			(xy 129.54 78.74) (xy 129.54 76.2)
 		)
 		(stroke
@@ -2082,6 +2056,16 @@
 			(type default)
 		)
 		(uuid "b994199d-0473-4175-bede-92476b253b34")
+	)
+	(wire
+		(pts
+			(xy 248.92 86.36) (xy 248.92 92.71)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "bf49a900-db8d-4725-83ad-ceca840b2ff3")
 	)
 	(wire
 		(pts
@@ -2152,16 +2136,6 @@
 			(type default)
 		)
 		(uuid "e5a7d196-84f9-4404-a68b-fd80e3bf03a3")
-	)
-	(wire
-		(pts
-			(xy 137.16 43.18) (xy 137.16 76.2)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "e7b10d15-e059-4527-93a4-4a1847274def")
 	)
 	(wire
 		(pts
@@ -2395,28 +2369,6 @@
 		(uuid "1d15ebd7-6bcb-43de-9ba2-faf5666a8334")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 204.4314 35.56 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-				(hide yes)
-			)
-		)
-	)
-	(global_label "BUTTON4_ESP3V3"
-		(shape input)
-		(at 193.04 43.18 0)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "2187e3f0-67c9-4ff8-8b64-eb7718f9428b")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 204.4314 43.18 0)
 			(effects
 				(font
 					(size 1.27 1.27)
