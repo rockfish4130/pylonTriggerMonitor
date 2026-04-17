@@ -86,10 +86,10 @@ constexpr const char *kRegistryHeartbeatPath = "/api/pylons/heartbeat";
 constexpr uint16_t kRegistryTtlSec = 30;
 constexpr unsigned long kRegistryHeartbeatIntervalMs = 10000;
 constexpr uint16_t kRegistryHttpTimeoutMs = 2500;
-constexpr const char *kFirmwareSemver = "0.0.1";
+constexpr const char *kFirmwareSemver = "0.0.2";
 constexpr const char *kFirmwareBuildDate = __DATE__;
 constexpr const char *kFirmwareBuildTime = __TIME__;
-constexpr const char *kFirmwareVersion = "0.0.1 " __DATE__ " " __TIME__;
+constexpr const char *kFirmwareVersion = "0.0.2 " __DATE__ " " __TIME__;
 constexpr const char *kTelemetryTemperatureDefault = "N/A";
 constexpr const char *kTelemetryBatteryVoltageDefault = "N/A";
 constexpr const char *kTelemetryBatteryChargePercentDefault = "N/A";
@@ -2273,29 +2273,30 @@ void HandleChartTempShortApi() {
 
 // ---- OTA update handlers ----------------------------------------------------
 
-// Called on every UPLOAD_FILE_WRITE chunk. The main loop is blocked during the
-// upload, so we drive the display and green LED directly from here.
+// Pulses green LED at 10 Hz during OTA. Called repeatedly during UPLOAD_FILE_WRITE.
 void PollOtaDisplay() {
   static unsigned long last_toggle_ms = 0;
   static bool green_on = false;
   const unsigned long now = millis();
-  if (now - last_toggle_ms >= 50) {  // 10 Hz: toggle every 50 ms
-    last_toggle_ms = now;
-    green_on = !green_on;
-    ledcWrite(0, green_on ? 220 : 0);
-  }
+  if (now - last_toggle_ms < 50) return;
+  last_toggle_ms = now;
+  green_on = !green_on;
+  ledcWrite(0, green_on ? 220 : 0);
 }
 
 void HandleOtaUploadBody() {
   HTTPUpload &upload = webServer.upload();
-
   if (upload.status == UPLOAD_FILE_START) {
     Console.printf("[OTA] Start: %s (%u bytes)\n", upload.filename.c_str(), upload.totalSize);
-    // Silence other LEDs and show OTA status immediately (main loop is now blocked).
-    ledcWrite(0, 0);  // green — will be driven by PollOtaDisplay()
+    ledcWrite(0, 0);  // green — driven by PollOtaDisplay()
     ledcWrite(1, 0);  // blue off
     ledcWrite(2, 0);  // yellow off
-    ShowStatus("OTA...", "Flashing...");
+    display.clearDisplay();
+    display.setTextSize(2);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.print("OTA...");
+    display.display();
     if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
       Console.printf("[OTA] begin() failed: %s\n", Update.errorString());
     }
@@ -2305,7 +2306,7 @@ void HandleOtaUploadBody() {
       Console.printf("[OTA] write() failed: %s\n", Update.errorString());
     }
   } else if (upload.status == UPLOAD_FILE_END) {
-    ledcWrite(0, 0);  // green off
+    ledcWrite(0, 0);
     ShowStatus("OTA done", "Rebooting...");
     if (Update.end(true)) {
       Console.printf("[OTA] Success: %u bytes written. Rebooting.\n", upload.totalSize);
