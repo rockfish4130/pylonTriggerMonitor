@@ -3084,10 +3084,10 @@ void PollSosBlueLed() {
   ledcWrite(1, (step % 2 == 0) ? 200 : 0);
 }
 
-// Sends /pylon/BooshMain with float arg to all pylons in the cached registry via UDP OSC.
+// Sends an OSC message with a single float arg to all pylons in the cached registry.
 // Skips silently if registry is empty (not yet fetched). Self is included via registry.
 // Called from Core 1; oscUdp send path is non-blocking.
-void SendOscBooshAllPylons(float value) {
+void SendOscFloatToAllPylons(const char *addr, float value) {
   // Copy registry JSON under mutex
   String json;
   if (xSemaphoreTake(barmode_registry_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
@@ -3095,22 +3095,25 @@ void SendOscBooshAllPylons(float value) {
     xSemaphoreGive(barmode_registry_mutex);
   }
   if (json.length() == 0) {
-    Console.println("[BarMode] SendOscBooshAll: registry empty, skipping");
+    Console.printf("[BarMode] SendOsc %s: registry empty, skipping\n", addr);
     return;
   }
 
-  // Build OSC packet for /pylon/BooshMain <float>
-  // Address "/pylon/BooshMain" (16 chars) padded to 20 bytes, ",f\0\0" (4 bytes), float BE (4 bytes) = 28 bytes
-  uint8_t pkt[28];
+  // Build OSC packet: addr (null-padded to 4-byte boundary) + ",f\0\0" + float BE
+  const size_t addr_len = strlen(addr);
+  const size_t addr_pad = (addr_len + 4) & ~3u;  // includes null, rounds up to multiple of 4
+  const size_t pkt_len  = addr_pad + 4 + 4;       // + type tag + float
+  uint8_t pkt[40];                                 // max addr_pad=28 for longest address
   memset(pkt, 0, sizeof(pkt));
-  memcpy(pkt, kOscAddress, 16);   // "/pylon/BooshMain"
-  pkt[20] = ','; pkt[21] = 'f';  // type tag
+  memcpy(pkt, addr, addr_len);
+  pkt[addr_pad]     = ',';
+  pkt[addr_pad + 1] = 'f';
   union { float f; uint32_t u; } conv;
   conv.f = value;
-  pkt[24] = (uint8_t)(conv.u >> 24);
-  pkt[25] = (uint8_t)(conv.u >> 16);
-  pkt[26] = (uint8_t)(conv.u >> 8);
-  pkt[27] = (uint8_t)(conv.u);
+  pkt[addr_pad + 4] = (uint8_t)(conv.u >> 24);
+  pkt[addr_pad + 5] = (uint8_t)(conv.u >> 16);
+  pkt[addr_pad + 6] = (uint8_t)(conv.u >> 8);
+  pkt[addr_pad + 7] = (uint8_t)(conv.u);
 
   // Extract IPs from registry JSON: search for "ip":"..." entries
   int sent = 0;
@@ -3127,11 +3130,11 @@ void SendOscBooshAllPylons(float value) {
     IPAddress dest;
     if (!dest.fromString(ip)) continue;
     oscUdp.beginPacket(dest, kOscPort);
-    oscUdp.write(pkt, sizeof(pkt));
+    oscUdp.write(pkt, pkt_len);
     oscUdp.endPacket();
     sent++;
   }
-  Console.printf("[BarMode] SendOscBooshAll %.1f → %d pylons\n", value, sent);
+  Console.printf("[BarMode] SendOsc %s %.1f → %d pylons\n", addr, value, sent);
 }
 
 // LED chase pattern while button 0 is held: blue→yellow→green, 100 ms per step.
@@ -3168,22 +3171,43 @@ void PollBarModeButtons() {
     }
   }
 
-  // Button 0: boosh-all OSC on press/release + chase LED + OLED invert.
-  // Runs alongside the blink-seq state machine below.
+  // Button 0: BooshMain open/close all pylons; chase LEDs + OLED invert while held.
+  // Button 1: BooshPulseSingle — fire once on press (no release msg).
+  // Button 2: BooshPulseTrain  — fire once on press (no release msg).
+  // Button 3: BooshSteam open/close all pylons (no LED/OLED effects).
+  // All run alongside the blink-seq state machine below.
   {
-    static bool btn0_prev_stable = false;
-    if (btn_stable[0] && !btn0_prev_stable) {
-      // Rising edge: open all pylons
-      SendOscBooshAllPylons(1.0f);
+    static bool btn_prev_stable[4] = {};
+
+    // Button 0 — BooshMain hold
+    if (btn_stable[0] && !btn_prev_stable[0]) {
+      SendOscFloatToAllPylons(kOscAddress, 1.0f);
       barmode_btn0_held = true;
       display.invertDisplay(true);
-    } else if (!btn_stable[0] && btn0_prev_stable) {
-      // Falling edge: close all pylons
-      SendOscBooshAllPylons(0.0f);
+    } else if (!btn_stable[0] && btn_prev_stable[0]) {
+      SendOscFloatToAllPylons(kOscAddress, 0.0f);
       barmode_btn0_held = false;
       display.invertDisplay(false);
     }
-    btn0_prev_stable = btn_stable[0];
+
+    // Button 1 — BooshPulseSingle (rising edge only)
+    if (btn_stable[1] && !btn_prev_stable[1]) {
+      SendOscFloatToAllPylons(kOscAddrPulseSingle, 1.0f);
+    }
+
+    // Button 2 — BooshPulseTrain (rising edge only)
+    if (btn_stable[2] && !btn_prev_stable[2]) {
+      SendOscFloatToAllPylons(kOscAddrPulseTrain, 1.0f);
+    }
+
+    // Button 3 — BooshSteam hold
+    if (btn_stable[3] && !btn_prev_stable[3]) {
+      SendOscFloatToAllPylons(kOscAddrSteam, 1.0f);
+    } else if (!btn_stable[3] && btn_prev_stable[3]) {
+      SendOscFloatToAllPylons(kOscAddrSteam, 0.0f);
+    }
+
+    for (int i = 0; i < 4; i++) btn_prev_stable[i] = btn_stable[i];
   }
 
   // Blink sequence state machine
