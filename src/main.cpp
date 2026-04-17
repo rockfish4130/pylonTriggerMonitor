@@ -106,6 +106,7 @@ constexpr unsigned long kSosUnitMs = 150;
 // Bar button blink sequence timing
 constexpr unsigned long kBarBlinkOnMs  = 250;
 constexpr unsigned long kBarBlinkOffMs = 250;
+constexpr unsigned long kBarModeRegistryIntervalMs = 10000;  // poll rpiboosh pylon list every 10 s
 
 Adafruit_SSD1306 display(kScreenWidth, kScreenHeight, &Wire, kOledReset);
 WiFiUDP oscUdp;
@@ -142,6 +143,9 @@ unsigned long boosh_open_since_ms = 0;  // millis() when current boosh event sta
 unsigned long identify_until_ms = 0;    // non-zero while identify mode is active
 bool barmode_active = false;            // true when description contains kBarModeToken
 bool barmode_seq_active = false;        // true while button blink sequence is playing
+SemaphoreHandle_t barmode_registry_mutex = nullptr;
+String barmode_registry_json;           // cached GET /api/pylons response; protected by barmode_registry_mutex
+unsigned long barmode_registry_last_fetch_ms = 0;
 
 // ---- Sequence state ---------------------------------------------------------
 enum SeqType { SEQ_NONE, SEQ_PULSE_ONCE, SEQ_PULSE_5X, SEQ_STEAM };
@@ -1358,6 +1362,7 @@ String BuildTelemetryApiJson() {
   payload += "\"total_boosh_open_s\":" + String(total_boosh_open_ms / 1000.0f, 1) + ",";
   payload += "\"ap_enabled\":" + String(ap_enabled ? "true" : "false") + ",";
   payload += "\"ap_active\":" + String(ap_active ? "true" : "false") + ",";
+  payload += "\"barmode_active\":" + String(barmode_active ? "true" : "false") + ",";
   payload += "\"wifi_ssid\":\"" + JsonEscape(user_wifi_ssid) + "\",";
   payload += "\"failsafe_ms\":" + String(boosh_failsafe_timeout_ms) + ",";
   payload += "\"target_ip\":\"" + JsonEscape(target_ip_string) + "\",";
@@ -1567,6 +1572,12 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       <h2>Temperature — 24 h</h2>
       <img id="chart-temp-long" src="/api/chart/temp/long" style="width:100%;border-radius:8px;display:block" alt="24-h temperature chart">
     </div>
+    <div id="registry-panel" class="panel" style="margin-top:16px;display:none">
+      <h2>PYLON Registry</h2>
+      <div id="registry-content" style="overflow-x:auto">
+        <span style="color:var(--muted);font-size:13px">Loading...</span>
+      </div>
+    </div>
     <div class="grid" style="margin-top:16px">
       <section class="panel"><h2>Telemetry</h2><div id="meta" class="meta"></div></section>
       <section class="panel"><h2>Serial Console</h2><div id="log"><pre id="log-text"></pre></div></section>
@@ -1591,7 +1602,9 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       if (input.dataset.dirty === 'true') return;
       input.value = nextValue ?? '';
     }
+    let barmodeActive = false;
     function renderMeta(data) {
+      barmodeActive = !!data.barmode_active;
       const rows = [
         ['Pylon ID', data.pylon_id],
         ['Description', data.description],
@@ -1879,12 +1892,53 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       document.getElementById('chart-temp-short').src = '/api/chart/temp/short?t='    + t;
       document.getElementById('chart-temp-long').src  = '/api/chart/temp/long?t='     + t;
     }
+    function renderRegistry(data) {
+      const panel = document.getElementById('registry-panel');
+      const el = document.getElementById('registry-content');
+      if (!barmodeActive) { panel.style.display = 'none'; return; }
+      panel.style.display = '';
+      if (!data || data.status === 'pending') { el.innerHTML = '<span style="color:var(--muted);font-size:13px">Fetching registry...</span>'; return; }
+      if (data.status === 'unavailable') { el.innerHTML = '<span style="color:var(--muted);font-size:13px">Unavailable</span>'; return; }
+      const entries = (data.data && data.data.entries) || [];
+      const offline = (data.data && data.data.offline_entries) || [];
+      const all = [...entries, ...offline];
+      if (all.length === 0) { el.innerHTML = '<span style="color:var(--muted);font-size:13px">No pylons registered</span>'; return; }
+      const th = s => `<th style="text-align:left;padding:4px 10px;color:var(--muted);font-weight:500;font-size:12px;white-space:nowrap">${s}</th>`;
+      const td = (s, style) => `<td style="padding:4px 10px;font-size:13px;white-space:nowrap${style?';'+style:''}">${s}</td>`;
+      const badge = active => active
+        ? '<span style="background:#1a3a1a;color:#4caf50;border-radius:6px;padding:1px 7px;font-size:11px">Online</span>'
+        : '<span style="background:#2a1a1a;color:#e57373;border-radius:6px;padding:1px 7px;font-size:11px">Offline</span>';
+      const fmt = (v, unit, dec=0) => (v == null || v === '') ? '-' : (+v).toFixed(dec) + unit;
+      const rows = all.map(p => `<tr style="border-top:1px solid var(--line)">
+        ${td('<b>'+esc(p.pylon_id||'?')+'</b>')}
+        ${td(esc(p.hostname||'-'))}
+        ${td(esc(p.ip||'-'),'color:var(--muted)')}
+        ${td(badge(p.active))}
+        ${td(p.seconds_since_seen != null ? p.seconds_since_seen+'s ago' : '-','color:var(--muted)')}
+        ${td(fmt(p.battery_charge_pct,'%',0))}
+        ${td(fmt(p.battery_voltage_v,'V',2))}
+        ${td(fmt(p.temperature_f,'\u00b0F',1))}
+        ${td(fmt(p.wifi_rssi_dbm,' dBm',0))}
+        ${td(p.ping_avg_ms != null ? p.ping_avg_ms+'ms' : '-')}
+        ${td(esc(p.fw_version||'-'),'color:var(--muted);font-size:11px')}
+      </tr>`).join('');
+      el.innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr>
+        ${th('ID')}${th('Host')}${th('IP')}${th('Status')}${th('Seen')}${th('Bat%')}${th('BatV')}${th('Temp')}${th('RSSI')}${th('Ping')}${th('FW')}
+      </tr></thead><tbody>${rows}</tbody></table>
+      <div style="color:var(--muted);font-size:11px;margin-top:6px">${entries.length} online, ${offline.length} recently offline \u2014 ${esc((data.data&&data.data.server_time)||'')}</div>`;
+    }
+    async function refreshRegistry() {
+      try { renderRegistry(await fetchJson('/api/registry')); }
+      catch(e) { document.getElementById('registry-content').innerHTML = '<span style="color:#e57373;font-size:13px">Error: '+esc(e.message)+'</span>'; }
+    }
     refreshTelemetry();
     refreshLogs();
     refreshCharts();
+    refreshRegistry();
     setInterval(refreshTelemetry, 1000);
     setInterval(refreshLogs, 1500);
     setInterval(refreshCharts, 15000);
+    setInterval(refreshRegistry, 10000);
   </script>
 </body>
 </html>
@@ -1903,6 +1957,27 @@ void HandleLogsApi() {
   payload.reserve(web_log_text.length() + 32);
   payload = "{\"log\":\"" + JsonEscape(web_log_text) + "\"}";
   webServer.send(200, "application/json", payload);
+}
+
+void HandleBarModeRegistryApi() {
+  if (!barmode_active) {
+    webServer.send(200, "application/json", "{\"status\":\"unavailable\",\"reason\":\"barmode not active\"}");
+    return;
+  }
+  if (!barmode_registry_mutex) {
+    webServer.send(503, "application/json", "{\"status\":\"unavailable\"}");
+    return;
+  }
+  String json;
+  if (xSemaphoreTake(barmode_registry_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+    json = barmode_registry_json;
+    xSemaphoreGive(barmode_registry_mutex);
+  }
+  if (json.length() == 0) {
+    webServer.send(503, "application/json", "{\"status\":\"pending\"}");
+    return;
+  }
+  webServer.send(200, "application/json", json);
 }
 
 void SendApiError(int status_code, const String &message) {
@@ -2350,6 +2425,7 @@ void SetupWebServer() {
   webServer.on("/api/chart/battery/short", HTTP_GET, HandleChartBatteryShortApi);
   webServer.on("/api/chart/temp/long",     HTTP_GET, HandleChartTempLongApi);
   webServer.on("/api/chart/temp/short",    HTTP_GET, HandleChartTempShortApi);
+  webServer.on("/api/registry", HTTP_GET, HandleBarModeRegistryApi);
   webServer.on("/api/ota", HTTP_POST, HandleOtaApi, HandleOtaUploadBody);
   webServer.on("/api/identify", HTTP_POST, HandleIdentifyApi);
   webServer.on("/api/sequence/pulse_once", HTTP_POST, HandleSeqPulseOnceApi);
@@ -2394,6 +2470,7 @@ void setup() {
   }
   serial_cli_line.reserve(192);
   LoadPylonConfig();
+  barmode_registry_mutex = xSemaphoreCreateMutex();
   barmode_active = pylon_description.indexOf(kBarModeToken) >= 0;
   if (barmode_active) {
     for (int i = 0; i < 4; i++) pinMode(kBarModeButtonPins[i], INPUT_PULLDOWN);
@@ -3200,6 +3277,28 @@ void PingTask(void *) {
 
     // Registry HTTP runs here (Core 0) so it never blocks OSC on the main loop.
     HandleRegistry(millis());
+
+    // In BARMODE: periodically fetch the full pylon list from rpiboosh for the web UI.
+    if (barmode_active && barmode_registry_mutex) {
+      const unsigned long now_r = millis();
+      if (now_r - barmode_registry_last_fetch_ms >= kBarModeRegistryIntervalMs) {
+        barmode_registry_last_fetch_ms = now_r;
+        HTTPClient http;
+        http.begin(String(kRegistryBaseUrlPrimary) + "/api/pylons");
+        http.setTimeout(kRegistryHttpTimeoutMs);
+        const int code = http.GET();
+        if (code == 200) {
+          const String body = http.getString();
+          if (xSemaphoreTake(barmode_registry_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            barmode_registry_json = body;
+            xSemaphoreGive(barmode_registry_mutex);
+          }
+        } else {
+          Console.printf("[BarMode] registry fetch failed: %d\n", code);
+        }
+        http.end();
+      }
+    }
 
     vTaskDelay(pdMS_TO_TICKS(10));  // yield; ping timing is driven by lastPingMs
   }
