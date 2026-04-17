@@ -100,6 +100,7 @@ bool web_server_started = false;
 bool boosh_failsafe_armed = false;
 unsigned long boosh_failsafe_start_ms = 0;
 unsigned long boosh_failsafe_note_until_ms = 0;
+unsigned long boosh_failsafe_timeout_ms = kBooshFailsafeTimeoutMs;  // runtime, persisted in NVS
 unsigned long wifi_connected_since_ms = 0;
 uint8_t last_disconnect_reason = WIFI_REASON_UNSPECIFIED;
 bool wifi_has_ip = false;
@@ -177,6 +178,9 @@ constexpr const char *kPrefsKeyDesc = "desc";
 constexpr const char *kPrefsKeyAp = "ap_en";
 constexpr const char *kPrefsKeyUserSsid = "usr_ssid";
 constexpr const char *kPrefsKeyUserPass = "usr_pass";
+constexpr const char *kPrefsKeyFailsafeMs = "failsafe_ms";
+constexpr uint32_t kBooshFailsafeMinMs  = 1000;
+constexpr uint32_t kBooshFailsafeMaxMs  = 60000;
 
 void AppendWebLogLine(const String &line) {
   web_log_text += line;
@@ -396,6 +400,7 @@ bool SavePylonConfig() {
   prefs.putBool(kPrefsKeyAp, ap_enabled);
   prefs.putString(kPrefsKeyUserSsid, user_wifi_ssid);
   prefs.putString(kPrefsKeyUserPass, user_wifi_pass);
+  prefs.putUInt(kPrefsKeyFailsafeMs, static_cast<uint32_t>(boosh_failsafe_timeout_ms));
   prefs.end();
   return true;
 }
@@ -432,6 +437,8 @@ void PrintPylonConfig() {
   Console.println(user_wifi_ssid.length() > 0 ? user_wifi_ssid : "(not set)");
   Console.print("  wifi_pass: ");
   Console.println(user_wifi_pass.length() > 0 ? "***" : "(not set)");
+  Console.print("  failsafe_ms: ");
+  Console.println(boosh_failsafe_timeout_ms);
 }
 
 void LoadPylonConfig() {
@@ -450,6 +457,7 @@ void LoadPylonConfig() {
   ap_enabled = prefs.getBool(kPrefsKeyAp, false);
   user_wifi_ssid = prefs.getString(kPrefsKeyUserSsid, "");
   user_wifi_pass = prefs.getString(kPrefsKeyUserPass, "");
+  boosh_failsafe_timeout_ms = prefs.getUInt(kPrefsKeyFailsafeMs, kBooshFailsafeTimeoutMs);
   stored_desc.trim();
 
   const bool unprogrammed = stored_id.length() == 0;
@@ -503,6 +511,7 @@ void PrintCliHelp() {
   Console.println("  set ap true|false  (enable/disable WiFi AP mode)");
   Console.println("  set wifi_ssid <value>  (user WiFi SSID fallback)");
   Console.println("  set wifi_pass <value>  (user WiFi password)");
+  Console.println("  set failsafe_s <value> (solenoid failsafe timeout in seconds, 1-60)");
   Console.println("  clear nvs          (erase saved id/host/desc)");
 }
 
@@ -590,9 +599,26 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
     if (log_output) {
       Console.println("[CFG] wifi_pass updated");
     }
+  } else if (field == "failsafe_s" || field == "failsafe_ms") {
+    const float secs = value.toFloat();
+    const unsigned long ms = (field == "failsafe_ms")
+        ? static_cast<unsigned long>(secs)
+        : static_cast<unsigned long>(secs * 1000.0f);
+    if (ms < kBooshFailsafeMinMs || ms > kBooshFailsafeMaxMs) {
+      if (log_output) {
+        Console.printf("[CFG] failsafe out of range (%lu-%lu ms)\n",
+                       (unsigned long)kBooshFailsafeMinMs, (unsigned long)kBooshFailsafeMaxMs);
+      }
+      return false;
+    }
+    boosh_failsafe_timeout_ms = ms;
+    changed = true;
+    if (log_output) {
+      Console.printf("[CFG] failsafe_ms set: %lu\n", boosh_failsafe_timeout_ms);
+    }
   } else {
     if (log_output) {
-      Console.println("[CFG] unknown set field. use id|host|desc|node|ap");
+      Console.println("[CFG] unknown set field. use id|host|desc|node|ap|failsafe_s");
     }
     return false;
   }
@@ -624,7 +650,8 @@ String BuildConfigApiJson() {
   payload += "\"description\":\"" + JsonEscape(pylon_description) + "\",";
   payload += "\"ap_enabled\":" + String(ap_enabled ? "true" : "false") + ",";
   payload += "\"ap_active\":" + String(ap_active ? "true" : "false") + ",";
-  payload += "\"wifi_ssid\":\"" + JsonEscape(user_wifi_ssid) + "\"";
+  payload += "\"wifi_ssid\":\"" + JsonEscape(user_wifi_ssid) + "\",";
+  payload += "\"failsafe_ms\":" + String(boosh_failsafe_timeout_ms);
   payload += "}";
   return payload;
 }
@@ -1308,6 +1335,8 @@ String BuildTelemetryApiJson() {
   payload += "\"total_boosh_open_s\":" + String(total_boosh_open_ms / 1000.0f, 1) + ",";
   payload += "\"ap_enabled\":" + String(ap_enabled ? "true" : "false") + ",";
   payload += "\"ap_active\":" + String(ap_active ? "true" : "false") + ",";
+  payload += "\"wifi_ssid\":\"" + JsonEscape(user_wifi_ssid) + "\",";
+  payload += "\"failsafe_ms\":" + String(boosh_failsafe_timeout_ms) + ",";
   payload += "\"target_ip\":\"" + JsonEscape(target_ip_string) + "\",";
   {
     char buf[16];
@@ -1460,6 +1489,10 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           <label>SSID <input id="cfg-wifi-ssid" placeholder="leave blank to disable"></label>
           <label>Password <input id="cfg-wifi-pass" type="password" placeholder=""></label>
         </div>
+        <div style="border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
+          <span style="color:var(--muted);font-size:13px">Solenoid Safety</span>
+          <label>Failsafe timeout (s) <input id="cfg-failsafe-s" name="failsafe_s" type="number" min="1" max="60" step="0.1" style="width:80px"></label>
+        </div>
         <div style="border-top:1px solid var(--line);padding-top:10px;display:flex;align-items:center;gap:10px">
           <input type="checkbox" id="cfg-ap" style="width:18px;height:18px;margin:0;cursor:pointer;accent-color:var(--accent)">
           <span style="color:var(--muted);font-size:14px">Enable WiFi AP &mdash; SSID: <code>PYLON_<em>id</em></code>, IP <code>10.1.2.3</code></span>
@@ -1575,6 +1608,9 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       syncConfigField('cfg-host', (data.hostname || '').replace(/\.local$/,''));
       syncConfigField('cfg-description', data.description || '');
       syncConfigField('cfg-wifi-ssid', data.wifi_ssid || '');
+      const fsInput = document.getElementById('cfg-failsafe-s');
+      if (fsInput && document.activeElement !== fsInput)
+        fsInput.value = data.failsafe_ms != null ? (data.failsafe_ms / 1000).toFixed(1) : '5.0';
       const apBox = document.getElementById('cfg-ap');
       if (apBox && document.activeElement !== apBox) apBox.checked = !!data.ap_enabled;
     }
@@ -1590,7 +1626,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     }
     const triggerButton = document.getElementById('trigger');
     const configForm = document.getElementById('config-form');
-    const configInputs = ['cfg-id', 'cfg-host', 'cfg-description', 'cfg-node', 'cfg-wifi-ssid', 'cfg-wifi-pass']
+    const configInputs = ['cfg-id', 'cfg-host', 'cfg-description', 'cfg-node', 'cfg-wifi-ssid', 'cfg-wifi-pass', 'cfg-failsafe-s']
       .map((id) => document.getElementById(id))
       .filter(Boolean);
     let holdActive = false;
@@ -1654,6 +1690,8 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       if (wifiSsid) body.set('wifi_ssid', wifiSsid);
       const wifiPass = document.getElementById('cfg-wifi-pass').value;
       if (wifiPass) body.set('wifi_pass', wifiPass);
+      const failsafeS = document.getElementById('cfg-failsafe-s').value.trim();
+      if (failsafeS) body.set('failsafe_s', failsafeS);
       try {
         const result = await fetchJson('/api/config', {
           method:'POST',
@@ -1858,11 +1896,13 @@ void HandleConfigPostApi() {
   const bool has_id = webServer.hasArg("id");
   const bool has_host = webServer.hasArg("host");
   const bool has_desc = webServer.hasArg("description") || webServer.hasArg("desc");
-  const bool has_wifi_ssid = webServer.hasArg("wifi_ssid");
-  const bool has_wifi_pass = webServer.hasArg("wifi_pass");
+  const bool has_wifi_ssid   = webServer.hasArg("wifi_ssid");
+  const bool has_wifi_pass   = webServer.hasArg("wifi_pass");
+  const bool has_failsafe_s  = webServer.hasArg("failsafe_s");
 
-  if (!has_node && !has_id && !has_host && !has_desc && !has_wifi_ssid && !has_wifi_pass) {
-    SendApiError(400, "expected one of: node, id, host, description, wifi_ssid, wifi_pass");
+  if (!has_node && !has_id && !has_host && !has_desc &&
+      !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s) {
+    SendApiError(400, "expected one of: node, id, host, description, wifi_ssid, wifi_pass, failsafe_s");
     return;
   }
 
@@ -1882,8 +1922,9 @@ void HandleConfigPostApi() {
                                    webServer.hasArg("description") ? webServer.arg("description")
                                                                    : webServer.arg("desc"));
   }
-  if (has_wifi_ssid) ok = ok && SetConfigFieldValue("wifi_ssid", webServer.arg("wifi_ssid"));
-  if (has_wifi_pass) ok = ok && SetConfigFieldValue("wifi_pass", webServer.arg("wifi_pass"));
+  if (has_wifi_ssid)  ok = ok && SetConfigFieldValue("wifi_ssid",  webServer.arg("wifi_ssid"));
+  if (has_wifi_pass)  ok = ok && SetConfigFieldValue("wifi_pass",  webServer.arg("wifi_pass"));
+  if (has_failsafe_s) ok = ok && SetConfigFieldValue("failsafe_s", webServer.arg("failsafe_s"));
 
   if (!ok) {
     SendApiError(400, "invalid config value");
@@ -3042,7 +3083,7 @@ void loop() {
   if (!wifi_has_ip && wifi_connected_since_ms == 0) {
     wifi_connected_since_ms = now;
   }
-  if (boosh_failsafe_armed && now - boosh_failsafe_start_ms >= kBooshFailsafeTimeoutMs) {
+  if (boosh_failsafe_armed && now - boosh_failsafe_start_ms >= boosh_failsafe_timeout_ms) {
     boosh_failsafe_armed = false;
     ApplyBooshState(0.0f);
     Console.println("Failsafe: BooshMain timeout -> forcing OFF.");
