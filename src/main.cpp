@@ -68,7 +68,10 @@ constexpr uint8_t kOledAddress = 0x3C;
 constexpr int kScreenWidth = 128;
 constexpr int kScreenHeight = 32;
 constexpr uint16_t kOscPort = 8000;
-constexpr const char *kOscAddress = "/pylon/BooshMain";
+constexpr const char *kOscAddress        = "/pylon/BooshMain";
+constexpr const char *kOscAddrPulseSingle = "/pylon/BooshPulseSingle";
+constexpr const char *kOscAddrPulseTrain  = "/pylon/BooshPulseTrain";
+constexpr const char *kOscAddrSteam       = "/pylon/BooshSteam";
 constexpr unsigned long kBooshFailsafeTimeoutMs = 5000;
 constexpr unsigned long kBooshFailsafeNoteMs = 3000;
 constexpr unsigned long kPingTimeoutMs = 5000;
@@ -759,7 +762,10 @@ String BuildRegistryPayload() {
   payload += "\"hostname\":\"" + JsonEscape(hostname) + "\",";
   payload += "\"ip\":\"" + JsonEscape(ip) + "\",";
   payload += "\"osc_port\":" + String(kOscPort) + ",";
-  payload += "\"osc_paths\":[\"" + String(kOscAddress) + "\"],";
+  payload += "\"osc_paths\":[\"" + String(kOscAddress) + "\",\""
+           + String(kOscAddrPulseSingle) + "\",\""
+           + String(kOscAddrPulseTrain)  + "\",\""
+           + String(kOscAddrSteam)       + "\"],";
   payload += "\"roles\":[\"boosh_main\"],";
   payload += "\"fw_version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
   payload += "\"firmware_version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
@@ -2511,22 +2517,49 @@ void setup() {
 }
 
 void HandleOscMessage(OSCMessage &msg) {
-  if (!msg.fullMatch(kOscAddress)) {
+  // /pylon/BooshMain  1.0=open  0.0=close  (raw solenoid control)
+  if (msg.fullMatch(kOscAddress)) {
+    if (msg.size() != 1 || !msg.isFloat(0)) {
+      Console.println("OSC BooshMain: ignored (unexpected args)");
+      return;
+    }
+    const float v = msg.getFloat(0);
+    Console.printf("OSC BooshMain %.3f\n", v);
+    ApplyBooshState(v, "osc");
     return;
   }
 
-  if (msg.size() != 1 || !msg.isFloat(0)) {
-    Console.println("OSC " + String(kOscAddress) + " ignored (unexpected args).");
+  // /pylon/BooshPulseSingle  1.0 = trigger single 50 ms pulse
+  if (msg.fullMatch(kOscAddrPulseSingle)) {
+    if (msg.size() == 1 && msg.isFloat(0) && msg.getFloat(0) >= 0.5f) {
+      Console.println("OSC BooshPulseSingle → SEQ_PULSE_ONCE");
+      StartSequence(SEQ_PULSE_ONCE);
+    }
     return;
   }
 
-  float value = msg.getFloat(0);
+  // /pylon/BooshPulseTrain  1.0 = trigger 5× 50 ms pulses
+  if (msg.fullMatch(kOscAddrPulseTrain)) {
+    if (msg.size() == 1 && msg.isFloat(0) && msg.getFloat(0) >= 0.5f) {
+      Console.println("OSC BooshPulseTrain → SEQ_PULSE_5X");
+      StartSequence(SEQ_PULSE_5X);
+    }
+    return;
+  }
 
-  Console.print("Received OSC message: ");
-  Console.print(kOscAddress);
-  Console.print(" with argument: ");
-  Console.println(value, 3);
-  ApplyBooshState(value, "osc");
+  // /pylon/BooshSteam  1.0=start  0.0=stop
+  if (msg.fullMatch(kOscAddrSteam)) {
+    if (msg.size() == 1 && msg.isFloat(0)) {
+      if (msg.getFloat(0) >= 0.5f) {
+        Console.println("OSC BooshSteam 1.0 → SEQ_STEAM start");
+        StartSequence(SEQ_STEAM);
+      } else {
+        Console.println("OSC BooshSteam 0.0 → abort");
+        AbortSequence();
+      }
+    }
+    return;
+  }
 }
 
 const char *OscErrorToString(OSCErrorCode code) {
