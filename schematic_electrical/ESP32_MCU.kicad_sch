@@ -2382,7 +2382,7 @@
 			)
 		)
 	)
-	(global_label "BUTTON1"
+	(global_label "BUTTON1_ESP3V3"
 		(shape input)
 		(at 193.04 35.56 0)
 		(fields_autoplaced yes)
@@ -2404,7 +2404,7 @@
 			)
 		)
 	)
-	(global_label "BUTTON4"
+	(global_label "BUTTON4_ESP3V3"
 		(shape input)
 		(at 193.04 43.18 0)
 		(fields_autoplaced yes)
@@ -2448,7 +2448,7 @@
 			)
 		)
 	)
-	(global_label "BUTTON2"
+	(global_label "BUTTON2_ESP3V3"
 		(shape input)
 		(at 193.04 38.1 0)
 		(fields_autoplaced yes)
@@ -2646,7 +2646,7 @@
 			)
 		)
 	)
-	(global_label "BUTTON3"
+	(global_label "BUTTON3_ESP3V3"
 		(shape input)
 		(at 193.04 40.64 0)
 		(fields_autoplaced yes)
@@ -2668,7 +2668,7 @@
 			)
 		)
 	)
-	(global_label "BUTTON0"
+	(global_label "BUTTON0_ESP3V3"
 		(shape input)
 		(at 193.04 33.02 0)
 		(fields_autoplaced yes)
