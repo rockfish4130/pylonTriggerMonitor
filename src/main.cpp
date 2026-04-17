@@ -24,9 +24,9 @@ constexpr int kI2cScl = 9;
 constexpr int kOledReset = 18;
 constexpr int kDevBoardButtonPin = 0;
 constexpr int kLedWhitePin = 12;   // IO12 boosh trigger LED - 1Hz
-constexpr int kLedGreenPin = 15;   // IO15 green - 2Hz
-constexpr int kLedBluePin = 14;    // IO14 blue - 4Hz
-constexpr int kLedYellowPin = 13;  // IO13 yellow - 6Hz
+constexpr int kLedGreenPin = 15;   // IO15 green
+constexpr int kLedBluePin = 13;    // IO13 blue  (swapped vs. original schematic — as built)
+constexpr int kLedYellowPin = 14;  // IO14 yellow (swapped vs. original schematic — as built)
 constexpr int kIo38Pin = 38;       // IO38 high = WiFi connected
 constexpr int kIo11Pin = 11;       // IO11 high = boosh active
 constexpr int kBatteryAdcPin = 3;  // IO3 ADC - battery voltage divider (R5=100k, R8=22k)
@@ -2273,19 +2273,40 @@ void HandleChartTempShortApi() {
 
 // ---- OTA update handlers ----------------------------------------------------
 
+// Called on every UPLOAD_FILE_WRITE chunk. The main loop is blocked during the
+// upload, so we drive the display and green LED directly from here.
+void PollOtaDisplay() {
+  static unsigned long last_toggle_ms = 0;
+  static bool green_on = false;
+  const unsigned long now = millis();
+  if (now - last_toggle_ms >= 50) {  // 10 Hz: toggle every 50 ms
+    last_toggle_ms = now;
+    green_on = !green_on;
+    ledcWrite(0, green_on ? 220 : 0);
+  }
+}
+
 void HandleOtaUploadBody() {
   HTTPUpload &upload = webServer.upload();
 
   if (upload.status == UPLOAD_FILE_START) {
     Console.printf("[OTA] Start: %s (%u bytes)\n", upload.filename.c_str(), upload.totalSize);
+    // Silence other LEDs and show OTA status immediately (main loop is now blocked).
+    ledcWrite(0, 0);  // green — will be driven by PollOtaDisplay()
+    ledcWrite(1, 0);  // blue off
+    ledcWrite(2, 0);  // yellow off
+    ShowStatus("OTA...", "Flashing...");
     if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
       Console.printf("[OTA] begin() failed: %s\n", Update.errorString());
     }
   } else if (upload.status == UPLOAD_FILE_WRITE) {
+    PollOtaDisplay();
     if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
       Console.printf("[OTA] write() failed: %s\n", Update.errorString());
     }
   } else if (upload.status == UPLOAD_FILE_END) {
+    ledcWrite(0, 0);  // green off
+    ShowStatus("OTA done", "Rebooting...");
     if (Update.end(true)) {
       Console.printf("[OTA] Success: %u bytes written. Rebooting.\n", upload.totalSize);
     } else {
@@ -2434,7 +2455,15 @@ void setup() {
   delay(100);
 
   LogBootStep("WiFi scan...");
-  int networkCount = WiFi.scanNetworks(false, true);
+  WiFi.scanNetworks(true, true);  // async — pulse blue while waiting
+  while (WiFi.scanComplete() < 0) {
+    const unsigned long now_s = millis();
+    ledcWrite(1, ((now_s / 125) % 2 == 0) ? 200 : 0);
+    delay(25);
+  }
+  ledcWrite(1, 0);
+  int networkCount = (int)WiFi.scanComplete();
+  if (networkCount < 0) networkCount = 0;
   Console.print("WiFi scan count: ");
   Console.println(networkCount);
   bool hasLowLatency = false;
@@ -2461,10 +2490,14 @@ void setup() {
     ShowStatus("Connecting to", String(networks[ni].ssid));
     WiFi.begin(networks[ni].ssid, networks[ni].pass);
     unsigned long start = millis();
+    unsigned long last_dot_ms = start;
     while (WiFi.status() != WL_CONNECTED && millis() - start < kPerNetworkTimeoutMs) {
-      delay(250);
-      Console.print(".");
+      const unsigned long now_w = millis();
+      ledcWrite(1, ((now_w / 125) % 2 == 0) ? 200 : 0);  // blue 4Hz
+      delay(25);
+      if (millis() - last_dot_ms >= 500) { last_dot_ms = millis(); Console.print("."); }
     }
+    ledcWrite(1, 0);  // blue off when done searching
     if (WiFi.status() != WL_CONNECTED) {
       Console.println();
       Console.print("Failed: ");
@@ -3068,7 +3101,11 @@ void PollBlinkLeds() {
       ledcWrite(2, (uint8_t)(((1.0f + sinf(2.0f * M_PI * 1.2f * t)) / 2.0f) * kMaxDuty));  // yellow 1.2Hz
     }
     if (!barmode_active) {
-      ledcWrite(1, (uint8_t)(((1.0f + sinf(2.0f * M_PI * 0.8f * t)) / 2.0f) * kMaxDuty));  // blue 0.8Hz
+      if (!wifi_has_ip) {
+        ledcWrite(1, ((now / 125) % 2 == 0) ? 200 : 0);  // blue 4Hz while WiFi searching
+      } else {
+        ledcWrite(1, (uint8_t)(((1.0f + sinf(2.0f * M_PI * 0.8f * t)) / 2.0f) * kMaxDuty));  // blue 0.8Hz
+      }
     }
   }
 }
