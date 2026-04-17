@@ -107,6 +107,7 @@ constexpr unsigned long kSosUnitMs = 150;
 constexpr unsigned long kBarBlinkOnMs  = 250;
 constexpr unsigned long kBarBlinkOffMs = 250;
 constexpr unsigned long kBarModeRegistryIntervalMs = 10000;  // poll rpiboosh pylon list every 10 s
+constexpr unsigned long kBarModeBtn0ChaseMs = 100;  // ms per LED step in btn0 chase pattern
 
 Adafruit_SSD1306 display(kScreenWidth, kScreenHeight, &Wire, kOledReset);
 WiFiUDP oscUdp;
@@ -143,9 +144,11 @@ unsigned long boosh_open_since_ms = 0;  // millis() when current boosh event sta
 unsigned long identify_until_ms = 0;    // non-zero while identify mode is active
 bool barmode_active = false;            // true when description contains kBarModeToken
 bool barmode_seq_active = false;        // true while button blink sequence is playing
+bool barmode_btn0_held = false;         // true while button 0 is held; drives chase LEDs + OLED invert
 SemaphoreHandle_t barmode_registry_mutex = nullptr;
 String barmode_registry_json;           // cached GET /api/pylons response; protected by barmode_registry_mutex
 unsigned long barmode_registry_last_fetch_ms = 0;
+volatile bool barmode_registry_fetch_now = false;  // set to trigger immediate PingTask fetch
 
 // ---- Sequence state ---------------------------------------------------------
 enum SeqType { SEQ_NONE, SEQ_PULSE_ONCE, SEQ_PULSE_5X, SEQ_STEAM };
@@ -580,6 +583,7 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
     barmode_active = pylon_description.indexOf(kBarModeToken) >= 0;
     if (barmode_active) {
       for (int i = 0; i < 4; i++) pinMode(kBarModeButtonPins[i], INPUT_PULLDOWN);
+      barmode_registry_fetch_now = true;
     }
     if (log_output) {
       Console.print("[CFG] desc set: ");
@@ -1911,7 +1915,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       const fmt = (v, unit, dec=0) => (v == null || v === '') ? '-' : (+v).toFixed(dec) + unit;
       const rows = all.map(p => `<tr style="border-top:1px solid var(--line)">
         ${td('<b>'+esc(p.pylon_id||'?')+'</b>')}
-        ${td(esc(p.hostname||'-'))}
+        ${td(p.hostname ? `<a href="http://${esc(p.hostname)}" target="_blank" style="color:var(--accent)">${esc(p.hostname)}</a>` : '-')}
         ${td(esc(p.ip||'-'),'color:var(--muted)')}
         ${td(badge(p.active))}
         ${td(p.seconds_since_seen != null ? p.seconds_since_seen+'s ago' : '-','color:var(--muted)')}
@@ -2474,6 +2478,7 @@ void setup() {
   barmode_active = pylon_description.indexOf(kBarModeToken) >= 0;
   if (barmode_active) {
     for (int i = 0; i < 4; i++) pinMode(kBarModeButtonPins[i], INPUT_PULLDOWN);
+    barmode_registry_fetch_now = true;  // trigger immediate fetch on first PingTask run
     Console.println("[BarMode] ACTIVE — buttons on IO1,IO2,IO5,IO6");
   }
   PrintCliHelp();
@@ -3079,6 +3084,66 @@ void PollSosBlueLed() {
   ledcWrite(1, (step % 2 == 0) ? 200 : 0);
 }
 
+// Sends /pylon/BooshMain with float arg to all pylons in the cached registry via UDP OSC.
+// Skips silently if registry is empty (not yet fetched). Self is included via registry.
+// Called from Core 1; oscUdp send path is non-blocking.
+void SendOscBooshAllPylons(float value) {
+  // Copy registry JSON under mutex
+  String json;
+  if (xSemaphoreTake(barmode_registry_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+    json = barmode_registry_json;
+    xSemaphoreGive(barmode_registry_mutex);
+  }
+  if (json.length() == 0) {
+    Console.println("[BarMode] SendOscBooshAll: registry empty, skipping");
+    return;
+  }
+
+  // Build OSC packet for /pylon/BooshMain <float>
+  // Address "/pylon/BooshMain" (16 chars) padded to 20 bytes, ",f\0\0" (4 bytes), float BE (4 bytes) = 28 bytes
+  uint8_t pkt[28];
+  memset(pkt, 0, sizeof(pkt));
+  memcpy(pkt, kOscAddress, 16);   // "/pylon/BooshMain"
+  pkt[20] = ','; pkt[21] = 'f';  // type tag
+  union { float f; uint32_t u; } conv;
+  conv.f = value;
+  pkt[24] = (uint8_t)(conv.u >> 24);
+  pkt[25] = (uint8_t)(conv.u >> 16);
+  pkt[26] = (uint8_t)(conv.u >> 8);
+  pkt[27] = (uint8_t)(conv.u);
+
+  // Extract IPs from registry JSON: search for "ip":"..." entries
+  int sent = 0;
+  int idx = 0;
+  while (true) {
+    int pos = json.indexOf("\"ip\":\"", idx);
+    if (pos < 0) break;
+    pos += 6;
+    int end = json.indexOf('"', pos);
+    if (end < 0) break;
+    String ip = json.substring(pos, end);
+    idx = end + 1;
+    if (ip.length() < 7 || ip.indexOf('.') < 0) continue;  // sanity check
+    IPAddress dest;
+    if (!dest.fromString(ip)) continue;
+    oscUdp.beginPacket(dest, kOscPort);
+    oscUdp.write(pkt, sizeof(pkt));
+    oscUdp.endPacket();
+    sent++;
+  }
+  Console.printf("[BarMode] SendOscBooshAll %.1f → %d pylons\n", value, sent);
+}
+
+// LED chase pattern while button 0 is held: blue→yellow→green, 100 ms per step.
+// Runs last in loop() so it always wins over other LED writers.
+void PollBarModeBtn0Chase() {
+  if (!barmode_btn0_held) return;
+  const uint8_t phase = (uint8_t)((millis() / kBarModeBtn0ChaseMs) % 3);
+  ledcWrite(1, phase == 0 ? 220 : 0);  // blue   ch1
+  ledcWrite(2, phase == 1 ? 220 : 0);  // yellow ch2
+  ledcWrite(0, phase == 2 ? 220 : 0);  // green  ch0
+}
+
 // Scans the 4 bar-mode buttons and drives the yellow-solid + green-blink(N+1) sequence.
 // Green = LEDC channel 0, Yellow = LEDC channel 2.
 // Sets barmode_seq_active so PollBlinkLeds() yields those channels.
@@ -3101,6 +3166,24 @@ void PollBarModeButtons() {
     if (now - btn_change_ms[i] >= 20) {
       btn_stable[i] = raw;
     }
+  }
+
+  // Button 0: boosh-all OSC on press/release + chase LED + OLED invert.
+  // Runs alongside the blink-seq state machine below.
+  {
+    static bool btn0_prev_stable = false;
+    if (btn_stable[0] && !btn0_prev_stable) {
+      // Rising edge: open all pylons
+      SendOscBooshAllPylons(1.0f);
+      barmode_btn0_held = true;
+      display.invertDisplay(true);
+    } else if (!btn_stable[0] && btn0_prev_stable) {
+      // Falling edge: close all pylons
+      SendOscBooshAllPylons(0.0f);
+      barmode_btn0_held = false;
+      display.invertDisplay(false);
+    }
+    btn0_prev_stable = btn_stable[0];
   }
 
   // Blink sequence state machine
@@ -3281,7 +3364,9 @@ void PingTask(void *) {
     // In BARMODE: periodically fetch the full pylon list from rpiboosh for the web UI.
     if (barmode_active && barmode_registry_mutex) {
       const unsigned long now_r = millis();
-      if (now_r - barmode_registry_last_fetch_ms >= kBarModeRegistryIntervalMs) {
+      if (barmode_registry_fetch_now ||
+          now_r - barmode_registry_last_fetch_ms >= kBarModeRegistryIntervalMs) {
+        barmode_registry_fetch_now = false;
         barmode_registry_last_fetch_ms = now_r;
         HTTPClient http;
         http.begin(String(kRegistryBaseUrlPrimary) + "/api/pylons");
@@ -3317,6 +3402,7 @@ void loop() {
   PollBlinkLeds();
   PollSosBlueLed();
   PollBarModeButtons();
+  PollBarModeBtn0Chase();  // must run last — overwrites all 3 LEDs while btn0 held
   PollSequence();
   PollSensors();
   PollSerialCli();
