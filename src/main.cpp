@@ -3276,6 +3276,7 @@ void PollBarModeButtons() {
       static bool          btn1_seq_active       = false;
       static unsigned long btn1_seq_start_ms     = 0;
       static unsigned long btn1_seq_last_fire_ms = 0;
+      static unsigned long btn1_seq_delay_ms     = 1000;  // current inter-group delay; starts 1s, -50ms/step
       static PylonTarget   btn1_seq_targets[16];
       static int           btn1_seq_count        = 0;
       static int           btn1_seq_group        = 0;  // index of current group start in sorted targets[]
@@ -3288,10 +3289,11 @@ void PollBarModeButtons() {
           // Double-tap: enter index-ordered sequential looping mode
           btn1_seq_count = ExtractRegistryTargets(btn1_seq_targets, 16);
           if (btn1_seq_count > 0) {
-            btn1_seq_active      = true;
-            btn1_seq_start_ms    = now;
-            btn1_seq_last_fire_ms = now - 100;  // fire immediately on first poll
-            btn1_seq_group       = 0;
+            btn1_seq_active       = true;
+            btn1_seq_start_ms     = now;
+            btn1_seq_delay_ms     = 1000;
+            btn1_seq_last_fire_ms = now - 1000;  // fire first group immediately
+            btn1_seq_group        = 0;
             Console.printf("[BarMode] Btn1 seq: %d pylons\n", btn1_seq_count);
           }
         } else {
@@ -3313,7 +3315,7 @@ void PollBarModeButtons() {
         if (!btn_stable[1] || now - btn1_seq_start_ms >= 5000) {
           btn1_seq_active = false;
           Console.println("[BarMode] Btn1 seq ended");
-        } else if (now - btn1_seq_last_fire_ms >= 100) {
+        } else if (now - btn1_seq_last_fire_ms >= btn1_seq_delay_ms) {
           btn1_seq_last_fire_ms = now;
           // Fire all targets in current group (same seq_idx)
           const int cur_val = btn1_seq_targets[btn1_seq_group].seq_idx;
@@ -3323,10 +3325,15 @@ void PollBarModeButtons() {
             SendOscFloatToIP(kOscAddrPulseSingle, 1.0f, btn1_seq_targets[g].ip);
             fired++;
           }
-          // Advance group pointer (wrap)
+          Console.printf("[BarMode] Btn1 seq idx=%d fired=%d delay=%lums\n", cur_val, fired, btn1_seq_delay_ms);
+          // Decrement delay before next step (floor at 50ms)
+          if (btn1_seq_delay_ms > 50) btn1_seq_delay_ms -= 50;
+          // Advance group pointer; reset delay on loop
           btn1_seq_group += fired;
-          if (btn1_seq_group >= btn1_seq_count) btn1_seq_group = 0;
-          Console.printf("[BarMode] Btn1 seq idx=%d fired=%d\n", cur_val, fired);
+          if (btn1_seq_group >= btn1_seq_count) {
+            btn1_seq_group    = 0;
+            btn1_seq_delay_ms = 1000;  // reset to 1s at top of each loop
+          }
         }
       }
     }

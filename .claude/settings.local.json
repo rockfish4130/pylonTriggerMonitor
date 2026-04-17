@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pio run:*)",
+      "Bash(~/.platformio/penv/Scripts/pio run:*)",
+      "Bash(~/.platformio/penv/Scripts/pio device:*)",
+      "Bash(~/.platformio/penv/Scripts/pio.exe run *)",
+      "Bash(kill %1)",
+      "Bash(wait)",
+      "Bash(curl *)",
+      "Bash(git *)",
+      "Bash(python3 *)",
+      "Bash(ping *)",
+      "Bash(FW=* && *)",
+      "Bash(FW=*)",
+      "Write(c:/Users/Matt/Dropbox/flipside/2026/projects/pylons/**)",
+      "Edit(c:/Users/Matt/Dropbox/flipside/2026/projects/pylons/**)",
+      "Edit(c:/Users/Matt/Dropbox/flipside/2025/projects/boosh_box_pi/rpi_python_control/**)",
+      "Write(c:/Users/Matt/Dropbox/flipside/2025/projects/boosh_box_pi/rpi_python_control/**)"
+    ]
+  }
+}
