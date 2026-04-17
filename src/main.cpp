@@ -310,17 +310,15 @@ String JsonEscape(const String &input) {
   out.reserve(input.length() + 8);
   for (size_t i = 0; i < input.length(); ++i) {
     const char c = input.charAt(i);
-    if (c == '\\' || c == '"') {
-      out += '\\';
-      out += c;
-      continue;
-    }
-    if (c == '\n') {
-      out += "\\n";
-      continue;
-    }
-    if (c == '\r') {
-      out += "\\r";
+    if (c == '\\' || c == '"') { out += '\\'; out += c; continue; }
+    if (c == '\n') { out += "\\n"; continue; }
+    if (c == '\r') { out += "\\r"; continue; }
+    if (c == '\t') { out += "\\t"; continue; }
+    if ((unsigned char)c < 0x20) {
+      // Other control characters: emit \u00XX
+      char buf[7];
+      snprintf(buf, sizeof(buf), "\\u%04x", (unsigned char)c);
+      out += buf;
       continue;
     }
     out += c;
