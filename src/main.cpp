@@ -1589,7 +1589,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         <div style="border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
           <span style="color:var(--muted);font-size:13px">Solenoid Safety</span>
           <label>Failsafe timeout (s) <input id="cfg-failsafe-s" name="failsafe_s" type="number" min="1" max="60" step="0.1" style="width:80px"></label>
-          <label>Index <input id="cfg-index" name="index" type="number" min="0" max="99" step="1" style="width:60px"> <span style="color:var(--muted);font-size:12px">(barmode sequence order; 0=default)</span></label>
+          <label>Index <input id="cfg-index" name="index" type="number" min="-99" max="99" step="1" style="width:60px"> <span style="color:var(--muted);font-size:12px">(barmode sequence order; negative=skip seq)</span></label>
           <div id="cfg-seq-max-wrap" style="display:none;gap:6px">
             <label>Seq max (s) <input id="cfg-seq-max-s" name="seq_max_s" type="number" min="1" max="120" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(barmode btn1 hold timeout)</span></label>
             <label>Seq step decrement (ms) <input id="cfg-seq-dec-ms" name="seq_dec_ms" type="number" min="0" max="2000" step="10" style="width:70px"> <span style="color:var(--muted);font-size:12px">(delay reduction per pylon step)</span></label>
@@ -3241,6 +3241,8 @@ int ExtractRegistryTargets(PylonTarget *dest, int maxCount) {
     int seq_idx = 0;
     if (pi >= 0) seq_idx = window.substring(pi + 14).toInt();
 
+    if (seq_idx < 0) continue;  // negative index = excluded from sequential mode
+
     dest[count].ip      = addr;
     dest[count].seq_idx = seq_idx;
     count++;
@@ -3418,11 +3420,10 @@ void PollBarModeButtons() {
             }
             btn1_seq_delay_ms = (after_dec < 50) ? 50 : after_dec;
           }
-          // Advance group pointer; reset delay on loop
+          // Advance group pointer; wrap without resetting delay so acceleration accumulates
           btn1_seq_group += fired;
           if (btn1_seq_group >= btn1_seq_count) {
-            btn1_seq_group    = 0;
-            btn1_seq_delay_ms = 1000;  // reset to 1s at top of each loop
+            btn1_seq_group = 0;
           }
         }
       }
