@@ -2598,6 +2598,10 @@ void setup() {
   ledcAttachPin(kLedYellowPin, 2);
   ledcWrite(2, 0);
 
+  ledcSetup(3, 5000, 8);
+  ledcAttachPin(35, 3);
+  ledcWrite(3, 0);
+
   pinMode(kIo38Pin, OUTPUT);
   digitalWrite(kIo38Pin, LOW);
   pinMode(kIo11Pin, OUTPUT);
@@ -3429,9 +3433,31 @@ void PollBarModeButtons() {
       }
     }
 
-    // Button 2 — BooshPulseTrain (rising edge only)
-    if (btn_stable[2] && !btn_prev_stable[2]) {
-      SendOscFloatToAllPylons(kOscAddrPulseTrain, 1.0f);
+    // Button 2 — BooshPulseTrain; IO35 strobes 5x pulse pattern once then returns to idle sawtooth
+    {
+      static bool          io35_strobe      = false;
+      static unsigned long io35_strobe_start = 0;
+
+      if (btn_stable[2] && !btn_prev_stable[2]) {
+        SendOscFloatToAllPylons(kOscAddrPulseTrain, 1.0f);
+        io35_strobe       = true;
+        io35_strobe_start = now;
+      }
+
+      if (io35_strobe) {
+        const unsigned long elapsed = now - io35_strobe_start;
+        if (elapsed < 500) {
+          // Mirror 5× (50ms on / 50ms off)
+          const uint8_t step = (uint8_t)(elapsed / 50);
+          ledcWrite(3, (step % 2 == 0) ? 255 : 0);
+        } else {
+          io35_strobe = false;
+        }
+      }
+      if (!io35_strobe) {
+        // Idle: sawtooth 4Hz (period 250ms, ramp 0→255)
+        ledcWrite(3, (uint8_t)((now % 250) * 255 / 250));
+      }
     }
 
     // Button 3 — BooshSteam hold
