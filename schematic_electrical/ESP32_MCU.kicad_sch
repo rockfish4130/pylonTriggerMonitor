@@ -1939,16 +1939,6 @@
 	)
 	(wire
 		(pts
-			(xy 180.34 73.66) (xy 193.04 73.66)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "9890f0d6-e2a0-41a3-b06e-427c903ed698")
-	)
-	(wire
-		(pts
 			(xy 66.04 76.2) (xy 82.55 76.2)
 		)
 		(stroke
@@ -2435,28 +2425,6 @@
 		(uuid "2c53c47c-5b16-4ee5-bd28-b5ba788bb2a7")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 228.0774 66.04 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-				(hide yes)
-			)
-		)
-	)
-	(global_label "BUTTON_LAMP_PWM_OUT4_ESP3V3"
-		(shape input)
-		(at 193.04 73.66 0)
-		(fields_autoplaced yes)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "750d9501-0714-47a2-aafa-5502c68efdc6")
-		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 228.0774 73.66 0)
 			(effects
 				(font
 					(size 1.27 1.27)

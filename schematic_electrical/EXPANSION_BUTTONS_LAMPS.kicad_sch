@@ -711,40 +711,40 @@
 		)
 	)
 	(no_connect
-		(at 78.74 50.8)
+		(at 198.12 60.96)
 		(uuid "19f96864-0a6b-44d0-89da-61da97c6dcce")
 	)
 	(no_connect
-		(at 104.14 50.8)
+		(at 223.52 60.96)
 		(uuid "23330a3d-78ae-4e99-a4a4-1d23cdc9831c")
 	)
 	(no_connect
-		(at 153.67 50.8)
+		(at 124.46 116.84)
 		(uuid "24ee4ef9-07f2-4ec3-9916-bbfa44c4a6c6")
 	)
 	(no_connect
-		(at 54.61 50.8)
+		(at 124.46 55.88)
 		(uuid "2b831f0c-9473-4ad5-ae77-fac18eb97cc7")
 	)
 	(no_connect
-		(at 201.93 52.07)
+		(at 222.25 123.19)
 		(uuid "76b41688-2ea2-4ba0-9054-301abef2c729")
 	)
 	(no_connect
-		(at 29.21 50.8)
+		(at 99.06 55.88)
 		(uuid "99115096-93d9-47ac-94db-cceb2774b314")
 	)
 	(no_connect
-		(at 128.27 50.8)
+		(at 99.06 116.84)
 		(uuid "9e9ab679-b0e8-4db7-bf9e-3da3aedbba17")
 	)
 	(no_connect
-		(at 176.53 52.07)
+		(at 196.85 123.19)
 		(uuid "ad9afcac-f6d7-4a20-bb1a-d59a5c9de47c")
 	)
 	(wire
 		(pts
-			(xy 26.67 33.02) (xy 26.67 41.91)
+			(xy 96.52 38.1) (xy 96.52 46.99)
 		)
 		(stroke
 			(width 0)
@@ -754,7 +754,7 @@
 	)
 	(wire
 		(pts
-			(xy 76.2 41.91) (xy 78.74 41.91)
+			(xy 195.58 52.07) (xy 198.12 52.07)
 		)
 		(stroke
 			(width 0)
@@ -764,7 +764,7 @@
 	)
 	(wire
 		(pts
-			(xy 125.73 33.02) (xy 125.73 41.91)
+			(xy 96.52 99.06) (xy 96.52 107.95)
 		)
 		(stroke
 			(width 0)
@@ -774,7 +774,7 @@
 	)
 	(wire
 		(pts
-			(xy 104.14 74.93) (xy 104.14 57.15)
+			(xy 223.52 85.09) (xy 223.52 67.31)
 		)
 		(stroke
 			(width 0)
@@ -784,7 +784,7 @@
 	)
 	(wire
 		(pts
-			(xy 26.67 41.91) (xy 29.21 41.91)
+			(xy 96.52 46.99) (xy 99.06 46.99)
 		)
 		(stroke
 			(width 0)
@@ -794,7 +794,7 @@
 	)
 	(wire
 		(pts
-			(xy 76.2 33.02) (xy 76.2 41.91)
+			(xy 195.58 43.18) (xy 195.58 52.07)
 		)
 		(stroke
 			(width 0)
@@ -804,7 +804,7 @@
 	)
 	(wire
 		(pts
-			(xy 173.99 34.29) (xy 173.99 43.18)
+			(xy 194.31 105.41) (xy 194.31 114.3)
 		)
 		(stroke
 			(width 0)
@@ -814,7 +814,7 @@
 	)
 	(wire
 		(pts
-			(xy 153.67 74.93) (xy 153.67 57.15)
+			(xy 124.46 140.97) (xy 124.46 123.19)
 		)
 		(stroke
 			(width 0)
@@ -824,7 +824,7 @@
 	)
 	(wire
 		(pts
-			(xy 54.61 74.93) (xy 54.61 57.15)
+			(xy 124.46 80.01) (xy 124.46 62.23)
 		)
 		(stroke
 			(width 0)
@@ -834,7 +834,7 @@
 	)
 	(wire
 		(pts
-			(xy 125.73 41.91) (xy 128.27 41.91)
+			(xy 96.52 107.95) (xy 99.06 107.95)
 		)
 		(stroke
 			(width 0)
@@ -844,7 +844,7 @@
 	)
 	(wire
 		(pts
-			(xy 173.99 43.18) (xy 176.53 43.18)
+			(xy 194.31 114.3) (xy 196.85 114.3)
 		)
 		(stroke
 			(width 0)
@@ -854,7 +854,7 @@
 	)
 	(wire
 		(pts
-			(xy 201.93 76.2) (xy 201.93 58.42)
+			(xy 222.25 147.32) (xy 222.25 129.54)
 		)
 		(stroke
 			(width 0)
@@ -876,17 +876,17 @@
 	)
 	(text "INSTALLED ONLY ON PYLON CONFIGURED FOR BAR PLACEMENT \nDRIVES THE STREET SIGN, BUT ALSO HAS BUTTONS TO WIRELESS TRIGGER OTHER PYLONS"
 		(exclude_from_sim no)
-		(at 143.51 157.226 0)
+		(at 151.13 157.988 0)
 		(effects
 			(font
 				(size 1.27 1.27)
 			)
 		)
-		(uuid "2e096799-4cd5-42a3-b3ee-ebcf3c76c691")
+		(uuid "efced9f3-6dd9-4643-ad1c-0c4fdc2dbb4f")
 	)
 	(global_label "BUTTON3_ESP3V3"
 		(shape input)
-		(at 201.93 43.18 0)
+		(at 222.25 114.3 0)
 		(fields_autoplaced yes)
 		(effects
 			(font
@@ -896,7 +896,7 @@
 		)
 		(uuid "37cecb21-13db-4325-9ca8-f2394950a54a")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 213.3214 43.18 0)
+			(at 233.6414 114.3 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -906,9 +906,53 @@
 			)
 		)
 	)
+	(global_label "BUTTON_LAMP_PWM_OUT0_12V"
+		(shape input)
+		(at 99.06 62.23 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "439a4da1-9c47-49be-85b5-d36c4607332a")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 67.6511 62.23 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+				(hide yes)
+			)
+		)
+	)
+	(global_label "BUTTON_LAMP_PWM_OUT3_12V"
+		(shape input)
+		(at 196.85 129.54 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "4ccbb8d6-5a72-4d51-844e-66492851847f")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 165.4411 129.54 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+				(hide yes)
+			)
+		)
+	)
 	(global_label "BUTTON1_ESP3V3"
 		(shape input)
-		(at 104.14 41.91 0)
+		(at 223.52 52.07 0)
 		(fields_autoplaced yes)
 		(effects
 			(font
@@ -918,7 +962,7 @@
 		)
 		(uuid "501530ae-f069-4bc6-89be-022e42c7acba")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 115.5314 41.91 0)
+			(at 234.9114 52.07 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -930,7 +974,7 @@
 	)
 	(global_label "BUTTON0_ESP3V3"
 		(shape input)
-		(at 54.61 41.91 0)
+		(at 124.46 46.99 0)
 		(fields_autoplaced yes)
 		(effects
 			(font
@@ -940,7 +984,7 @@
 		)
 		(uuid "674d7959-509a-4696-a5ee-0c8f55355731")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 66.0014 41.91 0)
+			(at 135.8514 46.99 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -950,9 +994,31 @@
 			)
 		)
 	)
+	(global_label "BUTTON_LAMP_PWM_OUT2_12V"
+		(shape input)
+		(at 99.06 123.19 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "7b78deaf-0f2a-4efd-ae0e-2bff5cf46740")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 67.6511 123.19 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+				(hide yes)
+			)
+		)
+	)
 	(global_label "BUTTON2_ESP3V3"
 		(shape input)
-		(at 153.67 41.91 0)
+		(at 124.46 107.95 0)
 		(fields_autoplaced yes)
 		(effects
 			(font
@@ -962,7 +1028,7 @@
 		)
 		(uuid "9e561409-d692-4f4e-b86a-4343662fbba5")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 165.0614 41.91 0)
+			(at 135.8514 107.95 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -972,9 +1038,31 @@
 			)
 		)
 	)
+	(global_label "BUTTON_LAMP_PWM_OUT1_12V"
+		(shape input)
+		(at 198.12 67.31 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "b5e49d50-9ac3-4def-b4f5-d4d7bdb8bda6")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 166.7111 67.31 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+				(hide yes)
+			)
+		)
+	)
 	(symbol
 		(lib_id "power:+3.3V")
-		(at 26.67 33.02 0)
+		(at 96.52 38.1 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -983,7 +1071,7 @@
 		(fields_autoplaced yes)
 		(uuid "3cd6d1e8-d78d-4ccc-ab93-14bdc0f0f40c")
 		(property "Reference" "#PWR019"
-			(at 26.67 36.83 0)
+			(at 96.52 41.91 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -992,7 +1080,7 @@
 			)
 		)
 		(property "Value" "+3.3V"
-			(at 26.67 27.94 0)
+			(at 96.52 33.02 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1000,7 +1088,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 26.67 33.02 0)
+			(at 96.52 38.1 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1009,7 +1097,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 26.67 33.02 0)
+			(at 96.52 38.1 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1018,7 +1106,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"+3.3V\""
-			(at 26.67 33.02 0)
+			(at 96.52 38.1 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1040,7 +1128,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 54.61 74.93 0)
+		(at 124.46 80.01 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -1049,7 +1137,7 @@
 		(fields_autoplaced yes)
 		(uuid "47cc39ea-bd96-443d-a8c8-583848e8e329")
 		(property "Reference" "#PWR08"
-			(at 54.61 81.28 0)
+			(at 124.46 86.36 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1058,7 +1146,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 54.61 80.01 0)
+			(at 124.46 85.09 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1066,7 +1154,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 54.61 74.93 0)
+			(at 124.46 80.01 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1075,7 +1163,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 54.61 74.93 0)
+			(at 124.46 80.01 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1084,7 +1172,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 54.61 74.93 0)
+			(at 124.46 80.01 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1106,7 +1194,7 @@
 	)
 	(symbol
 		(lib_id "power:+3.3V")
-		(at 173.99 34.29 0)
+		(at 194.31 105.41 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -1115,7 +1203,7 @@
 		(fields_autoplaced yes)
 		(uuid "5528d03c-1c66-4b29-822f-adf81596af72")
 		(property "Reference" "#PWR022"
-			(at 173.99 38.1 0)
+			(at 194.31 109.22 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1124,7 +1212,7 @@
 			)
 		)
 		(property "Value" "+3.3V"
-			(at 173.99 29.21 0)
+			(at 194.31 100.33 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1132,7 +1220,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 173.99 34.29 0)
+			(at 194.31 105.41 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1141,7 +1229,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 173.99 34.29 0)
+			(at 194.31 105.41 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1150,7 +1238,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"+3.3V\""
-			(at 173.99 34.29 0)
+			(at 194.31 105.41 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1172,7 +1260,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 104.14 74.93 0)
+		(at 223.52 85.09 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -1181,7 +1269,7 @@
 		(fields_autoplaced yes)
 		(uuid "55b8319b-23da-4e0c-b7ee-d857c8d3c0a2")
 		(property "Reference" "#PWR015"
-			(at 104.14 81.28 0)
+			(at 223.52 91.44 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1190,7 +1278,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 104.14 80.01 0)
+			(at 223.52 90.17 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1198,7 +1286,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 104.14 74.93 0)
+			(at 223.52 85.09 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1207,7 +1295,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 104.14 74.93 0)
+			(at 223.52 85.09 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1216,7 +1304,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 104.14 74.93 0)
+			(at 223.52 85.09 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1238,7 +1326,7 @@
 	)
 	(symbol
 		(lib_id "power:+3.3V")
-		(at 76.2 33.02 0)
+		(at 195.58 43.18 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -1247,7 +1335,7 @@
 		(fields_autoplaced yes)
 		(uuid "58b9eff8-4b3a-46ed-9663-32be659f4c49")
 		(property "Reference" "#PWR020"
-			(at 76.2 36.83 0)
+			(at 195.58 46.99 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1256,7 +1344,7 @@
 			)
 		)
 		(property "Value" "+3.3V"
-			(at 76.2 27.94 0)
+			(at 195.58 38.1 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1264,7 +1352,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 76.2 33.02 0)
+			(at 195.58 43.18 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1273,7 +1361,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 76.2 33.02 0)
+			(at 195.58 43.18 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1282,7 +1370,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"+3.3V\""
-			(at 76.2 33.02 0)
+			(at 195.58 43.18 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1304,7 +1392,7 @@
 	)
 	(symbol
 		(lib_id "AB_800T-QT24:AB_800T-QT24")
-		(at 189.23 49.53 0)
+		(at 209.55 120.65 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -1313,7 +1401,7 @@
 		(fields_autoplaced yes)
 		(uuid "9e888c73-1796-4f67-8378-d670eb1eefae")
 		(property "Reference" "SW4"
-			(at 189.23 31.75 0)
+			(at 209.55 102.87 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1321,7 +1409,7 @@
 			)
 		)
 		(property "Value" "AB_800T-QT24"
-			(at 189.23 34.29 0)
+			(at 209.55 105.41 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1329,7 +1417,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 189.23 49.53 0)
+			(at 209.55 120.65 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1338,7 +1426,7 @@
 			)
 		)
 		(property "Datasheet" "https://literature.rockwellautomation.com/idc/groups/literature/documents/td/800-td009_-en-p.pdf"
-			(at 189.23 49.53 0)
+			(at 209.55 120.65 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1347,7 +1435,7 @@
 			)
 		)
 		(property "Description" "Allen Bradley 800T-QT24 30mm illuminated push-to-test momentary PB 24VAC/DC 1NO 1NC incandescent"
-			(at 189.23 49.53 0)
+			(at 209.55 120.65 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1390,7 +1478,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 153.67 74.93 0)
+		(at 124.46 140.97 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -1399,7 +1487,7 @@
 		(fields_autoplaced yes)
 		(uuid "b10c6dd2-9993-49e7-98b9-9ec16a20546f")
 		(property "Reference" "#PWR017"
-			(at 153.67 81.28 0)
+			(at 124.46 147.32 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1408,7 +1496,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 153.67 80.01 0)
+			(at 124.46 146.05 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1416,7 +1504,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 153.67 74.93 0)
+			(at 124.46 140.97 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1425,7 +1513,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 153.67 74.93 0)
+			(at 124.46 140.97 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1434,7 +1522,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 153.67 74.93 0)
+			(at 124.46 140.97 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1456,7 +1544,7 @@
 	)
 	(symbol
 		(lib_id "power:+3.3V")
-		(at 125.73 33.02 0)
+		(at 96.52 99.06 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -1465,7 +1553,7 @@
 		(fields_autoplaced yes)
 		(uuid "c42f5a6d-3c09-44b4-91fc-7d07750a29d8")
 		(property "Reference" "#PWR021"
-			(at 125.73 36.83 0)
+			(at 96.52 102.87 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1474,7 +1562,7 @@
 			)
 		)
 		(property "Value" "+3.3V"
-			(at 125.73 27.94 0)
+			(at 96.52 93.98 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1482,7 +1570,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 125.73 33.02 0)
+			(at 96.52 99.06 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1491,7 +1579,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 125.73 33.02 0)
+			(at 96.52 99.06 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1500,7 +1588,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"+3.3V\""
-			(at 125.73 33.02 0)
+			(at 96.52 99.06 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1522,7 +1610,7 @@
 	)
 	(symbol
 		(lib_id "AB_800T-QT24:AB_800T-QT24")
-		(at 140.97 48.26 0)
+		(at 111.76 114.3 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -1531,7 +1619,7 @@
 		(fields_autoplaced yes)
 		(uuid "cc06253c-733f-4730-b528-d90c8809b946")
 		(property "Reference" "SW3"
-			(at 140.97 30.48 0)
+			(at 111.76 96.52 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1539,7 +1627,7 @@
 			)
 		)
 		(property "Value" "AB_800T-QT24"
-			(at 140.97 33.02 0)
+			(at 111.76 99.06 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1547,7 +1635,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 140.97 48.26 0)
+			(at 111.76 114.3 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1556,7 +1644,7 @@
 			)
 		)
 		(property "Datasheet" "https://literature.rockwellautomation.com/idc/groups/literature/documents/td/800-td009_-en-p.pdf"
-			(at 140.97 48.26 0)
+			(at 111.76 114.3 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1565,7 +1653,7 @@
 			)
 		)
 		(property "Description" "Allen Bradley 800T-QT24 30mm illuminated push-to-test momentary PB 24VAC/DC 1NO 1NC incandescent"
-			(at 140.97 48.26 0)
+			(at 111.76 114.3 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1608,7 +1696,7 @@
 	)
 	(symbol
 		(lib_id "AB_800T-QT24:AB_800T-QT24")
-		(at 91.44 48.26 0)
+		(at 210.82 58.42 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -1617,7 +1705,7 @@
 		(fields_autoplaced yes)
 		(uuid "d1cfd825-c822-48ae-9730-1787766e1766")
 		(property "Reference" "SW2"
-			(at 91.44 30.48 0)
+			(at 210.82 40.64 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1625,7 +1713,7 @@
 			)
 		)
 		(property "Value" "AB_800T-QT24"
-			(at 91.44 33.02 0)
+			(at 210.82 43.18 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1633,7 +1721,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 91.44 48.26 0)
+			(at 210.82 58.42 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1642,7 +1730,7 @@
 			)
 		)
 		(property "Datasheet" "https://literature.rockwellautomation.com/idc/groups/literature/documents/td/800-td009_-en-p.pdf"
-			(at 91.44 48.26 0)
+			(at 210.82 58.42 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1651,7 +1739,7 @@
 			)
 		)
 		(property "Description" "Allen Bradley 800T-QT24 30mm illuminated push-to-test momentary PB 24VAC/DC 1NO 1NC incandescent"
-			(at 91.44 48.26 0)
+			(at 210.82 58.42 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1694,7 +1782,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 201.93 76.2 0)
+		(at 222.25 147.32 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -1703,7 +1791,7 @@
 		(fields_autoplaced yes)
 		(uuid "d2d19957-5573-40ec-8f02-6887e5cf37d5")
 		(property "Reference" "#PWR018"
-			(at 201.93 82.55 0)
+			(at 222.25 153.67 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1712,7 +1800,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 201.93 81.28 0)
+			(at 222.25 152.4 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1720,7 +1808,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 201.93 76.2 0)
+			(at 222.25 147.32 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1729,7 +1817,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 201.93 76.2 0)
+			(at 222.25 147.32 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1738,7 +1826,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 201.93 76.2 0)
+			(at 222.25 147.32 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1760,7 +1848,7 @@
 	)
 	(symbol
 		(lib_id "AB_800T-QT24:AB_800T-QT24")
-		(at 41.91 48.26 0)
+		(at 111.76 53.34 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -1769,7 +1857,7 @@
 		(fields_autoplaced yes)
 		(uuid "e8b61a2f-dff4-4e3f-ace5-874b00ed4f33")
 		(property "Reference" "SW1"
-			(at 41.91 30.48 0)
+			(at 111.76 35.56 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1777,7 +1865,7 @@
 			)
 		)
 		(property "Value" "AB_800T-QT24"
-			(at 41.91 33.02 0)
+			(at 111.76 38.1 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1785,7 +1873,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 41.91 48.26 0)
+			(at 111.76 53.34 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1794,7 +1882,7 @@
 			)
 		)
 		(property "Datasheet" "https://literature.rockwellautomation.com/idc/groups/literature/documents/td/800-td009_-en-p.pdf"
-			(at 41.91 48.26 0)
+			(at 111.76 53.34 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1803,7 +1891,7 @@
 			)
 		)
 		(property "Description" "Allen Bradley 800T-QT24 30mm illuminated push-to-test momentary PB 24VAC/DC 1NO 1NC incandescent"
-			(at 41.91 48.26 0)
+			(at 111.76 53.34 0)
 			(effects
 				(font
 					(size 1.27 1.27)

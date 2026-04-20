@@ -1228,6 +1228,18 @@
 		(uuid "f024a165-b9a0-44b5-9c66-f533317bf4e9")
 	)
 	(rectangle
+		(start 12.7 90.17)
+		(end 176.53 154.94)
+		(stroke
+			(width 0)
+			(type dash)
+		)
+		(fill
+			(type none)
+		)
+		(uuid 921ed500-dd7d-45a5-bdfd-4d43d4dcaa0f)
+	)
+	(rectangle
 		(start 209.55 96.52)
 		(end 265.43 125.73)
 		(stroke
@@ -1419,6 +1431,16 @@
 			)
 		)
 		(uuid "c4ba3391-5471-4a3d-8de0-fa78effa668a")
+	)
+	(text "NOT POPULATED ON BAR PYLON\nAS NO LOCAL TANK FOR THERMO\nAND USING LINE POWER NOT BATTERY"
+		(exclude_from_sim no)
+		(at 90.678 151.384 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "d9491767-6ed3-466e-a5a2-a3a30b57afb7")
 	)
 	(text "CONNECTOR WIRE RED"
 		(exclude_from_sim no)
