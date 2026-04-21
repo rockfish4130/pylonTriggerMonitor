@@ -3106,7 +3106,8 @@ void HandleConfigNodeApi() {
 }
 
 void SetupWebServer();  // forward declaration
-void PingTask(void *);   // forward declaration
+void PingTask(void *);      // forward declaration
+void TempPollTask(void *);  // forward declaration
 void StartSequence(SeqType type);  // forward declaration
 void AbortSequence();              // forward declaration
 
@@ -3660,7 +3661,8 @@ void setup() {
 
   // Ping and hostname resolution run in a background task so the main loop
   // never blocks on network I/O.
-  xTaskCreatePinnedToCore(PingTask, "ping", 4096, nullptr, 1, nullptr, 0);
+  xTaskCreatePinnedToCore(PingTask,     "ping",     4096, nullptr, 1, nullptr, 0);
+  xTaskCreatePinnedToCore(TempPollTask, "tmppoll",  4096, nullptr, 0, nullptr, 0);  // lowest priority
 }
 
 void HandleOscMessage(OSCMessage &msg) {
@@ -4970,6 +4972,70 @@ void PollBlinkLeds() {
 // Runs hostname resolution and ICMP ping in a background FreeRTOS task so the
 // main loop (which handles OSC) never blocks waiting for network replies.
 
+// Polls pylon temperatures every 2 minutes and updates barmode_avg_temp_f / barmode_temp_multiplier.
+// Runs at priority 0 (lowest) on Core 0. Yields between each pylon fetch so it never starves
+// PingTask, OSC, or web serving. Timeout per request is short (500ms) to keep latency spikes small.
+void TempPollTask(void *) {
+  // Initial delay: wait for WiFi and registry to settle before first poll
+  vTaskDelay(pdMS_TO_TICKS(30000));
+
+  for (;;) {
+    if (!barmode_active || WiFi.status() != WL_CONNECTED) {
+      vTaskDelay(pdMS_TO_TICKS(5000));
+      continue;
+    }
+
+    PylonTarget targets[16];
+    const int tcount = ExtractRegistryTargets(targets, 16);
+
+    if (tcount > 0) {
+      float sum = 0.0f;
+      int valid = 0;
+      for (int i = 0; i < tcount; i++) {
+        HTTPClient http;
+        http.begin("http://" + targets[i].ip.toString() + "/api/telemetry");
+        http.setTimeout(500);  // short timeout: never hold Core 0 long
+        if (http.GET() == 200) {
+          const String body = http.getString();
+          const int idx = body.indexOf("\"temperature_f\":");
+          if (idx >= 0) {
+            const String valStr = body.substring(idx + 16);
+            if (!valStr.startsWith("null")) {
+              const float t = valStr.toFloat();
+              if (t > -30.0f) { sum += t; valid++; }  // ignore <= -30F (disconnected thermistor/ADC noise)
+            }
+          }
+        }
+        http.end();
+        vTaskDelay(pdMS_TO_TICKS(200));  // yield between requests; lets higher-priority tasks run
+      }
+
+      if (valid > 0) {
+        const float avg = sum / valid;
+        barmode_avg_temp_f = avg;
+        // Recompute multiplier: if below both thresholds, only the colder one applies
+        const bool b1 = avg < barmode_temp_thresh1_f;
+        const bool b2 = avg < barmode_temp_thresh2_f;
+        float mult = 1.0f;
+        if (b1 && b2) {
+          mult = (barmode_temp_thresh1_f <= barmode_temp_thresh2_f) ? barmode_temp_mult1 : barmode_temp_mult2;
+        } else if (b1) {
+          mult = barmode_temp_mult1;
+        } else if (b2) {
+          mult = barmode_temp_mult2;
+        }
+        barmode_temp_multiplier = mult;
+        Console.printf("[TempPoll] avg=%.1f°F mult=%.2fx (%d/%d pylons)\n", avg, mult, valid, tcount);
+      } else {
+        Console.println("[TempPoll] no valid readings");
+      }
+    }
+
+    // Sleep 2 minutes before next poll cycle
+    vTaskDelay(pdMS_TO_TICKS(120000));
+  }
+}
+
 void PingTask(void *) {
   static const char *kTargetHost = kPingTargetHost;
   static const char *kTargetHostMdns = "RPIBOOSH.local";
@@ -5102,56 +5168,6 @@ void PingTask(void *) {
         } else if (WiFi.hostByName(mp.host, addr)) {
           mp.ip = addr; mp.resolved = true;
           Console.printf("[Manual] Resolved %s → %s\n", mp.host, addr.toString().c_str());
-        }
-      }
-
-      // Poll pylon temperatures every 2 minutes for recovery multiplier calculation
-      static unsigned long lastTempPollMs = 0;
-      const unsigned long now_t = millis();
-      if (now_t - lastTempPollMs >= 120000) {
-        lastTempPollMs = now_t;
-        PylonTarget targets[16];
-        const int tcount = ExtractRegistryTargets(targets, 16);
-        if (tcount > 0) {
-          float sum = 0.0f;
-          int valid = 0;
-          for (int i = 0; i < tcount; i++) {
-            HTTPClient http;
-            http.begin("http://" + targets[i].ip.toString() + "/api/telemetry");
-            http.setTimeout(2000);
-            if (http.GET() == 200) {
-              const String body = http.getString();
-              const int idx = body.indexOf("\"temperature_f\":");
-              if (idx >= 0) {
-                const String valStr = body.substring(idx + 16);
-                if (!valStr.startsWith("null")) {
-                  const float t = valStr.toFloat();
-                  if (t > -30.0f) { sum += t; valid++; }  // ignore <= -30F (disconnected thermistor/ADC noise)
-                }
-              }
-            }
-            http.end();
-          }
-          if (valid > 0) {
-            const float avg = sum / valid;
-            barmode_avg_temp_f = avg;
-            // Recompute multiplier: if below both thresholds, use the colder one's multiplier
-            const bool b1 = avg < barmode_temp_thresh1_f;
-            const bool b2 = avg < barmode_temp_thresh2_f;
-            float mult = 1.0f;
-            if (b1 && b2) {
-              mult = (barmode_temp_thresh1_f <= barmode_temp_thresh2_f)
-                     ? barmode_temp_mult1 : barmode_temp_mult2;
-            } else if (b1) {
-              mult = barmode_temp_mult1;
-            } else if (b2) {
-              mult = barmode_temp_mult2;
-            }
-            barmode_temp_multiplier = mult;
-            Console.printf("[TempPoll] avg=%.1f°F mult=%.2fx (%d pylons)\n", avg, mult, valid);
-          } else {
-            Console.println("[TempPoll] no valid readings");
-          }
         }
       }
 
