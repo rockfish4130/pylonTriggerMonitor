@@ -86,10 +86,10 @@ constexpr const char *kRegistryHeartbeatPath = "/api/pylons/heartbeat";
 constexpr uint16_t kRegistryTtlSec = 30;
 constexpr unsigned long kRegistryHeartbeatIntervalMs = 10000;
 constexpr uint16_t kRegistryHttpTimeoutMs = 2500;
-constexpr const char *kFirmwareSemver = "0.0.2";
+constexpr const char *kFirmwareSemver = "0.0.3";
 constexpr const char *kFirmwareBuildDate = __DATE__;
 constexpr const char *kFirmwareBuildTime = __TIME__;
-constexpr const char *kFirmwareVersion = "0.0.2 " __DATE__ " " __TIME__;
+constexpr const char *kFirmwareVersion = "0.0.3 " __DATE__ " " __TIME__;
 constexpr const char *kTelemetryTemperatureDefault = "N/A";
 constexpr const char *kTelemetryBatteryVoltageDefault = "N/A";
 constexpr const char *kTelemetryBatteryChargePercentDefault = "N/A";
@@ -2581,6 +2581,11 @@ void setup() {
     for (int i = 0; i < 4; i++) pinMode(kBarModeButtonPins[i], INPUT_PULLDOWN);
     barmode_registry_fetch_now = true;  // trigger immediate fetch on first PingTask run
     Console.println("[BarMode] ACTIVE — buttons on IO1,IO2,IO5,IO6");
+    display.setRotation(2);  // 180° — display mounted upside-down in bar hardware
+    // Button lamp PWM outputs: ch4=IO37(green), ch5=IO36(blue), ch6=IO34(red)
+    ledcSetup(4, 5000, 8); ledcAttachPin(37, 4); ledcWrite(4, 0);
+    ledcSetup(5, 5000, 8); ledcAttachPin(36, 5); ledcWrite(5, 0);
+    ledcSetup(6, 5000, 8); ledcAttachPin(34, 6); ledcWrite(6, 0);
   }
   PrintCliHelp();
   pinMode(kDevBoardButtonPin, INPUT_PULLUP);
@@ -2598,9 +2603,9 @@ void setup() {
   ledcAttachPin(kLedYellowPin, 2);
   ledcWrite(2, 0);
 
-  ledcSetup(3, 5000, 8);
-  ledcAttachPin(35, 3);
-  ledcWrite(3, 0);
+  if (barmode_active) {
+    ledcSetup(3, 5000, 8); ledcAttachPin(35, 3); ledcWrite(3, 0);  // orange lamp ch3
+  }
 
   pinMode(kIo38Pin, OUTPUT);
   digitalWrite(kIo38Pin, LOW);
@@ -3344,7 +3349,7 @@ void PollBarModeButtons() {
   {
     static bool btn_prev_stable[4] = {};
 
-    // Button 0 — BooshMain hold
+    // Button 0 — Green button: BooshMain hold
     if (btn_stable[0] && !btn_prev_stable[0]) {
       SendOscFloatToAllPylons(kOscAddress, 1.0f);
       barmode_btn0_held = true;
@@ -3354,8 +3359,19 @@ void PollBarModeButtons() {
       barmode_btn0_held = false;
       display.invertDisplay(false);
     }
+    // Green lamp: solid while held; sine wave 2Hz idle
+    {
+      uint8_t v;
+      if (barmode_btn0_held) {
+        v = 255;
+      } else {
+        const float t = millis() / 1000.0f;
+        v = (uint8_t)((sinf(2.0f * M_PI * 2.0f * t) * 0.5f + 0.5f) * 255);
+      }
+      ledcWrite(4, v);
+    }
 
-    // Button 1 — BooshPulseSingle
+    // Button 1 — Blue button: BooshPulseSingle
     // Normal: single fire on press. Double-tap (second press ≤300ms after release) + hold:
     // fires to each pylon sequentially 100ms apart, looping, until released or 5s max.
     {
@@ -3433,7 +3449,10 @@ void PollBarModeButtons() {
       }
     }
 
-    // Button 2 — BooshPulseTrain; IO35 strobes 5x pulse pattern once then returns to idle sawtooth
+    // Blue lamp: 50ms pulse per second idle
+    ledcWrite(5, (now % 1000 < 50) ? 255 : 0);
+
+    // Button 2 — Orange button: BooshPulseTrain; IO35 strobes 5x pulse pattern once then returns to idle sawtooth
     {
       static bool          io35_strobe      = false;
       static unsigned long io35_strobe_start = 0;
@@ -3460,11 +3479,57 @@ void PollBarModeButtons() {
       }
     }
 
-    // Button 3 — BooshSteam hold
+    // Button 3 — Red button: BooshSteam hold; red lamp mirrors steam ramp while held, Morse LAVA idle
     if (btn_stable[3] && !btn_prev_stable[3]) {
       SendOscFloatToAllPylons(kOscAddrSteam, 1.0f);
     } else if (!btn_stable[3] && btn_prev_stable[3]) {
       SendOscFloatToAllPylons(kOscAddrSteam, 0.0f);
+    }
+    {
+      static unsigned long lamp_red_press_ms = 0;
+      static bool          lamp_red_on       = false;
+      static unsigned long lamp_red_step_ms  = 0;
+
+      if (btn_stable[3] && !btn_prev_stable[3]) {
+        lamp_red_press_ms = now;
+        lamp_red_on       = false;
+        lamp_red_step_ms  = now - 10000;  // expire immediately so first pulse fires without delay
+      }
+
+      if (btn_stable[3]) {
+        // Steam ramp: freq 1→10 Hz over 4s (same timing as solenoid sequence), full on after 4s
+        const unsigned long elapsed = now - lamp_red_press_ms;
+        if (elapsed >= 4000) {
+          ledcWrite(6, 255);
+        } else {
+          const float   t_sec      = elapsed / 1000.0f;
+          const float   freq_hz    = powf(10.0f, t_sec / 4.0f);
+          const uint32_t period_ms = (uint32_t)(1000.0f / freq_hz);
+          const uint32_t off_ms    = period_ms > 50 ? period_ms - 50 : 0;
+          if (lamp_red_on) {
+            if (now - lamp_red_step_ms >= 50)     { lamp_red_on = false; lamp_red_step_ms = now; }
+          } else {
+            if (now - lamp_red_step_ms >= off_ms) { lamp_red_on = true;  lamp_red_step_ms = now; }
+          }
+          ledcWrite(6, lamp_red_on ? 255 : 0);
+        }
+      } else {
+        // Idle: Morse "LAVA" (unit=150ms; L=.-.. A=.- V=...- A=.-)
+        static const uint16_t kLavaMorseMs[] = {
+          150, 150, 450, 150, 150, 150, 150, 450,  // L + inter-char
+          150, 150, 450, 450,                        // A + inter-char
+          150, 150, 150, 150, 150, 150, 450, 450,  // V + inter-char
+          150, 150, 450, 1050,                       // A + inter-word
+        };
+        const unsigned long t = millis() % 6600UL;
+        unsigned long accum = 0;
+        uint8_t lamp = 0;
+        for (int i = 0; i < 24; i++) {
+          accum += kLavaMorseMs[i];
+          if (t < accum) { lamp = (i % 2 == 0) ? 255 : 0; break; }
+        }
+        ledcWrite(6, lamp);
+      }
     }
 
     for (int i = 0; i < 4; i++) btn_prev_stable[i] = btn_stable[i];
@@ -3784,19 +3849,24 @@ void loop() {
       lastDisplayMs = now;
     } else if (now - lastDisplayMs >= kDisplayCycleMs) {
       lastDisplayMs = now;
-      displayPage = static_cast<uint8_t>((displayPage + 1) % 4);
-      // Slot 3 is the "other" slot — advance sub-page each time we enter it
-      if (displayPage == 3) {
+      if (barmode_active) {
+        // Barmode: no battery/temp hardware — skip those pages, only cycle info sub-pages
+        displayPage     = 3;
         displayOtherIdx = static_cast<uint8_t>((displayOtherIdx + 1) % 5);
+      } else {
+        displayPage = static_cast<uint8_t>((displayPage + 1) % 4);
+        if (displayPage == 3) {
+          displayOtherIdx = static_cast<uint8_t>((displayOtherIdx + 1) % 5);
+        }
       }
     }
 
-    // Slot 0, 1 (2/4 = 50%) → temp °F + battery pct (size-3)
-    // Slot 2    (1/4 = 25%) → time remaining HH:MM + voltage (size-2)
-    // Slot 3    (1/4 = 25%) → other pages cycled evenly (ping/wifi/wifi-detail/node/firmware)
-    if (displayPage == 0 || displayPage == 1) {
+    // Slot 0, 1 → temp °F + battery pct  |  Slot 2 → time remaining + voltage
+    // Slot 3 → info sub-pages (ping/wifi/wifi-detail/node/firmware)
+    // In barmode slots 0-2 are skipped entirely (no sensor hardware).
+    if (!barmode_active && (displayPage == 0 || displayPage == 1)) {
       ShowTempPctPage();
-    } else if (displayPage == 2) {
+    } else if (!barmode_active && displayPage == 2) {
       ShowTimeVoltagePage();
     } else {
       // displayOtherIdx: 0=ping, 1=wifi, 2=wifi detail, 3=node, 4=firmware
