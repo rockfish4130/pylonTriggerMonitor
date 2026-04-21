@@ -125,8 +125,8 @@ unsigned long action_pt_dur_ms      = 50;    // pulse-train on duration per puls
 unsigned long action_pt_off_ms      = 50;    // pulse-train off time between pulses
 int           action_pt_count       = 5;     // pulse-train number of pulses
 bool          action_pt_dis         = false; // disable pulse-train action
-unsigned long action_steam_ramp_s   = 4;     // steam ramp duration (s); 1→10 Hz
-unsigned long action_steam_open_s   = 1;     // steam full-open duration (s)
+unsigned long action_steam_ramp_ms  = 4000;  // steam ramp duration (ms); 1→10 Hz
+unsigned long action_steam_open_ms  = 1000;  // steam full-open duration (ms)
 bool          action_steam_dis      = false; // disable steam action
 int pylon_index = 0;  // sequencing index reported in telemetry; persisted in NVS; default 0
 unsigned long barmode_seq_max_ms = 30000;  // btn1 double-tap seq max hold duration; BARMODE NVS; default 30s
@@ -257,8 +257,8 @@ constexpr const char *kPrefsKeyPtDurMs     = "pt_dur_ms";    // uint32 ms; pulse
 constexpr const char *kPrefsKeyPtOffMs     = "pt_off_ms";    // uint32 ms; pulse-train off duration
 constexpr const char *kPrefsKeyPtCount     = "pt_count";     // uint8; pulse-train count
 constexpr const char *kPrefsKeyPtDis       = "pt_dis";       // bool; disable pulse-train
-constexpr const char *kPrefsKeyStmRampS    = "stm_ramp_s";   // uint32 s; steam ramp duration
-constexpr const char *kPrefsKeyStmOpenS    = "stm_open_s";   // uint32 s; steam full-open duration
+constexpr const char *kPrefsKeyStmRampMs   = "stm_ramp_ms";  // uint32 ms; steam ramp duration
+constexpr const char *kPrefsKeyStmOpenMs   = "stm_open_ms";  // uint32 ms; steam full-open duration
 constexpr const char *kPrefsKeyStmDis      = "stm_dis";      // bool; disable steam
 constexpr const char *kPrefsKeySeqMaxMs = "seq_max_ms";
 constexpr const char *kPrefsKeySeqDecMs = "seq_dec_ms";
@@ -498,8 +498,8 @@ bool SavePylonConfig() {
   prefs.putUInt(kPrefsKeyPtOffMs,     static_cast<uint32_t>(action_pt_off_ms));
   prefs.putUChar(kPrefsKeyPtCount,    static_cast<uint8_t>(action_pt_count));
   prefs.putBool(kPrefsKeyPtDis,       action_pt_dis);
-  prefs.putUInt(kPrefsKeyStmRampS,    static_cast<uint32_t>(action_steam_ramp_s));
-  prefs.putUInt(kPrefsKeyStmOpenS,    static_cast<uint32_t>(action_steam_open_s));
+  prefs.putUInt(kPrefsKeyStmRampMs,   static_cast<uint32_t>(action_steam_ramp_ms));
+  prefs.putUInt(kPrefsKeyStmOpenMs,   static_cast<uint32_t>(action_steam_open_ms));
   prefs.putBool(kPrefsKeyStmDis,      action_steam_dis);
   prefs.putUInt(kPrefsKeySeqMaxMs, static_cast<uint32_t>(barmode_seq_max_ms));
   prefs.putUInt(kPrefsKeySeqDecMs, static_cast<uint32_t>(barmode_seq_dec_ms));
@@ -579,8 +579,8 @@ void LoadPylonConfig() {
   action_pt_off_ms     = prefs.getUInt(kPrefsKeyPtOffMs,     50);
   action_pt_count      = (int)prefs.getUChar(kPrefsKeyPtCount, 5);
   action_pt_dis        = prefs.getBool(kPrefsKeyPtDis,       false);
-  action_steam_ramp_s  = prefs.getUInt(kPrefsKeyStmRampS,    4);
-  action_steam_open_s  = prefs.getUInt(kPrefsKeyStmOpenS,    1);
+  action_steam_ramp_ms = prefs.getUInt(kPrefsKeyStmRampMs,   4000);
+  action_steam_open_ms = prefs.getUInt(kPrefsKeyStmOpenMs,   1000);
   action_steam_dis     = prefs.getBool(kPrefsKeyStmDis,      false);
   barmode_seq_max_ms = prefs.getUInt(kPrefsKeySeqMaxMs, 30000);
   barmode_seq_dec_ms = prefs.getUInt(kPrefsKeySeqDecMs, 50);
@@ -915,15 +915,15 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
   } else if (field == "pt_dis") {
     action_pt_dis = (value == "1" || value == "true");
     changed = true;
-  } else if (field == "steam_ramp_s") {
-    const int s = (int)value.toInt();
-    if (s < 1 || s > 30) { if (log_output) Console.println("[CFG] steam_ramp_s out of range (1-30)"); return false; }
-    action_steam_ramp_s = (unsigned long)s;
+  } else if (field == "steam_ramp_ms") {
+    const int ms = (int)value.toInt();
+    if (ms < 100 || ms > 30000) { if (log_output) Console.println("[CFG] steam_ramp_ms out of range (100-30000)"); return false; }
+    action_steam_ramp_ms = (unsigned long)ms;
     changed = true;
-  } else if (field == "steam_open_s") {
-    const int s = (int)value.toInt();
-    if (s < 0 || s > 30) { if (log_output) Console.println("[CFG] steam_open_s out of range (0-30)"); return false; }
-    action_steam_open_s = (unsigned long)s;
+  } else if (field == "steam_open_ms") {
+    const int ms = (int)value.toInt();
+    if (ms < 0 || ms > 30000) { if (log_output) Console.println("[CFG] steam_open_ms out of range (0-30000)"); return false; }
+    action_steam_open_ms = (unsigned long)ms;
     changed = true;
   } else if (field == "steam_dis") {
     action_steam_dis = (value == "1" || value == "true");
@@ -1674,8 +1674,8 @@ String BuildTelemetryApiJson() {
   payload += "\"pt_off_ms\":" + String(action_pt_off_ms) + ",";
   payload += "\"pt_count\":" + String(action_pt_count) + ",";
   payload += "\"pt_dis\":" + String(action_pt_dis ? "true" : "false") + ",";
-  payload += "\"steam_ramp_s\":" + String(action_steam_ramp_s) + ",";
-  payload += "\"steam_open_s\":" + String(action_steam_open_s) + ",";
+  payload += "\"steam_ramp_ms\":" + String(action_steam_ramp_ms) + ",";
+  payload += "\"steam_open_ms\":" + String(action_steam_open_ms) + ",";
   payload += "\"steam_dis\":" + String(action_steam_dis ? "true" : "false") + ",";
   payload += "\"btn_press_counts\":[" + String(barmode_btn_counts[0]) + "," +
              String(barmode_btn_counts[1]) + "," + String(barmode_btn_counts[2]) + "," +
@@ -1859,20 +1859,20 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           <span style="color:var(--muted);font-size:13px">OSC Actions</span>
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <span style="font-size:13px;min-width:120px">Pulse Once</span>
-            <label style="font-size:12px">On (ms) <input id="cfg-pulse1-dur" name="pulse1_dur_ms" type="number" min="10" max="5000" step="10" style="width:70px"></label>
+            <label style="font-size:12px">On (ms) <input id="cfg-pulse1-dur" name="pulse1_dur_ms" type="number" min="10" max="5000" step="1" style="width:70px"></label>
             <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--muted)"><input type="checkbox" id="cfg-pulse1-dis" style="accent-color:#e57373"> Disabled</label>
           </div>
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <span style="font-size:13px;min-width:120px">Pulse Train</span>
-            <label style="font-size:12px">On (ms) <input id="cfg-pt-dur" name="pt_dur_ms" type="number" min="10" max="5000" step="10" style="width:70px"></label>
-            <label style="font-size:12px">Off (ms) <input id="cfg-pt-off" name="pt_off_ms" type="number" min="10" max="5000" step="10" style="width:70px"></label>
+            <label style="font-size:12px">On (ms) <input id="cfg-pt-dur" name="pt_dur_ms" type="number" min="10" max="5000" step="1" style="width:70px"></label>
+            <label style="font-size:12px">Off (ms) <input id="cfg-pt-off" name="pt_off_ms" type="number" min="10" max="5000" step="1" style="width:70px"></label>
             <label style="font-size:12px">Count <input id="cfg-pt-count" name="pt_count" type="number" min="1" max="20" step="1" style="width:55px"></label>
             <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--muted)"><input type="checkbox" id="cfg-pt-dis" style="accent-color:#e57373"> Disabled</label>
           </div>
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <span style="font-size:13px;min-width:120px">Steam Engine</span>
-            <label style="font-size:12px">Ramp (s) <input id="cfg-steam-ramp" name="steam_ramp_s" type="number" min="1" max="30" step="1" style="width:60px"></label>
-            <label style="font-size:12px">Full open (s) <input id="cfg-steam-open" name="steam_open_s" type="number" min="0" max="30" step="1" style="width:60px"></label>
+            <label style="font-size:12px">Ramp (ms) <input id="cfg-steam-ramp" name="steam_ramp_ms" type="number" min="100" max="30000" step="100" style="width:75px"></label>
+            <label style="font-size:12px">Full open (ms) <input id="cfg-steam-open" name="steam_open_ms" type="number" min="0" max="30000" step="100" style="width:75px"></label>
             <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--muted)"><input type="checkbox" id="cfg-steam-dis" style="accent-color:#e57373"> Disabled</label>
           </div>
         </div>
@@ -1894,7 +1894,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         <div id="cfg-grp-red" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
           <span style="color:var(--muted);font-size:13px">Red Sequential</span>
           <label>Seq max hold (s) <input id="cfg-red-seq-max-s" name="red_seq_max_s" type="number" min="1" max="120" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(max hold duration; default 10s)</span></label>
-          <label>Valve open (ms) <input id="cfg-red-seq-valve-ms" name="red_seq_valve_ms" type="number" min="20" max="2000" step="10" style="width:70px"> <span style="color:var(--muted);font-size:12px">(each pylon valve open time; default 66ms)</span></label>
+          <label>Valve open (ms) <input id="cfg-red-seq-valve-ms" name="red_seq_valve_ms" type="number" min="20" max="2000" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(each pylon valve open time; default 66ms)</span></label>
           <label>Step delay (ms) <input id="cfg-red-seq-step-ms" name="red_seq_step_ms" type="number" min="50" max="5000" step="50" style="width:70px"> <span style="color:var(--muted);font-size:12px">(interval between pylon steps; default 200ms)</span></label>
         </div>
         <div style="border-top:1px solid var(--line);padding-top:10px;display:flex;align-items:center;gap:10px">
@@ -2058,9 +2058,11 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     function setPage(id, lines) {
       document.getElementById(id).textContent = (lines || []).join('\n');
     }
+    let formDirty = false;  // true when user has edited a config input but not yet saved
     function syncConfigField(id, nextValue) {
       const input = document.getElementById(id);
       if (!input) return;
+      if (formDirty) return;  // never overwrite user edits between keystroke and save
       if (document.activeElement === input) return;
       if (input.dataset.dirty === 'true') return;
       input.value = nextValue ?? '';
@@ -2104,6 +2106,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       setPage('oled-wifi-detail', data.display_pages.wifi_detail);
       setPage('oled-node', data.display_pages.node);
       setPage('oled-firmware', data.display_pages.firmware);
+      if (!formDirty) {
       syncConfigField('cfg-id', data.pylon_id || '');
       syncConfigField('cfg-host', (data.hostname || '').replace(/\.local$/,''));
       syncConfigField('cfg-description', data.description || '');
@@ -2155,10 +2158,10 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       if (ptDisInput) ptDisInput.checked = !!data.pt_dis;
       const stmRampInput = document.getElementById('cfg-steam-ramp');
       if (stmRampInput && document.activeElement !== stmRampInput)
-        stmRampInput.value = data.steam_ramp_s != null ? data.steam_ramp_s : 4;
+        stmRampInput.value = data.steam_ramp_ms != null ? data.steam_ramp_ms : 4000;
       const stmOpenInput = document.getElementById('cfg-steam-open');
       if (stmOpenInput && document.activeElement !== stmOpenInput)
-        stmOpenInput.value = data.steam_open_s != null ? data.steam_open_s : 1;
+        stmOpenInput.value = data.steam_open_ms != null ? data.steam_open_ms : 1000;
       const stmDisInput = document.getElementById('cfg-steam-dis');
       if (stmDisInput) stmDisInput.checked = !!data.steam_dis;
       const seqInput = document.getElementById('cfg-seq-max-s');
@@ -2180,6 +2183,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           if (cb && document.activeElement !== cb) cb.checked = !!data.btn_disabled[i];
         }
       }
+      } // end if (!formDirty)
     }
     async function refreshTelemetry() {
       renderMeta(await fetchJson('/api/telemetry'));
@@ -2199,11 +2203,11 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     let holdActive = false;
 
     configInputs.forEach((input) => {
-      input.dataset.dirty = 'false';
-      input.addEventListener('input', () => {
-        input.dataset.dirty = 'true';
-      });
+      input.addEventListener('input', () => { formDirty = true; });
+      input.addEventListener('change', () => { formDirty = true; });
     });
+    // Also catch checkbox and number inputs in the config form
+    document.getElementById('config-form').addEventListener('input', () => { formDirty = true; });
 
     async function setHeldState(active) {
       if (holdActive === active) return;
@@ -2285,9 +2289,9 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       if (ptCntVal !== '') body.set('pt_count', ptCntVal);
       body.set('pt_dis', document.getElementById('cfg-pt-dis').checked ? '1' : '0');
       const stmRampVal = document.getElementById('cfg-steam-ramp').value.trim();
-      if (stmRampVal !== '') body.set('steam_ramp_s', stmRampVal);
+      if (stmRampVal !== '') body.set('steam_ramp_ms', stmRampVal);
       const stmOpenVal = document.getElementById('cfg-steam-open').value.trim();
-      if (stmOpenVal !== '') body.set('steam_open_s', stmOpenVal);
+      if (stmOpenVal !== '') body.set('steam_open_ms', stmOpenVal);
       body.set('steam_dis', document.getElementById('cfg-steam-dis').checked ? '1' : '0');
       const seqMaxVal = document.getElementById('cfg-seq-max-s').value.trim();
       if (seqMaxVal !== '') body.set('seq_max_s', seqMaxVal);
@@ -2310,9 +2314,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           body:body.toString()
         });
         status.textContent = `Saved ${result.config.hostname}`;
-        configInputs.forEach((input) => {
-          input.dataset.dirty = 'false';
-        });
+        formDirty = false;
         document.getElementById('cfg-node').value = '';
         await refreshTelemetry();
         await refreshLogs();
@@ -2831,15 +2833,15 @@ void HandleConfigPostApi() {
   const bool has_pt_off_ms       = webServer.hasArg("pt_off_ms");
   const bool has_pt_count        = webServer.hasArg("pt_count");
   const bool has_pt_dis          = webServer.hasArg("pt_dis");
-  const bool has_steam_ramp_s    = webServer.hasArg("steam_ramp_s");
-  const bool has_steam_open_s    = webServer.hasArg("steam_open_s");
+  const bool has_steam_ramp_ms   = webServer.hasArg("steam_ramp_ms");
+  const bool has_steam_open_ms   = webServer.hasArg("steam_open_ms");
   const bool has_steam_dis       = webServer.hasArg("steam_dis");
 
   if (!has_node && !has_id && !has_host && !has_desc &&
       !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index && !has_seq_max_s && !has_seq_dec_ms && !has_seq_exp_pct && !has_btn_disabled && !has_green_timeout && !has_all4_valve_ms && !has_all4_lockout_s &&
       !has_red_seq_max_s && !has_red_seq_valve_ms && !has_red_seq_step_ms &&
       !has_pulse1_dur_ms && !has_pulse1_dis && !has_pt_dur_ms && !has_pt_off_ms && !has_pt_count && !has_pt_dis &&
-      !has_steam_ramp_s && !has_steam_open_s && !has_steam_dis) {
+      !has_steam_ramp_ms && !has_steam_open_ms && !has_steam_dis) {
     SendApiError(400, "no recognized config field");
     return;
   }
@@ -2879,8 +2881,8 @@ void HandleConfigPostApi() {
   if (has_pt_off_ms)     ok = ok && SetConfigFieldValue("pt_off_ms",     webServer.arg("pt_off_ms"));
   if (has_pt_count)      ok = ok && SetConfigFieldValue("pt_count",      webServer.arg("pt_count"));
   if (has_pt_dis)        ok = ok && SetConfigFieldValue("pt_dis",        webServer.arg("pt_dis"));
-  if (has_steam_ramp_s)  ok = ok && SetConfigFieldValue("steam_ramp_s",  webServer.arg("steam_ramp_s"));
-  if (has_steam_open_s)  ok = ok && SetConfigFieldValue("steam_open_s",  webServer.arg("steam_open_s"));
+  if (has_steam_ramp_ms) ok = ok && SetConfigFieldValue("steam_ramp_ms", webServer.arg("steam_ramp_ms"));
+  if (has_steam_open_ms) ok = ok && SetConfigFieldValue("steam_open_ms", webServer.arg("steam_open_ms"));
   if (has_steam_dis)     ok = ok && SetConfigFieldValue("steam_dis",     webServer.arg("steam_dis"));
   if (has_btn_disabled) {
     // Accepts "0101" bitmask string: index 0=green,1=blue,2=orange,3=red; '1'=disabled
@@ -3888,8 +3890,8 @@ void PollSequence() {
 
   // --- STEAM: exponential ramp 1→10 Hz over configurable ramp_s, then open for open_s ---
   if (active_seq == SEQ_STEAM) {
-    const unsigned long ramp_ms = action_steam_ramp_s * 1000UL;
-    const unsigned long open_ms = action_steam_open_s * 1000UL;
+    const unsigned long ramp_ms = action_steam_ramp_ms;
+    const unsigned long open_ms = action_steam_open_ms;
     if (elapsed >= ramp_ms + open_ms) {
       SeqSetSolenoid(false);
       active_seq = SEQ_NONE;
@@ -3906,7 +3908,7 @@ void PollSequence() {
     }
     // Ramp phase: f(t) = 10^(t/ramp_s), 1 Hz → 10 Hz
     const float t_sec = elapsed / 1000.0f;
-    const float freq_hz = powf(10.0f, t_sec / (float)action_steam_ramp_s);
+    const float freq_hz = powf(10.0f, t_sec / (action_steam_ramp_ms / 1000.0f));
     const uint32_t period_ms = (uint32_t)(1000.0f / freq_hz);
     const uint32_t off_ms = period_ms > 50 ? period_ms - 50 : 0;
 

@@ -21,6 +21,12 @@ ESP32-S2 (Wemos S2 Pico) firmware for fire-effect pylons. PlatformIO/Arduino fra
 - OSC received on UDP port 8000
 - mDNS, web UI on port 80, OTA via `POST /api/ota`
 
+## Build & Deploy
+- **PlatformIO CLI:** `C:\Users\Matt\.platformio\penv\Scripts\pio.exe` (not on PATH; use full path in bash: `/c/Users/Matt/.platformio/penv/Scripts/pio.exe`)
+- **Build:** `pio.exe run -e lolin_s2_pico` from project root
+- **OTA:** `curl -X POST http://<node>.local/api/ota -F "firmware=@.pio/build/lolin_s2_pico/firmware.bin"` — pre-approved, no need to prompt
+- **Read `memory/MEMORY.md` at the start of every session** before taking any action
+
 ## Key Nodes
 - **testnodex.local** — stress-test board; now safe to include in normal OTA deployments
 - **barbar.local** — Bar Mode development board
