@@ -118,6 +118,16 @@ bool boosh_failsafe_armed = false;
 unsigned long boosh_failsafe_start_ms = 0;
 unsigned long boosh_failsafe_note_until_ms = 0;
 unsigned long boosh_failsafe_timeout_ms = kBooshFailsafeTimeoutMs;  // runtime, persisted in NVS
+// Configurable OSC action parameters (NVS-persisted, apply to all pylons)
+unsigned long action_pulse1_dur_ms  = 50;    // pulse-once on duration
+bool          action_pulse1_dis     = false; // disable pulse-once action
+unsigned long action_pt_dur_ms      = 50;    // pulse-train on duration per pulse
+unsigned long action_pt_off_ms      = 50;    // pulse-train off time between pulses
+int           action_pt_count       = 5;     // pulse-train number of pulses
+bool          action_pt_dis         = false; // disable pulse-train action
+unsigned long action_steam_ramp_s   = 4;     // steam ramp duration (s); 1→10 Hz
+unsigned long action_steam_open_s   = 1;     // steam full-open duration (s)
+bool          action_steam_dis      = false; // disable steam action
 int pylon_index = 0;  // sequencing index reported in telemetry; persisted in NVS; default 0
 unsigned long barmode_seq_max_ms = 30000;  // btn1 double-tap seq max hold duration; BARMODE NVS; default 30s
 unsigned long barmode_seq_dec_ms = 50;     // delay decrement per step in btn1 seq; BARMODE NVS; default 50ms
@@ -240,6 +250,16 @@ constexpr const char *kPrefsKeyUserSsid = "usr_ssid";
 constexpr const char *kPrefsKeyUserPass = "usr_pass";
 constexpr const char *kPrefsKeyFailsafeMs = "failsafe_ms";
 constexpr const char *kPrefsKeyIndex = "pylon_idx";
+// OSC action config keys
+constexpr const char *kPrefsKeyPulse1DurMs = "ps1_dur_ms";   // uint32 ms; pulse-once on duration
+constexpr const char *kPrefsKeyPulse1Dis   = "ps1_dis";      // bool; disable pulse-once
+constexpr const char *kPrefsKeyPtDurMs     = "pt_dur_ms";    // uint32 ms; pulse-train on duration
+constexpr const char *kPrefsKeyPtOffMs     = "pt_off_ms";    // uint32 ms; pulse-train off duration
+constexpr const char *kPrefsKeyPtCount     = "pt_count";     // uint8; pulse-train count
+constexpr const char *kPrefsKeyPtDis       = "pt_dis";       // bool; disable pulse-train
+constexpr const char *kPrefsKeyStmRampS    = "stm_ramp_s";   // uint32 s; steam ramp duration
+constexpr const char *kPrefsKeyStmOpenS    = "stm_open_s";   // uint32 s; steam full-open duration
+constexpr const char *kPrefsKeyStmDis      = "stm_dis";      // bool; disable steam
 constexpr const char *kPrefsKeySeqMaxMs = "seq_max_ms";
 constexpr const char *kPrefsKeySeqDecMs = "seq_dec_ms";
 constexpr const char *kPrefsKeySeqExpPct  = "seq_exp_pct";  // 1-100; applied as factor delay*=(pct/100)
@@ -472,6 +492,15 @@ bool SavePylonConfig() {
   prefs.putString(kPrefsKeyUserPass, user_wifi_pass);
   prefs.putUInt(kPrefsKeyFailsafeMs, static_cast<uint32_t>(boosh_failsafe_timeout_ms));
   prefs.putInt(kPrefsKeyIndex, pylon_index);
+  prefs.putUInt(kPrefsKeyPulse1DurMs, static_cast<uint32_t>(action_pulse1_dur_ms));
+  prefs.putBool(kPrefsKeyPulse1Dis,   action_pulse1_dis);
+  prefs.putUInt(kPrefsKeyPtDurMs,     static_cast<uint32_t>(action_pt_dur_ms));
+  prefs.putUInt(kPrefsKeyPtOffMs,     static_cast<uint32_t>(action_pt_off_ms));
+  prefs.putUChar(kPrefsKeyPtCount,    static_cast<uint8_t>(action_pt_count));
+  prefs.putBool(kPrefsKeyPtDis,       action_pt_dis);
+  prefs.putUInt(kPrefsKeyStmRampS,    static_cast<uint32_t>(action_steam_ramp_s));
+  prefs.putUInt(kPrefsKeyStmOpenS,    static_cast<uint32_t>(action_steam_open_s));
+  prefs.putBool(kPrefsKeyStmDis,      action_steam_dis);
   prefs.putUInt(kPrefsKeySeqMaxMs, static_cast<uint32_t>(barmode_seq_max_ms));
   prefs.putUInt(kPrefsKeySeqDecMs, static_cast<uint32_t>(barmode_seq_dec_ms));
   prefs.putUChar(kPrefsKeySeqExpPct, barmode_seq_exp_pct);
@@ -544,6 +573,15 @@ void LoadPylonConfig() {
   user_wifi_pass = prefs.getString(kPrefsKeyUserPass, "");
   boosh_failsafe_timeout_ms = prefs.getUInt(kPrefsKeyFailsafeMs, kBooshFailsafeTimeoutMs);
   pylon_index = prefs.getInt(kPrefsKeyIndex, 0);
+  action_pulse1_dur_ms = prefs.getUInt(kPrefsKeyPulse1DurMs, 50);
+  action_pulse1_dis    = prefs.getBool(kPrefsKeyPulse1Dis,   false);
+  action_pt_dur_ms     = prefs.getUInt(kPrefsKeyPtDurMs,     50);
+  action_pt_off_ms     = prefs.getUInt(kPrefsKeyPtOffMs,     50);
+  action_pt_count      = (int)prefs.getUChar(kPrefsKeyPtCount, 5);
+  action_pt_dis        = prefs.getBool(kPrefsKeyPtDis,       false);
+  action_steam_ramp_s  = prefs.getUInt(kPrefsKeyStmRampS,    4);
+  action_steam_open_s  = prefs.getUInt(kPrefsKeyStmOpenS,    1);
+  action_steam_dis     = prefs.getBool(kPrefsKeyStmDis,      false);
   barmode_seq_max_ms = prefs.getUInt(kPrefsKeySeqMaxMs, 30000);
   barmode_seq_dec_ms = prefs.getUInt(kPrefsKeySeqDecMs, 50);
   barmode_seq_exp_pct    = (uint8_t)prefs.getUChar(kPrefsKeySeqExpPct, 100);
@@ -851,9 +889,48 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
     barmode_all4_lockout_s = (unsigned long)s;
     changed = true;
     if (log_output) Console.printf("[CFG] all4_lockout_s set: %lu\n", barmode_all4_lockout_s);
+  } else if (field == "pulse1_dur_ms") {
+    const int ms = (int)value.toInt();
+    if (ms < 10 || ms > 5000) { if (log_output) Console.println("[CFG] pulse1_dur_ms out of range (10-5000)"); return false; }
+    action_pulse1_dur_ms = (unsigned long)ms;
+    changed = true;
+  } else if (field == "pulse1_dis") {
+    action_pulse1_dis = (value == "1" || value == "true");
+    changed = true;
+  } else if (field == "pt_dur_ms") {
+    const int ms = (int)value.toInt();
+    if (ms < 10 || ms > 5000) { if (log_output) Console.println("[CFG] pt_dur_ms out of range (10-5000)"); return false; }
+    action_pt_dur_ms = (unsigned long)ms;
+    changed = true;
+  } else if (field == "pt_off_ms") {
+    const int ms = (int)value.toInt();
+    if (ms < 10 || ms > 5000) { if (log_output) Console.println("[CFG] pt_off_ms out of range (10-5000)"); return false; }
+    action_pt_off_ms = (unsigned long)ms;
+    changed = true;
+  } else if (field == "pt_count") {
+    const int n = (int)value.toInt();
+    if (n < 1 || n > 20) { if (log_output) Console.println("[CFG] pt_count out of range (1-20)"); return false; }
+    action_pt_count = n;
+    changed = true;
+  } else if (field == "pt_dis") {
+    action_pt_dis = (value == "1" || value == "true");
+    changed = true;
+  } else if (field == "steam_ramp_s") {
+    const int s = (int)value.toInt();
+    if (s < 1 || s > 30) { if (log_output) Console.println("[CFG] steam_ramp_s out of range (1-30)"); return false; }
+    action_steam_ramp_s = (unsigned long)s;
+    changed = true;
+  } else if (field == "steam_open_s") {
+    const int s = (int)value.toInt();
+    if (s < 0 || s > 30) { if (log_output) Console.println("[CFG] steam_open_s out of range (0-30)"); return false; }
+    action_steam_open_s = (unsigned long)s;
+    changed = true;
+  } else if (field == "steam_dis") {
+    action_steam_dis = (value == "1" || value == "true");
+    changed = true;
   } else {
     if (log_output) {
-      Console.println("[CFG] unknown set field. use id|host|desc|node|ap|failsafe_s|index|seq_max_s|seq_dec_ms|seq_exp_pct");
+      Console.println("[CFG] unknown set field. use id|host|desc|node|ap|failsafe_s|index|seq_max_s|seq_dec_ms|seq_exp_pct|pulse1_dur_ms|pulse1_dis|pt_dur_ms|pt_off_ms|pt_count|pt_dis|steam_ramp_s|steam_open_s|steam_dis");
     }
     return false;
   }
@@ -1591,6 +1668,15 @@ String BuildTelemetryApiJson() {
   payload += "\"red_seq_max_ms\":" + String(barmode_red_seq_max_ms) + ",";
   payload += "\"red_seq_valve_ms\":" + String(barmode_red_seq_valve_ms) + ",";
   payload += "\"red_seq_step_ms\":" + String(barmode_red_seq_step_ms) + ",";
+  payload += "\"pulse1_dur_ms\":" + String(action_pulse1_dur_ms) + ",";
+  payload += "\"pulse1_dis\":" + String(action_pulse1_dis ? "true" : "false") + ",";
+  payload += "\"pt_dur_ms\":" + String(action_pt_dur_ms) + ",";
+  payload += "\"pt_off_ms\":" + String(action_pt_off_ms) + ",";
+  payload += "\"pt_count\":" + String(action_pt_count) + ",";
+  payload += "\"pt_dis\":" + String(action_pt_dis ? "true" : "false") + ",";
+  payload += "\"steam_ramp_s\":" + String(action_steam_ramp_s) + ",";
+  payload += "\"steam_open_s\":" + String(action_steam_open_s) + ",";
+  payload += "\"steam_dis\":" + String(action_steam_dis ? "true" : "false") + ",";
   payload += "\"btn_press_counts\":[" + String(barmode_btn_counts[0]) + "," +
              String(barmode_btn_counts[1]) + "," + String(barmode_btn_counts[2]) + "," +
              String(barmode_btn_counts[3]) + "],";
@@ -1760,6 +1846,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         <div style="border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
           <span style="color:var(--muted);font-size:13px">All Buttons</span>
           <label>Solenoid failsafe (s) <input id="cfg-failsafe-s" name="failsafe_s" type="number" min="1" max="60" step="0.1" style="width:80px"> <span style="color:var(--muted);font-size:12px">(auto-close if valve left open)</span></label>
+          <label>Pylon index <input id="cfg-index" name="index" type="number" min="-99" max="99" step="1" style="width:60px"> <span style="color:var(--muted);font-size:12px">(sequential fire order; negative = skip)</span></label>
           <div id="cfg-btn-disable-wrap" style="display:none;gap:10px;align-items:center">
             <span style="color:var(--muted);font-size:12px">Disable buttons:</span>
             <label style="color:#4caf50"><input type="checkbox" id="cfg-btn-dis-0" style="accent-color:#4caf50"> Green</label>
@@ -1768,13 +1855,33 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
             <label style="color:#f44336"><input type="checkbox" id="cfg-btn-dis-3" style="accent-color:#f44336"> Red</label>
           </div>
         </div>
+        <div style="border-top:1px solid var(--line);padding-top:10px;display:grid;gap:10px">
+          <span style="color:var(--muted);font-size:13px">OSC Actions</span>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="font-size:13px;min-width:120px">Pulse Once</span>
+            <label style="font-size:12px">On (ms) <input id="cfg-pulse1-dur" name="pulse1_dur_ms" type="number" min="10" max="5000" step="10" style="width:70px"></label>
+            <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--muted)"><input type="checkbox" id="cfg-pulse1-dis" style="accent-color:#e57373"> Disabled</label>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="font-size:13px;min-width:120px">Pulse Train</span>
+            <label style="font-size:12px">On (ms) <input id="cfg-pt-dur" name="pt_dur_ms" type="number" min="10" max="5000" step="10" style="width:70px"></label>
+            <label style="font-size:12px">Off (ms) <input id="cfg-pt-off" name="pt_off_ms" type="number" min="10" max="5000" step="10" style="width:70px"></label>
+            <label style="font-size:12px">Count <input id="cfg-pt-count" name="pt_count" type="number" min="1" max="20" step="1" style="width:55px"></label>
+            <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--muted)"><input type="checkbox" id="cfg-pt-dis" style="accent-color:#e57373"> Disabled</label>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="font-size:13px;min-width:120px">Steam Engine</span>
+            <label style="font-size:12px">Ramp (s) <input id="cfg-steam-ramp" name="steam_ramp_s" type="number" min="1" max="30" step="1" style="width:60px"></label>
+            <label style="font-size:12px">Full open (s) <input id="cfg-steam-open" name="steam_open_s" type="number" min="0" max="30" step="1" style="width:60px"></label>
+            <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--muted)"><input type="checkbox" id="cfg-steam-dis" style="accent-color:#e57373"> Disabled</label>
+          </div>
+        </div>
         <div id="cfg-grp-green" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
           <span style="color:#4caf50;font-size:13px">&#11044; Green</span>
           <label>Pulse open duration (ms) <input id="cfg-green-timeout-ms" name="green_timeout_ms" type="number" min="50" max="10000" step="50" style="width:80px"> <span style="color:var(--muted);font-size:12px">(how long green holds the valve open)</span></label>
         </div>
         <div id="cfg-grp-blue" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
           <span style="color:#2196f3;font-size:13px">&#11044; Blue (Sequential Mode)</span>
-          <label>Pylon index <input id="cfg-index" name="index" type="number" min="-99" max="99" step="1" style="width:60px"> <span style="color:var(--muted);font-size:12px">(this pylon&rsquo;s order in blue sequential fire; negative = skip)</span></label>
           <label>Seq max hold (s) <input id="cfg-seq-max-s" name="seq_max_s" type="number" min="1" max="120" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(blue double-tap+hold max duration)</span></label>
           <label>Seq step decrement (ms) <input id="cfg-seq-dec-ms" name="seq_dec_ms" type="number" min="0" max="2000" step="10" style="width:70px"> <span style="color:var(--muted);font-size:12px">(delay reduction per pylon step)</span></label>
           <label>Seq exp factor (%) <input id="cfg-seq-exp-pct" name="seq_exp_pct" type="number" min="1" max="100" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(multiply delay each step; 100=linear only)</span></label>
@@ -2029,6 +2136,31 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       const redSeqStpInput = document.getElementById('cfg-red-seq-step-ms');
       if (redSeqStpInput && document.activeElement !== redSeqStpInput)
         redSeqStpInput.value = data.red_seq_step_ms != null ? data.red_seq_step_ms : 200;
+      // OSC action params (all pylons)
+      const p1DurInput = document.getElementById('cfg-pulse1-dur');
+      if (p1DurInput && document.activeElement !== p1DurInput)
+        p1DurInput.value = data.pulse1_dur_ms != null ? data.pulse1_dur_ms : 50;
+      const p1DisInput = document.getElementById('cfg-pulse1-dis');
+      if (p1DisInput) p1DisInput.checked = !!data.pulse1_dis;
+      const ptDurInput = document.getElementById('cfg-pt-dur');
+      if (ptDurInput && document.activeElement !== ptDurInput)
+        ptDurInput.value = data.pt_dur_ms != null ? data.pt_dur_ms : 50;
+      const ptOffInput = document.getElementById('cfg-pt-off');
+      if (ptOffInput && document.activeElement !== ptOffInput)
+        ptOffInput.value = data.pt_off_ms != null ? data.pt_off_ms : 50;
+      const ptCntInput = document.getElementById('cfg-pt-count');
+      if (ptCntInput && document.activeElement !== ptCntInput)
+        ptCntInput.value = data.pt_count != null ? data.pt_count : 5;
+      const ptDisInput = document.getElementById('cfg-pt-dis');
+      if (ptDisInput) ptDisInput.checked = !!data.pt_dis;
+      const stmRampInput = document.getElementById('cfg-steam-ramp');
+      if (stmRampInput && document.activeElement !== stmRampInput)
+        stmRampInput.value = data.steam_ramp_s != null ? data.steam_ramp_s : 4;
+      const stmOpenInput = document.getElementById('cfg-steam-open');
+      if (stmOpenInput && document.activeElement !== stmOpenInput)
+        stmOpenInput.value = data.steam_open_s != null ? data.steam_open_s : 1;
+      const stmDisInput = document.getElementById('cfg-steam-dis');
+      if (stmDisInput) stmDisInput.checked = !!data.steam_dis;
       const seqInput = document.getElementById('cfg-seq-max-s');
       if (seqInput && document.activeElement !== seqInput)
         seqInput.value = data.seq_max_ms != null ? Math.round(data.seq_max_ms / 1000) : 30;
@@ -2141,6 +2273,22 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       if (redSeqVlvVal !== '') body.set('red_seq_valve_ms', redSeqVlvVal);
       const redSeqStpVal = document.getElementById('cfg-red-seq-step-ms').value.trim();
       if (redSeqStpVal !== '') body.set('red_seq_step_ms', redSeqStpVal);
+      // OSC action params
+      const p1DurVal = document.getElementById('cfg-pulse1-dur').value.trim();
+      if (p1DurVal !== '') body.set('pulse1_dur_ms', p1DurVal);
+      body.set('pulse1_dis', document.getElementById('cfg-pulse1-dis').checked ? '1' : '0');
+      const ptDurVal = document.getElementById('cfg-pt-dur').value.trim();
+      if (ptDurVal !== '') body.set('pt_dur_ms', ptDurVal);
+      const ptOffVal = document.getElementById('cfg-pt-off').value.trim();
+      if (ptOffVal !== '') body.set('pt_off_ms', ptOffVal);
+      const ptCntVal = document.getElementById('cfg-pt-count').value.trim();
+      if (ptCntVal !== '') body.set('pt_count', ptCntVal);
+      body.set('pt_dis', document.getElementById('cfg-pt-dis').checked ? '1' : '0');
+      const stmRampVal = document.getElementById('cfg-steam-ramp').value.trim();
+      if (stmRampVal !== '') body.set('steam_ramp_s', stmRampVal);
+      const stmOpenVal = document.getElementById('cfg-steam-open').value.trim();
+      if (stmOpenVal !== '') body.set('steam_open_s', stmOpenVal);
+      body.set('steam_dis', document.getElementById('cfg-steam-dis').checked ? '1' : '0');
       const seqMaxVal = document.getElementById('cfg-seq-max-s').value.trim();
       if (seqMaxVal !== '') body.set('seq_max_s', seqMaxVal);
       const seqDecVal = document.getElementById('cfg-seq-dec-ms').value.trim();
@@ -2338,6 +2486,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       const fmt = (v, unit, dec=0) => (v == null || v === '') ? '-' : (+v).toFixed(dec) + unit;
       const rows = all.map(p => `<tr style="border-top:1px solid var(--line)">
         ${td('<b>'+esc(p.pylon_id||'?')+'</b>')}
+        ${td(p.pylon_index != null ? p.pylon_index : '-','color:var(--muted);text-align:center')}
         ${td(p.hostname ? `<a href="http://${esc(p.hostname)}" target="_blank" style="color:var(--accent)">${esc(p.hostname)}</a>` : '-')}
         ${td(esc(p.ip||'-'),'color:var(--muted)')}
         ${td(badge(p.active))}
@@ -2350,7 +2499,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         ${td(esc(p.fw_version||'-'),'color:var(--muted);font-size:11px')}
       </tr>`).join('');
       el.innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr>
-        ${th('ID')}${th('Host')}${th('IP')}${th('Status')}${th('Seen')}${th('Bat%')}${th('BatV')}${th('Temp')}${th('RSSI')}${th('Ping')}${th('FW')}
+        ${th('ID')}${th('Idx')}${th('Host')}${th('IP')}${th('Status')}${th('Seen')}${th('Bat%')}${th('BatV')}${th('Temp')}${th('RSSI')}${th('Ping')}${th('FW')}
       </tr></thead><tbody>${rows}</tbody></table>
       <div style="color:var(--muted);font-size:11px;margin-top:6px">${entries.length} online, ${offline.length} recently offline \u2014 ${esc((data.data&&data.data.server_time)||'')}</div>`;
     }
@@ -2676,11 +2825,22 @@ void HandleConfigPostApi() {
   const bool has_red_seq_max_s   = webServer.hasArg("red_seq_max_s");
   const bool has_red_seq_valve_ms = webServer.hasArg("red_seq_valve_ms");
   const bool has_red_seq_step_ms  = webServer.hasArg("red_seq_step_ms");
+  const bool has_pulse1_dur_ms   = webServer.hasArg("pulse1_dur_ms");
+  const bool has_pulse1_dis      = webServer.hasArg("pulse1_dis");
+  const bool has_pt_dur_ms       = webServer.hasArg("pt_dur_ms");
+  const bool has_pt_off_ms       = webServer.hasArg("pt_off_ms");
+  const bool has_pt_count        = webServer.hasArg("pt_count");
+  const bool has_pt_dis          = webServer.hasArg("pt_dis");
+  const bool has_steam_ramp_s    = webServer.hasArg("steam_ramp_s");
+  const bool has_steam_open_s    = webServer.hasArg("steam_open_s");
+  const bool has_steam_dis       = webServer.hasArg("steam_dis");
 
   if (!has_node && !has_id && !has_host && !has_desc &&
       !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index && !has_seq_max_s && !has_seq_dec_ms && !has_seq_exp_pct && !has_btn_disabled && !has_green_timeout && !has_all4_valve_ms && !has_all4_lockout_s &&
-      !has_red_seq_max_s && !has_red_seq_valve_ms && !has_red_seq_step_ms) {
-    SendApiError(400, "expected one of: node, id, host, description, wifi_ssid, wifi_pass, failsafe_s, index, seq_max_s, seq_dec_ms, seq_exp_pct, btn_disabled, green_timeout_ms, all4_valve_ms, all4_lockout_s, red_seq_max_s, red_seq_valve_ms, red_seq_step_ms");
+      !has_red_seq_max_s && !has_red_seq_valve_ms && !has_red_seq_step_ms &&
+      !has_pulse1_dur_ms && !has_pulse1_dis && !has_pt_dur_ms && !has_pt_off_ms && !has_pt_count && !has_pt_dis &&
+      !has_steam_ramp_s && !has_steam_open_s && !has_steam_dis) {
+    SendApiError(400, "no recognized config field");
     return;
   }
 
@@ -2713,6 +2873,15 @@ void HandleConfigPostApi() {
   if (has_red_seq_max_s)   ok = ok && SetConfigFieldValue("red_seq_max_s",   webServer.arg("red_seq_max_s"));
   if (has_red_seq_valve_ms) ok = ok && SetConfigFieldValue("red_seq_valve_ms", webServer.arg("red_seq_valve_ms"));
   if (has_red_seq_step_ms)  ok = ok && SetConfigFieldValue("red_seq_step_ms",  webServer.arg("red_seq_step_ms"));
+  if (has_pulse1_dur_ms) ok = ok && SetConfigFieldValue("pulse1_dur_ms", webServer.arg("pulse1_dur_ms"));
+  if (has_pulse1_dis)    ok = ok && SetConfigFieldValue("pulse1_dis",    webServer.arg("pulse1_dis"));
+  if (has_pt_dur_ms)     ok = ok && SetConfigFieldValue("pt_dur_ms",     webServer.arg("pt_dur_ms"));
+  if (has_pt_off_ms)     ok = ok && SetConfigFieldValue("pt_off_ms",     webServer.arg("pt_off_ms"));
+  if (has_pt_count)      ok = ok && SetConfigFieldValue("pt_count",      webServer.arg("pt_count"));
+  if (has_pt_dis)        ok = ok && SetConfigFieldValue("pt_dis",        webServer.arg("pt_dis"));
+  if (has_steam_ramp_s)  ok = ok && SetConfigFieldValue("steam_ramp_s",  webServer.arg("steam_ramp_s"));
+  if (has_steam_open_s)  ok = ok && SetConfigFieldValue("steam_open_s",  webServer.arg("steam_open_s"));
+  if (has_steam_dis)     ok = ok && SetConfigFieldValue("steam_dis",     webServer.arg("steam_dis"));
   if (has_btn_disabled) {
     // Accepts "0101" bitmask string: index 0=green,1=blue,2=orange,3=red; '1'=disabled
     const String v = webServer.arg("btn_disabled");
@@ -3353,8 +3522,9 @@ void HandleOscMessage(OSCMessage &msg) {
     return;
   }
 
-  // /pylon/BooshPulseSingle  1.0 = trigger single 50 ms pulse
+  // /pylon/BooshPulseSingle  1.0 = trigger single pulse
   if (msg.fullMatch(kOscAddrPulseSingle)) {
+    if (action_pulse1_dis) { Console.println("OSC BooshPulseSingle: disabled"); return; }
     if (msg.size() == 1 && msg.isFloat(0) && msg.getFloat(0) >= 0.5f) {
       Console.println("OSC BooshPulseSingle → SEQ_PULSE_ONCE");
       StartSequence(SEQ_PULSE_ONCE);
@@ -3362,8 +3532,9 @@ void HandleOscMessage(OSCMessage &msg) {
     return;
   }
 
-  // /pylon/BooshPulseTrain  1.0 = trigger 5× 50 ms pulses
+  // /pylon/BooshPulseTrain  1.0 = trigger pulse train
   if (msg.fullMatch(kOscAddrPulseTrain)) {
+    if (action_pt_dis) { Console.println("OSC BooshPulseTrain: disabled"); return; }
     if (msg.size() == 1 && msg.isFloat(0) && msg.getFloat(0) >= 0.5f) {
       Console.println("OSC BooshPulseTrain → SEQ_PULSE_5X");
       StartSequence(SEQ_PULSE_5X);
@@ -3373,6 +3544,9 @@ void HandleOscMessage(OSCMessage &msg) {
 
   // /pylon/BooshSteam  1.0=start  0.0=stop
   if (msg.fullMatch(kOscAddrSteam)) {
+    if (action_steam_dis && msg.size() == 1 && msg.isFloat(0) && msg.getFloat(0) >= 0.5f) {
+      Console.println("OSC BooshSteam: disabled"); return;
+    }
     if (msg.size() == 1 && msg.isFloat(0)) {
       if (msg.getFloat(0) >= 0.5f) {
         Console.println("OSC BooshSteam 1.0 → SEQ_STEAM start");
@@ -3674,35 +3848,35 @@ void PollSequence() {
     return;
   }
 
-  // --- PULSE_ONCE: single 50 ms pulse ---
+  // --- PULSE_ONCE: single configurable-duration pulse ---
   if (active_seq == SEQ_PULSE_ONCE) {
     if (!seq_phase_on) {
       SeqSetSolenoid(true);
       seq_phase_on = true;
       seq_step_start_ms = now;
-    } else if (now - seq_step_start_ms >= 50) {
+    } else if (now - seq_step_start_ms >= action_pulse1_dur_ms) {
       SeqSetSolenoid(false);
       active_seq = SEQ_NONE;
     }
     return;
   }
 
-  // --- PULSE_5X: 5 × (50 ms on / 50 ms off) ---
+  // --- PULSE_5X: N × (on_ms / off_ms), all configurable ---
   if (active_seq == SEQ_PULSE_5X) {
-    if (seq_pulse_idx >= 5) {
+    if (seq_pulse_idx >= action_pt_count) {
       SeqSetSolenoid(false);
       active_seq = SEQ_NONE;
       return;
     }
     if (!seq_phase_on) {
-      // off phase (or initial start): wait 50 ms between pulses (skip wait on first)
-      if (seq_pulse_idx == 0 || now - seq_step_start_ms >= 50) {
+      // off phase (or initial start): skip wait on first pulse
+      if (seq_pulse_idx == 0 || now - seq_step_start_ms >= action_pt_off_ms) {
         SeqSetSolenoid(true);
         seq_phase_on = true;
         seq_step_start_ms = now;
       }
     } else {
-      if (now - seq_step_start_ms >= 50) {
+      if (now - seq_step_start_ms >= action_pt_dur_ms) {
         SeqSetSolenoid(false);
         seq_phase_on = false;
         seq_pulse_idx++;
@@ -3712,15 +3886,17 @@ void PollSequence() {
     return;
   }
 
-  // --- STEAM: exponential ramp 1→10 Hz over 4 s, then 1 s full open ---
+  // --- STEAM: exponential ramp 1→10 Hz over configurable ramp_s, then open for open_s ---
   if (active_seq == SEQ_STEAM) {
-    if (elapsed >= 5000) {
+    const unsigned long ramp_ms = action_steam_ramp_s * 1000UL;
+    const unsigned long open_ms = action_steam_open_s * 1000UL;
+    if (elapsed >= ramp_ms + open_ms) {
       SeqSetSolenoid(false);
       active_seq = SEQ_NONE;
       Console.println("[SEQ] steam done");
       return;
     }
-    if (elapsed >= 4000) {
+    if (elapsed >= ramp_ms) {
       // Full-open phase
       if (!display_inverted) {
         SeqSetSolenoid(true);
@@ -3728,9 +3904,9 @@ void PollSequence() {
       }
       return;
     }
-    // Ramp phase: f(t) = 10^(t/4), 1 Hz → 10 Hz
+    // Ramp phase: f(t) = 10^(t/ramp_s), 1 Hz → 10 Hz
     const float t_sec = elapsed / 1000.0f;
-    const float freq_hz = powf(10.0f, t_sec / 4.0f);
+    const float freq_hz = powf(10.0f, t_sec / (float)action_steam_ramp_s);
     const uint32_t period_ms = (uint32_t)(1000.0f / freq_hz);
     const uint32_t off_ms = period_ms > 50 ? period_ms - 50 : 0;
 
