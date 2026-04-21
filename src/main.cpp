@@ -162,7 +162,8 @@ bool barmode_btn0_held = false;         // true while button 0 is held; drives c
 SemaphoreHandle_t barmode_registry_mutex = nullptr;
 String barmode_registry_json;           // cached GET /api/pylons response; protected by barmode_registry_mutex
 unsigned long barmode_registry_last_fetch_ms = 0;
-volatile bool barmode_registry_fetch_now = false;  // set to trigger immediate PingTask fetch
+volatile bool  barmode_registry_fetch_now = false;  // set to trigger immediate PingTask fetch
+volatile float barmode_bpm = 0.0f;  // 0 = no BPM lock; updated by PingTask from llled.local/v0/bpm
 
 // ---- Sequence state ---------------------------------------------------------
 enum SeqType { SEQ_NONE, SEQ_PULSE_ONCE, SEQ_PULSE_5X, SEQ_STEAM };
@@ -1477,6 +1478,7 @@ String BuildTelemetryApiJson() {
   payload += "\"seq_dec_ms\":" + String(barmode_seq_dec_ms) + ",";
   payload += "\"seq_exp_pct\":" + String(barmode_seq_exp_pct) + ",";
   payload += "\"green_timeout_ms\":" + String(barmode_green_timeout_ms) + ",";
+  payload += "\"bpm\":" + String(barmode_bpm, 1) + ",";
   payload += "\"all4_valve_ms\":" + String(barmode_all4_valve_ms) + ",";
   payload += "\"btn_press_counts\":[" + String(barmode_btn_counts[0]) + "," +
              String(barmode_btn_counts[1]) + "," + String(barmode_btn_counts[2]) + "," +
@@ -3785,8 +3787,10 @@ void PollBarModeButtons() {
       } else if (barmode_btn0_held) {
         v = 255;
       } else {
-        const float t = millis() / 1000.0f;
-        v = (uint8_t)((sinf(2.0f * M_PI * 2.0f * t) * 0.5f + 0.5f) * 255);
+        const float t    = millis() / 1000.0f;
+        const float bpm  = barmode_bpm;
+        const float freq = (bpm >= 40.0f) ? (bpm / 60.0f) : 2.0f;  // 1 sine per beat, or 2Hz default
+        v = (uint8_t)((sinf(2.0f * M_PI * freq * t) * 0.5f + 0.5f) * 255);
       }
       ledcWrite(4, v);
     }
@@ -3875,7 +3879,12 @@ void PollBarModeButtons() {
     }
 
     // Blue lamp: disabled=30%, idle=200ms pulse per second
-    ledcWrite(5, barmode_btn_disabled[1] ? 77 : (now % 1000 < 50) ? 255 : 51);
+    {
+      const float bpm_b = barmode_bpm;
+      const unsigned long blue_period = (bpm_b >= 40.0f)
+          ? (unsigned long)(60000.0f / bpm_b) : 1000UL;  // 1 pulse per beat, or 1Hz default
+      ledcWrite(5, barmode_btn_disabled[1] ? 77 : (now % blue_period < 50) ? 255 : 51);
+    }
 
     // Button 2 — Orange button: BooshPulseTrain; IO35 strobes 5x pulse pattern once then returns to idle sawtooth
     {
@@ -3905,7 +3914,12 @@ void PollBarModeButtons() {
       }
       if (!io35_strobe) {
         // Orange lamp: disabled=30%, idle=sawtooth 4Hz
-        ledcWrite(3, barmode_btn_disabled[2] ? 77 : (uint8_t)((now % 250) * 255 / 250));
+        {
+          const float bpm_o = barmode_bpm;
+          const unsigned long saw_period = (bpm_o >= 40.0f)
+              ? (unsigned long)(60000.0f / bpm_o) : 250UL;  // 1 ramp per beat, or 4Hz default
+          ledcWrite(3, barmode_btn_disabled[2] ? 77 : (uint8_t)((now % saw_period) * 255 / saw_period));
+        }
       }
     }
 
@@ -4004,18 +4018,25 @@ void PollBarModeButtons() {
           ledcWrite(6, lamp_red_on ? 255 : 0);
         }
       } else {
-        // Idle: Morse "LAVA" (unit=150ms; L=.-.. A=.- V=...- A=.-)
-        static const uint16_t kLavaMorseMs[] = {
-          150, 150, 450, 150, 150, 150, 150, 450,  // L + inter-char
-          150, 150, 450, 450,                        // A + inter-char
-          150, 150, 150, 150, 150, 150, 450, 450,  // V + inter-char
-          150, 150, 450, 1050,                       // A + inter-word
+        // Idle: Morse "LAVA" — unit scales to beat/4 when BPM locked (16th note), else 150ms
+        // Ratios (÷unit): L=1,1,3,1,1,1,1,3  A=1,1,3,3  V=1,1,1,1,1,1,3,3  A=1,1,3,7 (44 units total)
+        static const uint8_t kLavaMorseUnits[] = {
+          1,1,3,1,1,1,1,3,  // L + inter-char
+          1,1,3,3,            // A + inter-char
+          1,1,1,1,1,1,3,3,  // V + inter-char
+          1,1,3,7,            // A + inter-word
         };
-        const unsigned long t = millis() % 6600UL;
+        const float bpm_r = barmode_bpm;
+        const unsigned long beat_r = (bpm_r >= 40.0f) ? (unsigned long)(60000.0f / bpm_r) : 600UL;
+        const unsigned long mu = beat_r / 4;  // 16th note; clamped to reasonable range
+        const unsigned long morse_unit = (mu < 50) ? 50 : (mu > 400) ? 400 : mu;
+        unsigned long total_ms = 0;
+        for (int i = 0; i < 24; i++) total_ms += kLavaMorseUnits[i] * morse_unit;
+        const unsigned long t = millis() % total_ms;
         unsigned long accum = 0;
         uint8_t lamp = 0;
         for (int i = 0; i < 24; i++) {
-          accum += kLavaMorseMs[i];
+          accum += kLavaMorseUnits[i] * morse_unit;
           if (t < accum) { lamp = (i % 2 == 0) ? 255 : 0; break; }
         }
         ledcWrite(6, lamp);
@@ -4246,6 +4267,34 @@ void PingTask(void *) {
           }
         } else {
           Console.printf("[BarMode] registry fetch failed: %d\n", code);
+        }
+        http.end();
+      }
+    }
+
+    // In BARMODE: poll llled.local BPM every 3s for lamp sync
+    if (barmode_active) {
+      static unsigned long lastBpmFetchMs = 0;
+      const unsigned long now_b = millis();
+      if (now_b - lastBpmFetchMs >= 3000) {
+        lastBpmFetchMs = now_b;
+        HTTPClient http;
+        http.begin("http://llled.local/v0/bpm");
+        http.setTimeout(2000);
+        const int code = http.GET();
+        if (code == 200) {
+          const String body = http.getString();
+          // Parse "enabled": must be true
+          bool enabled = body.indexOf("\"enabled\":true") >= 0;
+          // Parse "bpm": <number>
+          float bpm = 0.0f;
+          int bp = body.indexOf("\"bpm\":");
+          if (bp >= 0) bpm = body.substring(bp + 6).toFloat();
+          barmode_bpm = (enabled && bpm >= 40.0f && bpm <= 220.0f) ? bpm : 0.0f;
+          Console.printf("[BPM] %.1f (enabled=%d)\n", barmode_bpm, (int)enabled);
+        } else {
+          barmode_bpm = 0.0f;  // offline or error: revert to default patterns
+          if (code != -1) Console.printf("[BPM] fetch failed: %d\n", code);
         }
         http.end();
       }
