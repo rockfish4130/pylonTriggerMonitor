@@ -127,6 +127,18 @@ unsigned long barmode_all4_valve_ms    = 3000; // all-4 hold: valve open duratio
 unsigned long barmode_all4_lockout_s   = 300;  // all-4 lockout countdown duration after sequence; BARMODE NVS; default 5 min
 unsigned long barmode_all4_lockout_until_ms = 0; // millis() deadline; 0 = not locked
 bool          barmode_show_wait_oled   = false; // true while blue held but lockout active → WAIT screen
+// Manually-pinned pylons (supplement the rpiboosh registry, NVS-persisted)
+constexpr int kManualPylonMax = 8;
+struct ManualPylon {
+  char      host[64];         // hostname or dotted IP as entered
+  int       index;            // pylon_index for sequential ordering
+  IPAddress ip;               // resolved IP (valid when resolved==true)
+  bool      resolved;         // true once ip is valid
+  unsigned long last_resolve_ms; // millis() of last resolution attempt
+};
+ManualPylon barmode_manual_pylons[kManualPylonMax];
+int         barmode_manual_pylon_count = 0;
+
 uint32_t barmode_btn_counts[4]   = {0,0,0,0};   // running press counts: [green, blue, orange, red]
 // Per-action counters (since boot): [green_pulse, blue_tap, blue_seq, orange_train, red_tap, red_steam, all4_seq]
 uint32_t barmode_act_counts[7]   = {0,0,0,0,0,0,0};
@@ -232,6 +244,7 @@ constexpr const char *kPrefsKeyBtnDisable    = "btn_dis";      // uint8 bitmask:
 constexpr const char *kPrefsKeyGreenTimeout  = "grn_to_ms";   // uint32 ms; btn0 timed pulse duration
 constexpr const char *kPrefsKeyAll4ValveMs   = "all4_vlv_ms"; // uint32 ms; all-4 hold valve open duration
 constexpr const char *kPrefsKeyAll4LockoutS  = "all4_lck_s";  // uint32 s; all-4 lockout countdown duration
+constexpr const char *kPrefsKeyManualPylons  = "man_pylons";  // string; "host|index\n" lines
 constexpr uint32_t kBooshFailsafeMinMs  = 1000;
 constexpr uint32_t kBooshFailsafeMaxMs  = 60000;
 
@@ -558,6 +571,51 @@ void LoadPylonConfig() {
 
   prefs.end();
   PrintPylonConfig();
+}
+
+void SaveManualPylons() {
+  String blob;
+  for (int i = 0; i < barmode_manual_pylon_count; i++) {
+    blob += barmode_manual_pylons[i].host;
+    blob += '|';
+    blob += barmode_manual_pylons[i].index;
+    blob += '\n';
+  }
+  Preferences prefs;
+  prefs.begin(kPrefsNamespace, false);
+  prefs.putString(kPrefsKeyManualPylons, blob);
+  prefs.end();
+}
+
+void LoadManualPylons() {
+  Preferences prefs;
+  prefs.begin(kPrefsNamespace, true);
+  String blob = prefs.getString(kPrefsKeyManualPylons, "");
+  prefs.end();
+  barmode_manual_pylon_count = 0;
+  int start = 0;
+  while (start < (int)blob.length() && barmode_manual_pylon_count < kManualPylonMax) {
+    int nl = blob.indexOf('\n', start);
+    if (nl < 0) nl = blob.length();
+    String line = blob.substring(start, nl);
+    start = nl + 1;
+    int sep = line.lastIndexOf('|');
+    if (sep < 1) continue;
+    String host = line.substring(0, sep);
+    int idx = line.substring(sep + 1).toInt();
+    host.trim();
+    if (host.length() == 0 || host.length() >= 64) continue;
+    ManualPylon &mp = barmode_manual_pylons[barmode_manual_pylon_count++];
+    strncpy(mp.host, host.c_str(), 63);
+    mp.host[63] = '\0';
+    mp.index = idx;
+    mp.resolved = false;
+    mp.last_resolve_ms = 0;
+    // Attempt immediate parse for dotted-decimal IPs
+    IPAddress addr;
+    if (addr.fromString(host)) { mp.ip = addr; mp.resolved = true; }
+  }
+  Console.printf("[Manual] Loaded %d manual pylons\n", barmode_manual_pylon_count);
 }
 
 void RestartMdnsIfConnected() {
@@ -1743,6 +1801,21 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         <span style="color:var(--muted);font-size:13px">Loading...</span>
       </div>
     </div>
+    <div id="manual-pylons-panel" class="panel" style="margin-top:16px;display:none">
+      <h2>Manual Pylons</h2>
+      <div style="color:var(--muted);font-size:12px;margin-bottom:10px">Pylons added here are included in all OSC fanouts alongside the rpiboosh registry. Persists across reboots.</div>
+      <div id="manual-pylons-list" style="margin-bottom:12px"></div>
+      <form id="manual-pylon-form" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+        <label style="font-size:13px">Host / IP
+          <input id="mp-host" type="text" placeholder="e.g. tiki1.local or 192.168.1.50" style="width:220px;margin-top:4px">
+        </label>
+        <label style="font-size:13px">Pylon index
+          <input id="mp-index" type="number" min="0" max="99" value="0" style="width:70px;margin-top:4px">
+        </label>
+        <button type="submit" style="margin-bottom:2px">Add</button>
+        <span id="mp-status" style="font-size:13px;color:var(--muted)"></span>
+      </form>
+    </div>
     <div id="btn-activity-panel" class="panel" style="margin-top:16px;display:none">
       <h2>Button Activity</h2>
       <div style="display:flex;gap:20px;margin-bottom:10px;font-size:14px">
@@ -2222,6 +2295,48 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       try { renderRegistry(await fetchJson('/api/registry')); }
       catch(e) { document.getElementById('registry-content').innerHTML = '<span style="color:#e57373;font-size:13px">Error: '+esc(e.message)+'</span>'; }
     }
+    // --- Manual Pylons ---
+    function renderManualPylons(data) {
+      const panel = document.getElementById('manual-pylons-panel');
+      if (!barmodeActive) { panel.style.display = 'none'; return; }
+      panel.style.display = '';
+      const list = document.getElementById('manual-pylons-list');
+      if (!data || !data.entries || data.entries.length === 0) {
+        list.innerHTML = '<span style="color:var(--muted);font-size:13px">None added yet.</span>';
+        return;
+      }
+      const rows = data.entries.map(e => `<div style="display:flex;align-items:center;gap:12px;padding:5px 0;border-bottom:1px solid var(--line);font-size:13px">
+        <span style="min-width:160px">${esc(e.host)}</span>
+        <span style="color:var(--muted);min-width:40px">idx ${e.index}</span>
+        <span style="color:${e.resolved?'#4caf50':'#e57373'};min-width:110px">${e.resolved ? e.ip : 'Resolving\u2026'}</span>
+        <button onclick="removeManualPylon(${e.i})" style="padding:2px 10px;font-size:12px">Remove</button>
+      </div>`).join('');
+      list.innerHTML = rows;
+    }
+    async function refreshManualPylons() {
+      try { renderManualPylons(await fetchJson('/api/pylons/manual')); }
+      catch(e) {}
+    }
+    async function removeManualPylon(i) {
+      const fd = new FormData(); fd.set('action','remove'); fd.set('i', String(i));
+      try { await fetchJson('/api/pylons/manual', {method:'POST',body:fd}); refreshManualPylons(); }
+      catch(e) { alert('Remove failed: ' + e.message); }
+    }
+    document.getElementById('manual-pylon-form').addEventListener('submit', async e => {
+      e.preventDefault();
+      const host = document.getElementById('mp-host').value.trim();
+      const index = document.getElementById('mp-index').value.trim();
+      const status = document.getElementById('mp-status');
+      if (!host) { status.textContent = 'Host required'; status.style.color='#e57373'; return; }
+      const fd = new FormData(); fd.set('action','add'); fd.set('host',host); fd.set('index',index||'0');
+      try {
+        await fetchJson('/api/pylons/manual', {method:'POST',body:fd});
+        document.getElementById('mp-host').value = '';
+        status.textContent = 'Added — resolving\u2026'; status.style.color='#4caf50';
+        setTimeout(() => { status.textContent = ''; }, 3000);
+        refreshManualPylons();
+      } catch(err) { status.textContent = 'Error: '+err.message; status.style.color='#e57373'; }
+    });
     // --- Button activity chart ---
     const BTN_COLORS = ['#4caf50','#2196f3','#ff9800','#f44336'];
     const BTN_NAMES  = ['Green','Blue','Orange','Red'];
@@ -2340,11 +2455,13 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     refreshLogs();
     refreshCharts();
     refreshRegistry();
+    refreshManualPylons();
     refreshBtnEvents();
     setInterval(refreshTelemetry, 1000);
     setInterval(refreshLogs, 1500);
     setInterval(refreshCharts, 15000);
     setInterval(refreshRegistry, 10000);
+    setInterval(refreshManualPylons, 5000);
     setInterval(refreshBtnEvents, 10000);
     setInterval(drawBtnChart, 5000);
   </script>
@@ -2412,6 +2529,65 @@ void HandleBarModeRegistryApi() {
 void SendApiError(int status_code, const String &message) {
   webServer.send(status_code, "application/json",
                  "{\"ok\":false,\"error\":\"" + JsonEscape(message) + "\"}");
+}
+
+void HandleManualPylonsGetApi() {
+  String payload = "{\"entries\":[";
+  for (int i = 0; i < barmode_manual_pylon_count; i++) {
+    if (i > 0) payload += ',';
+    payload += "{\"i\":" + String(i) + ",";
+    payload += "\"host\":\"" + JsonEscape(String(barmode_manual_pylons[i].host)) + "\",";
+    payload += "\"index\":" + String(barmode_manual_pylons[i].index) + ",";
+    payload += "\"ip\":\"" + (barmode_manual_pylons[i].resolved ? barmode_manual_pylons[i].ip.toString() : String("")) + "\",";
+    payload += "\"resolved\":" + String(barmode_manual_pylons[i].resolved ? "true" : "false") + "}";
+  }
+  payload += "],\"max\":" + String(kManualPylonMax) + "}";
+  webServer.send(200, "application/json", payload);
+}
+
+void HandleManualPylonsPostApi() {
+  const String action = webServer.arg("action");
+  if (action == "add") {
+    String host = webServer.arg("host");
+    host.trim();
+    if (host.length() == 0 || host.length() >= 64) {
+      SendApiError(400, "host required, max 63 chars"); return;
+    }
+    if (barmode_manual_pylon_count >= kManualPylonMax) {
+      SendApiError(400, "max manual pylons reached (" + String(kManualPylonMax) + ")"); return;
+    }
+    // Reject duplicate hosts
+    for (int i = 0; i < barmode_manual_pylon_count; i++) {
+      if (String(barmode_manual_pylons[i].host).equalsIgnoreCase(host)) {
+        SendApiError(400, "host already in list"); return;
+      }
+    }
+    const int idx = (int)webServer.arg("index").toInt();
+    ManualPylon &mp = barmode_manual_pylons[barmode_manual_pylon_count++];
+    strncpy(mp.host, host.c_str(), 63); mp.host[63] = '\0';
+    mp.index = idx;
+    mp.resolved = false;
+    mp.last_resolve_ms = 0;
+    // Try immediate parse for dotted IPs
+    IPAddress addr;
+    if (addr.fromString(host)) { mp.ip = addr; mp.resolved = true; }
+    SaveManualPylons();
+    Console.printf("[Manual] Added: %s idx=%d\n", mp.host, mp.index);
+    webServer.send(200, "application/json", "{\"ok\":true}");
+  } else if (action == "remove") {
+    const int slot = (int)webServer.arg("i").toInt();
+    if (slot < 0 || slot >= barmode_manual_pylon_count) {
+      SendApiError(400, "invalid slot"); return;
+    }
+    Console.printf("[Manual] Removed: %s\n", barmode_manual_pylons[slot].host);
+    for (int i = slot; i < barmode_manual_pylon_count - 1; i++)
+      barmode_manual_pylons[i] = barmode_manual_pylons[i + 1];
+    barmode_manual_pylon_count--;
+    SaveManualPylons();
+    webServer.send(200, "application/json", "{\"ok\":true}");
+  } else {
+    SendApiError(400, "action must be add or remove");
+  }
 }
 
 void HandleConfigGetApi() {
@@ -2877,6 +3053,8 @@ void SetupWebServer() {
   webServer.on("/api/chart/temp/long",     HTTP_GET, HandleChartTempLongApi);
   webServer.on("/api/chart/temp/short",    HTTP_GET, HandleChartTempShortApi);
   webServer.on("/api/registry", HTTP_GET, HandleBarModeRegistryApi);
+  webServer.on("/api/pylons/manual", HTTP_GET,  HandleManualPylonsGetApi);
+  webServer.on("/api/pylons/manual", HTTP_POST, HandleManualPylonsPostApi);
   webServer.on("/api/events",   HTTP_GET, HandleBtnEventsApi);
   webServer.on("/api/ota", HTTP_POST, HandleOtaApi, HandleOtaUploadBody);
   webServer.on("/api/identify", HTTP_POST, HandleIdentifyApi);
@@ -2922,6 +3100,7 @@ void setup() {
   }
   serial_cli_line.reserve(192);
   LoadPylonConfig();
+  LoadManualPylons();
   barmode_registry_mutex = xSemaphoreCreateMutex();
   barmode_active = pylon_description.indexOf(kBarModeToken) >= 0;
   if (barmode_active) {
@@ -3603,6 +3782,14 @@ int ExtractRegistryTargets(PylonTarget *dest, int maxCount) {
     dest[count].seq_idx = seq_idx;
     count++;
   }
+  // Append resolved manual pylons (skip if IP already in list)
+  for (int i = 0; i < barmode_manual_pylon_count && count < maxCount; i++) {
+    if (!barmode_manual_pylons[i].resolved) continue;
+    const IPAddress &mp_ip = barmode_manual_pylons[i].ip;
+    bool dup = false;
+    for (int j = 0; j < count; j++) { if (dest[j].ip == mp_ip) { dup = true; break; } }
+    if (!dup) { dest[count].ip = mp_ip; dest[count].seq_idx = barmode_manual_pylons[i].index; count++; }
+  }
   // Insertion sort by seq_idx (N ≤ 16, stable)
   for (int i = 1; i < count; i++) {
     PylonTarget key = dest[i];
@@ -3617,6 +3804,7 @@ int ExtractRegistryTargets(PylonTarget *dest, int maxCount) {
 }
 
 // Extracts IPs from cached registry JSON into dest[]. Returns count (max maxCount).
+// Also appends resolved manual pylons (deduplicated by IP).
 int ExtractRegistryIPs(IPAddress *dest, int maxCount) {
   String json;
   if (xSemaphoreTake(barmode_registry_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
@@ -3637,6 +3825,14 @@ int ExtractRegistryIPs(IPAddress *dest, int maxCount) {
     if (!a.fromString(ip)) continue;
     dest[count++] = a;
   }
+  // Append resolved manual pylons (skip if already in list)
+  for (int i = 0; i < barmode_manual_pylon_count && count < maxCount; i++) {
+    if (!barmode_manual_pylons[i].resolved) continue;
+    const IPAddress &mp_ip = barmode_manual_pylons[i].ip;
+    bool dup = false;
+    for (int j = 0; j < count; j++) { if (dest[j] == mp_ip) { dup = true; break; } }
+    if (!dup) dest[count++] = mp_ip;
+  }
   return count;
 }
 
@@ -3647,7 +3843,7 @@ void SendOscFloatToAllPylons(const char *addr, float value) {
   IPAddress ips[16];
   const int count = ExtractRegistryIPs(ips, 16);
   if (count == 0) {
-    Console.printf("[BarMode] SendOsc %s: registry empty, skipping\n", addr);
+    Console.printf("[BarMode] SendOsc %s: no targets (registry empty, no manual pylons resolved)\n", addr);
     return;
   }
   for (int i = 0; i < count; i++) SendOscFloatToIP(addr, value, ips[i]);
@@ -4362,6 +4558,23 @@ void PingTask(void *) {
 
     // In BARMODE: poll llled.local BPM every 3s for lamp sync
     if (barmode_active) {
+      // Resolve unresolved manual pylons (retry every 15s per entry)
+      const unsigned long now_r = millis();
+      for (int i = 0; i < barmode_manual_pylon_count; i++) {
+        ManualPylon &mp = barmode_manual_pylons[i];
+        if (mp.resolved) continue;
+        if (now_r - mp.last_resolve_ms < 15000 && mp.last_resolve_ms != 0) continue;
+        mp.last_resolve_ms = now_r;
+        IPAddress addr;
+        if (addr.fromString(mp.host)) {
+          mp.ip = addr; mp.resolved = true;
+          Console.printf("[Manual] Parsed IP %s\n", mp.host);
+        } else if (WiFi.hostByName(mp.host, addr)) {
+          mp.ip = addr; mp.resolved = true;
+          Console.printf("[Manual] Resolved %s → %s\n", mp.host, addr.toString().c_str());
+        }
+      }
+
       static unsigned long lastBpmFetchMs = 0;
       const unsigned long now_b = millis();
       if (now_b - lastBpmFetchMs >= 3000) {
