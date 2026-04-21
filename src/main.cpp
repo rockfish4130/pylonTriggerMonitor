@@ -128,6 +128,8 @@ unsigned long barmode_all4_lockout_s   = 300;  // all-4 lockout countdown durati
 unsigned long barmode_all4_lockout_until_ms = 0; // millis() deadline; 0 = not locked
 bool          barmode_show_wait_oled   = false; // true while blue held but lockout active → WAIT screen
 uint32_t barmode_btn_counts[4]   = {0,0,0,0};   // running press counts: [green, blue, orange, red]
+// Per-action counters (since boot): [green_pulse, blue_tap, blue_seq, orange_train, red_tap, red_steam, all4_seq]
+uint32_t barmode_act_counts[7]   = {0,0,0,0,0,0,0};
 bool     barmode_btn_disabled[4] = {false,false,false,false}; // NVS-persisted disable flags
 // Ring buffer: up to 1024 button press events (ms + btn index), oldest overwritten
 constexpr int kBtnEventBufSize = 1024;
@@ -1501,6 +1503,10 @@ String BuildTelemetryApiJson() {
   payload += "\"btn_press_counts\":[" + String(barmode_btn_counts[0]) + "," +
              String(barmode_btn_counts[1]) + "," + String(barmode_btn_counts[2]) + "," +
              String(barmode_btn_counts[3]) + "],";
+  payload += "\"btn_act_counts\":[" + String(barmode_act_counts[0]) + "," +
+             String(barmode_act_counts[1]) + "," + String(barmode_act_counts[2]) + "," +
+             String(barmode_act_counts[3]) + "," + String(barmode_act_counts[4]) + "," +
+             String(barmode_act_counts[5]) + "," + String(barmode_act_counts[6]) + "],";
   payload += "\"btn_disabled\":[" +
              String(barmode_btn_disabled[0]?"true":"false") + "," +
              String(barmode_btn_disabled[1]?"true":"false") + "," +
@@ -1764,31 +1770,40 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
             <tr style="border-bottom:1px solid var(--line)">
               <td style="padding:5px 10px 5px 0;color:#4caf50;white-space:nowrap">&#11044; Green</td>
               <td style="padding:5px 0">Timed solenoid pulse — opens all pylon valves for the configured Green timeout, then closes automatically.</td>
+              <td id="act-count-0" style="padding:5px 0 5px 12px;text-align:right;color:var(--muted);font-size:12px;white-space:nowrap"></td>
             </tr>
             <tr style="border-bottom:1px solid var(--line)">
               <td style="padding:5px 10px 5px 0;color:#2196f3;white-space:nowrap">&#11044; Blue tap</td>
               <td style="padding:5px 0">Single pulse — sends one 50 ms pulse to all pylons simultaneously.</td>
+              <td id="act-count-1" style="padding:5px 0 5px 12px;text-align:right;color:var(--muted);font-size:12px;white-space:nowrap"></td>
             </tr>
             <tr style="border-bottom:1px solid var(--line)">
               <td style="padding:5px 10px 5px 0;color:#2196f3;white-space:nowrap">&#11044; Blue double-tap + hold</td>
               <td style="padding:5px 0">Sequential mode — fires pylons in index order, accelerating each loop until released or Seq max elapsed.</td>
+              <td id="act-count-2" style="padding:5px 0 5px 12px;text-align:right;color:var(--muted);font-size:12px;white-space:nowrap"></td>
             </tr>
             <tr style="border-bottom:1px solid var(--line)">
               <td style="padding:5px 10px 5px 0;color:#ff9800;white-space:nowrap">&#11044; Orange</td>
               <td style="padding:5px 0">Pulse train — sends 5&times; 50 ms pulses to all pylons simultaneously.</td>
+              <td id="act-count-3" style="padding:5px 0 5px 12px;text-align:right;color:var(--muted);font-size:12px;white-space:nowrap"></td>
             </tr>
-            <tr>
+            <tr style="border-bottom:1px solid var(--line)">
               <td style="padding:5px 10px 5px 0;color:#f44336;white-space:nowrap">&#11044; Red tap</td>
               <td style="padding:5px 0">Main valve pulse — opens all pylon valves for 100 ms, then closes automatically.</td>
+              <td id="act-count-4" style="padding:5px 0 5px 12px;text-align:right;color:var(--muted);font-size:12px;white-space:nowrap"></td>
             </tr>
             <tr>
               <td style="padding:5px 10px 5px 0;color:#f44336;white-space:nowrap">&#11044; Red triple-tap + hold</td>
               <td style="padding:5px 0">Steam hold — tap, tap (silent), tap &amp; hold: opens all steam valves while held (ramping frequency); closes on release. Each tap must be within 500 ms of the previous.</td>
+              <td id="act-count-5" style="padding:5px 0 5px 12px;text-align:right;color:var(--muted);font-size:12px;white-space:nowrap"></td>
             </tr>
           </table>
         </div>
         <div style="border-top:1px solid var(--line);padding-top:12px">
-          <div style="font-weight:600;margin-bottom:8px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em">All-Valves Sequence (4-button unlock)</div>
+          <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
+            <div style="font-weight:600;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em">All-Valves Sequence (4-button unlock)</div>
+            <div id="act-count-6" style="color:var(--muted);font-size:12px"></div>
+          </div>
           <div style="color:var(--muted);font-size:12px;margin-bottom:8px">Suppress all individual button actions. Steps must be completed in order without breaking prior holds.</div>
           <ol style="margin:0;padding:0 0 0 18px;display:grid;gap:8px">
             <li><span style="color:#2196f3;font-weight:600">Hold Blue 3 s</span> &rarr; Blue strobes 25% at 2 Hz; <span style="color:#4caf50">Green lamp ON</span>; Orange &amp; Red lamps off.</li>
@@ -1850,7 +1865,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       ];
       document.getElementById('meta').innerHTML = rows.map(([k,v]) => `<div class="row"><strong>${k}</strong><span>${v}</span></div>`).join('');
       document.getElementById('fw-version').textContent = `FW ${data.fw_version}`;
-      updateBtnActivity(data.btn_press_counts);
+      updateBtnActivity(data.btn_press_counts, data.btn_act_counts);
       const title = `${data.pylon_id} Pylons Control`;
       document.getElementById('page-title').textContent = title;
       document.title = title;
@@ -2227,7 +2242,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     const defaultWinBtn = document.querySelector('.win-btn[data-ms="600000"]');
     if (defaultWinBtn) defaultWinBtn.style.fontWeight = 'bold';
 
-    function updateBtnActivity(counts) {
+    function updateBtnActivity(counts, actCounts) {
       const panel = document.getElementById('btn-activity-panel');
       const refPanel = document.getElementById('btn-ref-panel');
       if (!counts || !barmodeActive) {
@@ -2241,6 +2256,13 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         btnCounts[i] = counts[i] || 0;
         const el = document.getElementById('cnt-' + i);
         if (el) el.textContent = btnCounts[i];
+      }
+      if (actCounts) {
+        const labels = ['×', '×', '×', '×', '×', '×', '×'];
+        for (let i = 0; i < 7; i++) {
+          const el = document.getElementById('act-count-' + i);
+          if (el) el.textContent = actCounts[i] != null ? labels[i] + actCounts[i] : '';
+        }
       }
     }
 
@@ -3732,6 +3754,7 @@ void PollBarModeButtons() {
       seq_valve_open    = true;
       seq_valve_open_ms = now;
       SendOscFloatToAllPylons(kOscAddress, 1.0f);
+      barmode_act_counts[6]++;
       Console.println("[BarMode] Seq phase 4: valve open");
     }
 
@@ -3811,6 +3834,7 @@ void PollBarModeButtons() {
           if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
           if (!btn0_pulse_active) {
             SendOscFloatToAllPylons(kOscAddress, 1.0f);
+            barmode_act_counts[0]++;
           }
           btn0_pulse_active = true;
           btn0_pulse_ms     = now;
@@ -3876,11 +3900,13 @@ void PollBarModeButtons() {
             btn1_seq_delay_ms     = 1000;
             btn1_seq_last_fire_ms = now - 1000;  // fire first group immediately
             btn1_seq_group        = 0;
+            barmode_act_counts[2]++;
             Console.printf("[BarMode] Btn1 seq: %d pylons\n", btn1_seq_count);
           }
         } else {
           // Normal single fire to all pylons simultaneously
           SendOscFloatToAllPylons(kOscAddrPulseSingle, 1.0f);
+          barmode_act_counts[1]++;
         }
       }
 
@@ -3948,6 +3974,7 @@ void PollBarModeButtons() {
         barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
         if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
         SendOscFloatToAllPylons(kOscAddrPulseTrain, 1.0f);
+        barmode_act_counts[3]++;
         io35_strobe       = true;
         io35_strobe_start = now;
       }
@@ -4001,6 +4028,7 @@ void PollBarModeButtons() {
             barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
             if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
             SendOscFloatToAllPylons(kOscAddress, 1.0f);
+            barmode_act_counts[4]++;
             red_close_pending = true;
             red_close_ms      = now;
             red_press1_ms     = now;
@@ -4014,6 +4042,7 @@ void PollBarModeButtons() {
           } else if (red_state == 2 && now - red_press2_ms <= 500) {
             // Third press within 500ms of second + hold: activate steam
             SendOscFloatToAllPylons(kOscAddrSteam, 1.0f);
+            barmode_act_counts[5]++;
             lamp_red_press_ms = now;
             lamp_red_on       = false;
             lamp_red_step_ms  = now - 10000;  // expire so first pulse fires immediately
@@ -4022,6 +4051,7 @@ void PollBarModeButtons() {
           } else {
             // Out-of-window press: treat as a fresh first press
             SendOscFloatToAllPylons(kOscAddress, 1.0f);
+            barmode_act_counts[4]++;
             red_close_pending = true;
             red_close_ms      = now;
             red_press1_ms     = now;
