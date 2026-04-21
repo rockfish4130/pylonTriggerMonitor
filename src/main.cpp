@@ -1725,9 +1725,8 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           <label>Password <input id="cfg-wifi-pass" type="password" placeholder=""></label>
         </div>
         <div style="border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
-          <span style="color:var(--muted);font-size:13px">Solenoid Safety</span>
-          <label>Failsafe timeout (s) <input id="cfg-failsafe-s" name="failsafe_s" type="number" min="1" max="60" step="0.1" style="width:80px"></label>
-          <label>Index <input id="cfg-index" name="index" type="number" min="-99" max="99" step="1" style="width:60px"> <span style="color:var(--muted);font-size:12px">(barmode sequence order; negative=skip seq)</span></label>
+          <span style="color:var(--muted);font-size:13px">All Buttons</span>
+          <label>Solenoid failsafe (s) <input id="cfg-failsafe-s" name="failsafe_s" type="number" min="1" max="60" step="0.1" style="width:80px"> <span style="color:var(--muted);font-size:12px">(auto-close if valve left open)</span></label>
           <div id="cfg-btn-disable-wrap" style="display:none;gap:10px;align-items:center">
             <span style="color:var(--muted);font-size:12px">Disable buttons:</span>
             <label style="color:#4caf50"><input type="checkbox" id="cfg-btn-dis-0" style="accent-color:#4caf50"> Green</label>
@@ -1735,14 +1734,22 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
             <label style="color:#ff9800"><input type="checkbox" id="cfg-btn-dis-2" style="accent-color:#ff9800"> Orange</label>
             <label style="color:#f44336"><input type="checkbox" id="cfg-btn-dis-3" style="accent-color:#f44336"> Red</label>
           </div>
-          <div id="cfg-seq-max-wrap" style="display:none;gap:6px">
-            <label>Green timeout (ms) <input id="cfg-green-timeout-ms" name="green_timeout_ms" type="number" min="50" max="10000" step="50" style="width:80px"> <span style="color:var(--muted);font-size:12px">(btn0 timed pulse open duration)</span></label>
-            <label>All-4 valve open (ms) <input id="cfg-all4-valve-ms" name="all4_valve_ms" type="number" min="500" max="30000" step="500" style="width:80px"> <span style="color:var(--muted);font-size:12px">(all-4 hold: valve open duration before auto-close)</span></label>
-            <label>All-4 lockout (s) <input id="cfg-all4-lockout-s" name="all4_lockout_s" type="number" min="0" max="3600" step="30" style="width:80px"> <span style="color:var(--muted);font-size:12px">(cooldown after all-4 sequence; 0=disabled)</span></label>
-            <label>Seq max (s) <input id="cfg-seq-max-s" name="seq_max_s" type="number" min="1" max="120" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(barmode btn1 hold timeout)</span></label>
-            <label>Seq step decrement (ms) <input id="cfg-seq-dec-ms" name="seq_dec_ms" type="number" min="0" max="2000" step="10" style="width:70px"> <span style="color:var(--muted);font-size:12px">(delay reduction per pylon step)</span></label>
-            <label>Seq exp factor (%) <input id="cfg-seq-exp-pct" name="seq_exp_pct" type="number" min="1" max="100" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(multiply delay each step; 100=linear only)</span></label>
-          </div>
+        </div>
+        <div id="cfg-grp-green" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
+          <span style="color:#4caf50;font-size:13px">&#11044; Green</span>
+          <label>Pulse open duration (ms) <input id="cfg-green-timeout-ms" name="green_timeout_ms" type="number" min="50" max="10000" step="50" style="width:80px"> <span style="color:var(--muted);font-size:12px">(how long green holds the valve open)</span></label>
+        </div>
+        <div id="cfg-grp-blue" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
+          <span style="color:#2196f3;font-size:13px">&#11044; Blue (Sequential Mode)</span>
+          <label>Pylon index <input id="cfg-index" name="index" type="number" min="-99" max="99" step="1" style="width:60px"> <span style="color:var(--muted);font-size:12px">(this pylon&rsquo;s order in blue sequential fire; negative = skip)</span></label>
+          <label>Seq max hold (s) <input id="cfg-seq-max-s" name="seq_max_s" type="number" min="1" max="120" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(blue double-tap+hold max duration)</span></label>
+          <label>Seq step decrement (ms) <input id="cfg-seq-dec-ms" name="seq_dec_ms" type="number" min="0" max="2000" step="10" style="width:70px"> <span style="color:var(--muted);font-size:12px">(delay reduction per pylon step)</span></label>
+          <label>Seq exp factor (%) <input id="cfg-seq-exp-pct" name="seq_exp_pct" type="number" min="1" max="100" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(multiply delay each step; 100=linear only)</span></label>
+        </div>
+        <div id="cfg-grp-all4" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
+          <span style="color:var(--muted);font-size:13px">All-4 Sequence</span>
+          <label>Valve open duration (ms) <input id="cfg-all4-valve-ms" name="all4_valve_ms" type="number" min="500" max="30000" step="500" style="width:80px"> <span style="color:var(--muted);font-size:12px">(how long all valves stay open)</span></label>
+          <label>Lockout after sequence (s) <input id="cfg-all4-lockout-s" name="all4_lockout_s" type="number" min="0" max="3600" step="30" style="width:80px"> <span style="color:var(--muted);font-size:12px">(cooldown before another sequence can start; 0=disabled)</span></label>
         </div>
         <div style="border-top:1px solid var(--line);padding-top:10px;display:flex;align-items:center;gap:10px">
           <input type="checkbox" id="cfg-ap" style="width:18px;height:18px;margin:0;cursor:pointer;accent-color:var(--accent)">
@@ -1961,8 +1968,10 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       const idxInput = document.getElementById('cfg-index');
       if (idxInput && document.activeElement !== idxInput)
         idxInput.value = data.pylon_index != null ? data.pylon_index : 0;
-      const seqWrap = document.getElementById('cfg-seq-max-wrap');
-      if (seqWrap) seqWrap.style.display = data.barmode_active ? 'grid' : 'none';
+      ['cfg-grp-green','cfg-grp-blue','cfg-grp-all4','cfg-btn-disable-wrap'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = data.barmode_active ? 'grid' : 'none';
+      });
       const grnToInput = document.getElementById('cfg-green-timeout-ms');
       if (grnToInput && document.activeElement !== grnToInput)
         grnToInput.value = data.green_timeout_ms != null ? data.green_timeout_ms : 300;
