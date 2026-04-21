@@ -1734,6 +1734,47 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       <canvas id="btn-chart" height="120" style="width:100%;display:block;background:#111;border-radius:6px"></canvas>
       <div style="color:var(--muted);font-size:11px;margin-top:4px">Event timeline, newest at right. Each tick = one press. Up to 1024 events stored since boot.</div>
     </div>
+    <div id="btn-ref-panel" class="panel" style="margin-top:16px;display:none">
+      <h2>Button Reference</h2>
+      <div style="display:grid;gap:12px;font-size:13px">
+        <div>
+          <div style="font-weight:600;margin-bottom:6px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em">Single Button Actions</div>
+          <table style="border-collapse:collapse;width:100%">
+            <tr style="border-bottom:1px solid var(--line)">
+              <td style="padding:5px 10px 5px 0;color:#4caf50;white-space:nowrap">&#11044; Green</td>
+              <td style="padding:5px 0">Timed solenoid pulse — opens all pylon valves for the configured Green timeout, then closes automatically.</td>
+            </tr>
+            <tr style="border-bottom:1px solid var(--line)">
+              <td style="padding:5px 10px 5px 0;color:#2196f3;white-space:nowrap">&#11044; Blue tap</td>
+              <td style="padding:5px 0">Single pulse — sends one 50 ms pulse to all pylons simultaneously.</td>
+            </tr>
+            <tr style="border-bottom:1px solid var(--line)">
+              <td style="padding:5px 10px 5px 0;color:#2196f3;white-space:nowrap">&#11044; Blue double-tap + hold</td>
+              <td style="padding:5px 0">Sequential mode — fires pylons in index order, accelerating each loop until released or Seq max elapsed.</td>
+            </tr>
+            <tr style="border-bottom:1px solid var(--line)">
+              <td style="padding:5px 10px 5px 0;color:#ff9800;white-space:nowrap">&#11044; Orange</td>
+              <td style="padding:5px 0">Pulse train — sends 5&times; 50 ms pulses to all pylons simultaneously.</td>
+            </tr>
+            <tr>
+              <td style="padding:5px 10px 5px 0;color:#f44336;white-space:nowrap">&#11044; Red hold</td>
+              <td style="padding:5px 0">Steam — opens all pylon steam valves while held (ramping frequency); closes on release.</td>
+            </tr>
+          </table>
+        </div>
+        <div style="border-top:1px solid var(--line);padding-top:12px">
+          <div style="font-weight:600;margin-bottom:8px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em">All-Valves Sequence (4-button unlock)</div>
+          <div style="color:var(--muted);font-size:12px;margin-bottom:8px">Suppress all individual button actions. Steps must be completed in order without breaking prior holds.</div>
+          <ol style="margin:0;padding:0 0 0 18px;display:grid;gap:8px">
+            <li><span style="color:#2196f3;font-weight:600">Hold Blue 3 s</span> &rarr; Blue strobes 25% at 2 Hz; <span style="color:#4caf50">Green lamp ON</span>; Orange &amp; Red lamps off.</li>
+            <li><span style="color:#4caf50;font-weight:600">Keep Blue + hold Green 3 s</span> &rarr; Blue &amp; Green strobe 50% at 4 Hz; <span style="color:#ff9800">Orange lamp ON</span>; Red lamp off.</li>
+            <li><span style="color:#ff9800;font-weight:600">Keep Blue+Green + hold Orange 2 s</span> &rarr; Blue, Green &amp; Orange strobe 75% at 6 Hz; Red lamp off.</li>
+            <li><span style="color:#f44336;font-weight:600">Keep all three + hold Red 2 s</span> &rarr; All four lamps strobe 80% at 8 Hz; <b>all pylon valves open.</b></li>
+          </ol>
+          <div style="margin-top:8px;color:var(--muted);font-size:12px">Valves close and all lamps extinguish when any button is released <em>or</em> after the configured <b>All-4 valve open</b> timeout. All buttons must then be released before another sequence can start.</div>
+        </div>
+      </div>
+    </div>
     <div class="grid" style="margin-top:16px">
       <section class="panel"><h2>Telemetry</h2><div id="meta" class="meta"></div></section>
       <section class="panel"><h2>Serial Console</h2><div id="log"><pre id="log-text"></pre></div></section>
@@ -2158,8 +2199,14 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
 
     function updateBtnActivity(counts) {
       const panel = document.getElementById('btn-activity-panel');
-      if (!counts || !barmodeActive) { if (panel) panel.style.display='none'; return; }
+      const refPanel = document.getElementById('btn-ref-panel');
+      if (!counts || !barmodeActive) {
+        if (panel) panel.style.display='none';
+        if (refPanel) refPanel.style.display='none';
+        return;
+      }
       panel.style.display = '';
+      if (refPanel) refPanel.style.display = '';
       for (let i = 0; i < 4; i++) {
         btnCounts[i] = counts[i] || 0;
         const el = document.getElementById('cnt-' + i);
@@ -3587,60 +3634,112 @@ void PollBarModeButtons() {
     }
   }
 
-  // Button 0: BooshMain open/close all pylons; chase LEDs + OLED invert while held.
-  // Button 1: BooshPulseSingle — fire once on press (no release msg).
-  // Button 2: BooshPulseTrain  — fire once on press (no release msg).
-  // Button 3: BooshSteam open/close all pylons (no LED/OLED effects).
-  // All run alongside the blink-seq state machine below.
+  // Button 0: BooshMain timed pulse; Button 1: BooshPulseSingle/seq;
+  // Button 2: BooshPulseTrain; Button 3: BooshSteam hold.
+  // Sequential activation: hold BLUE 3s → GREEN 3s → ORANGE 2s → RED 2s → valve open.
   {
     static bool btn_prev_stable[4] = {};
 
-    // ---- All-4-buttons simultaneous hold detection -------------------------
-    // When all 4 buttons are held together: suppress individual actions,
-    // escalate lamp strobe, open valves at 3s, auto-close after 3 more seconds.
-    static bool          all4_was_active    = false;
-    static unsigned long all4_start_ms      = 0;
-    static bool          all4_valve_open    = false;
-    static unsigned long all4_valve_open_ms = 0;
-    static bool          all4_auto_closed   = false;
+    // ---- Sequential 4-button activation state machine ----------------------
+    // Phase 0: idle (normal button behavior)
+    // Phase 1: BLUE held 3s → blue strobe 25% 2Hz, green ON, orange/red OFF
+    // Phase 2: +GREEN held 3s → blue+green strobe 50% 4Hz, orange ON, red OFF
+    // Phase 3: +ORANGE held 2s → blue+green+orange strobe 75% 6Hz, red OFF
+    // Phase 4: +RED held 2s → all strobe 80% 8Hz, valve open
+    // Phase 5: closing (valve closed, all lamps off, waiting for full release)
+    static int           seq_phase          = 0;
+    static unsigned long seq_blue_press_ms  = 0;   // rising edge of BLUE in phase 0
+    static unsigned long seq_green_press_ms = 0;   // rising edge of GREEN in phase 1
+    static unsigned long seq_orange_press_ms= 0;   // rising edge of ORANGE in phase 2
+    static unsigned long seq_red_press_ms   = 0;   // rising edge of RED in phase 3
+    static bool          seq_blue_armed     = false;
+    static bool          seq_green_armed    = false;
+    static bool          seq_orange_armed   = false;
+    static bool          seq_red_armed      = false;
+    static bool          seq_valve_open     = false;
+    static unsigned long seq_valve_open_ms  = 0;
 
-    const bool all4_now     = btn_stable[0] && btn_stable[1] && btn_stable[2] && btn_stable[3];
-    const bool all4_rising  = all4_now && !all4_was_active;
-    const bool all4_falling = !all4_now && all4_was_active;
+    // Rising/falling edges for sequence tracking
+    const bool blue_rising   = btn_stable[1] && !btn_prev_stable[1];
+    const bool blue_falling  = !btn_stable[1] && btn_prev_stable[1];
+    const bool green_rising  = btn_stable[0] && !btn_prev_stable[0];
+    const bool orange_rising = btn_stable[2] && !btn_prev_stable[2];
+    const bool red_rising    = btn_stable[3] && !btn_prev_stable[3];
 
-    if (all4_rising) {
-      all4_start_ms    = now;
-      all4_valve_open  = false;
-      all4_auto_closed = false;
-      Console.println("[BarMode] All4: hold start");
-    }
-    if (all4_now && !all4_auto_closed) {
-      const unsigned long elapsed = now - all4_start_ms;
-      if (elapsed >= 3000 && !all4_valve_open) {
-        SendOscFloatToAllPylons(kOscAddress, 1.0f);
-        all4_valve_open    = true;
-        all4_valve_open_ms = now;
-        Console.println("[BarMode] All4: valve open");
-      }
-      if (all4_valve_open && now - all4_valve_open_ms >= barmode_all4_valve_ms) {
-        SendOscFloatToAllPylons(kOscAddress, 0.0f);
-        all4_valve_open  = false;
-        all4_auto_closed = true;
-        Console.println("[BarMode] All4: auto-close after 3s valve");
-      }
-    }
-    if (all4_falling) {
-      if (all4_valve_open) {
-        SendOscFloatToAllPylons(kOscAddress, 0.0f);
-        Console.println("[BarMode] All4: valve close on release");
-      }
-      all4_valve_open = false;
-      Console.println("[BarMode] All4: hold ended");
-    }
-    all4_was_active = all4_now;
+    // Arm per-button hold timers on rising edge within the correct phase
+    if (blue_rising  && seq_phase == 0) { seq_blue_press_ms  = now; seq_blue_armed   = true; }
+    if (blue_falling && seq_phase == 0) { seq_blue_armed = false; }
+    if (green_rising  && seq_phase == 1) { seq_green_press_ms  = now; seq_green_armed  = true; }
+    if (orange_rising && seq_phase == 2) { seq_orange_press_ms = now; seq_orange_armed = true; }
+    if (red_rising    && seq_phase == 3) { seq_red_press_ms    = now; seq_red_armed    = true; }
 
-    // ---- Individual button actions (suppressed during all-4 hold) ----------
-    if (!all4_now) {
+    // Phase advancement (checked every tick)
+    if (seq_phase == 0 && seq_blue_armed && btn_stable[1] && now - seq_blue_press_ms >= 3000) {
+      seq_phase = 1;
+      seq_green_armed = seq_orange_armed = seq_red_armed = false;
+      Console.println("[BarMode] Seq phase 1: blue held 3s");
+    }
+    if (seq_phase == 1 && seq_green_armed && btn_stable[0] && now - seq_green_press_ms >= 3000) {
+      seq_phase = 2;
+      seq_orange_armed = seq_red_armed = false;
+      Console.println("[BarMode] Seq phase 2: green held 3s");
+    }
+    if (seq_phase == 2 && seq_orange_armed && btn_stable[2] && now - seq_orange_press_ms >= 2000) {
+      seq_phase = 3;
+      seq_red_armed = false;
+      Console.println("[BarMode] Seq phase 3: orange held 2s");
+    }
+    if (seq_phase == 3 && seq_red_armed && btn_stable[3] && now - seq_red_press_ms >= 2000) {
+      seq_phase = 4;
+      seq_valve_open    = true;
+      seq_valve_open_ms = now;
+      SendOscFloatToAllPylons(kOscAddress, 1.0f);
+      Console.println("[BarMode] Seq phase 4: valve open");
+    }
+
+    // Required-button-released checks: reset if an anchor is dropped
+    // Note: check seq_phase before clearing seq_valve_open so we go to phase 5 if valve was open
+    if (seq_phase >= 1 && !btn_stable[1]) {   // BLUE released
+      const int next = (seq_phase == 4) ? 5 : 0;
+      if (seq_valve_open) { SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false; }
+      seq_phase = next;
+      seq_blue_armed = seq_green_armed = seq_orange_armed = seq_red_armed = false;
+      Console.printf("[BarMode] Seq %s: blue released\n", next == 0 ? "reset" : "closing");
+    } else if (seq_phase >= 2 && !btn_stable[0]) {  // GREEN released in phase 2+
+      const int next = (seq_phase == 4) ? 5 : 0;
+      if (seq_valve_open) { SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false; }
+      seq_phase = next;
+      seq_green_armed = seq_orange_armed = seq_red_armed = false;
+      Console.printf("[BarMode] Seq %s: green released\n", next == 0 ? "reset" : "closing");
+    } else if (seq_phase >= 3 && !btn_stable[2]) {  // ORANGE released in phase 3+
+      const int next = (seq_phase == 4) ? 5 : 0;
+      if (seq_valve_open) { SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false; }
+      seq_phase = next;
+      seq_orange_armed = seq_red_armed = false;
+      Console.printf("[BarMode] Seq %s: orange released\n", next == 0 ? "reset" : "closing");
+    } else if (seq_phase == 4 && !btn_stable[3]) {  // RED released in phase 4
+      if (seq_valve_open) { SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false; }
+      seq_phase = 5;
+      Console.println("[BarMode] Seq phase 5: closing (red released)");
+    }
+
+    // Phase 4: auto-close timeout
+    if (seq_phase == 4 && seq_valve_open && now - seq_valve_open_ms >= barmode_all4_valve_ms) {
+      SendOscFloatToAllPylons(kOscAddress, 0.0f);
+      seq_valve_open = false;
+      seq_phase = 5;
+      Console.println("[BarMode] Seq phase 5: auto-close timeout");
+    }
+
+    // Phase 5: wait for all buttons released, then idle
+    if (seq_phase == 5 && !btn_stable[0] && !btn_stable[1] && !btn_stable[2] && !btn_stable[3]) {
+      seq_phase = 0;
+      seq_blue_armed = seq_green_armed = seq_orange_armed = seq_red_armed = false;
+      Console.println("[BarMode] Seq idle");
+    }
+
+    // ---- Individual button actions (suppressed once sequence is active) ----
+    if (seq_phase == 0) {
 
     // Button 0 — Green button: BooshMain timed pulse (duration = barmode_green_timeout_ms)
     {
@@ -3866,29 +3965,30 @@ void PollBarModeButtons() {
       }
     }
 
-    } // end if (!all4_now) — individual button actions
+    } // end if (seq_phase == 0) — individual button actions
 
-    // ---- All-4 lamp override: escalating strobe, then off after valve closes --
-    if (all4_now) {
-      uint8_t lamp_val;
-      if (all4_auto_closed) {
-        lamp_val = 0;  // valves closed, buttons still held — lamps off until release
-      } else {
-        const unsigned long elapsed = now - all4_start_ms;
-        if (elapsed < 1000) {
-          lamp_val = (now % 500 < 125) ? 64 : 0;   // 2Hz 25%
-        } else if (elapsed < 2000) {
-          lamp_val = (now % 250 < 125) ? 128 : 0;  // 4Hz 50%
-        } else if (elapsed < 3000) {
-          lamp_val = (now % 167 < 125) ? 192 : 0;  // 6Hz 75%
-        } else {
-          lamp_val = (now % 125 < 100) ? 204 : 0;  // 8Hz 80%
-        }
+    // ---- Sequential activation lamp override (phases 1-5) ------------------
+    if (seq_phase > 0) {
+      uint8_t g = 0, b = 0, o = 0, r = 0;
+      if (seq_phase == 1) {
+        b = (now % 500 < 125) ? 64 : 0;   // blue: 2Hz 25%
+        g = 255;                            // green: solid ON
+      } else if (seq_phase == 2) {
+        const uint8_t s = (now % 250 < 125) ? 128 : 0;  // 4Hz 50%
+        b = g = s;
+        o = 255;  // orange: solid ON
+      } else if (seq_phase == 3) {
+        const uint8_t s = (now % 167 < 125) ? 192 : 0;  // 6Hz 75%
+        b = g = o = s;
+      } else if (seq_phase == 4) {
+        const uint8_t s = (now % 125 < 100) ? 204 : 0;  // 8Hz 80%
+        b = g = o = r = s;
       }
-      ledcWrite(3, lamp_val);  // orange
-      ledcWrite(4, lamp_val);  // green
-      ledcWrite(5, lamp_val);  // blue
-      ledcWrite(6, lamp_val);  // red
+      // phase 5: all remain 0 (off) until released
+      ledcWrite(3, o);  // orange
+      ledcWrite(4, g);  // green
+      ledcWrite(5, b);  // blue
+      ledcWrite(6, r);  // red
     }
 
     for (int i = 0; i < 4; i++) btn_prev_stable[i] = btn_stable[i];
