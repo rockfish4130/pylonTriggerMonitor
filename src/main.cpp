@@ -122,7 +122,8 @@ int pylon_index = 0;  // sequencing index reported in telemetry; persisted in NV
 unsigned long barmode_seq_max_ms = 30000;  // btn1 double-tap seq max hold duration; BARMODE NVS; default 30s
 unsigned long barmode_seq_dec_ms = 50;     // delay decrement per step in btn1 seq; BARMODE NVS; default 50ms
 uint8_t barmode_seq_exp_pct = 100;         // exponential factor % (1-100) applied after linear dec; 100=off
-uint32_t barmode_btn_counts[4] = {0,0,0,0}; // running press counts: [green, blue, orange, red]
+uint32_t barmode_btn_counts[4]   = {0,0,0,0};   // running press counts: [green, blue, orange, red]
+bool     barmode_btn_disabled[4] = {false,false,false,false}; // NVS-persisted disable flags
 // Ring buffer: up to 1024 button press events (ms + btn index), oldest overwritten
 constexpr int kBtnEventBufSize = 1024;
 uint32_t barmode_btn_event_ms[kBtnEventBufSize];
@@ -217,7 +218,8 @@ constexpr const char *kPrefsKeyFailsafeMs = "failsafe_ms";
 constexpr const char *kPrefsKeyIndex = "pylon_idx";
 constexpr const char *kPrefsKeySeqMaxMs = "seq_max_ms";
 constexpr const char *kPrefsKeySeqDecMs = "seq_dec_ms";
-constexpr const char *kPrefsKeySeqExpPct = "seq_exp_pct";  // 1-100; applied as factor delay*=(pct/100)
+constexpr const char *kPrefsKeySeqExpPct  = "seq_exp_pct";  // 1-100; applied as factor delay*=(pct/100)
+constexpr const char *kPrefsKeyBtnDisable = "btn_dis";      // uint8 bitmask: bit0=green,1=blue,2=orange,3=red
 constexpr uint32_t kBooshFailsafeMinMs  = 1000;
 constexpr uint32_t kBooshFailsafeMaxMs  = 60000;
 
@@ -442,6 +444,11 @@ bool SavePylonConfig() {
   prefs.putUInt(kPrefsKeySeqMaxMs, static_cast<uint32_t>(barmode_seq_max_ms));
   prefs.putUInt(kPrefsKeySeqDecMs, static_cast<uint32_t>(barmode_seq_dec_ms));
   prefs.putUChar(kPrefsKeySeqExpPct, barmode_seq_exp_pct);
+  {
+    uint8_t mask = 0;
+    for (int i = 0; i < 4; i++) if (barmode_btn_disabled[i]) mask |= (1 << i);
+    prefs.putUChar(kPrefsKeyBtnDisable, mask);
+  }
   prefs.end();
   return true;
 }
@@ -503,6 +510,10 @@ void LoadPylonConfig() {
   barmode_seq_max_ms = prefs.getUInt(kPrefsKeySeqMaxMs, 30000);
   barmode_seq_dec_ms = prefs.getUInt(kPrefsKeySeqDecMs, 50);
   barmode_seq_exp_pct = (uint8_t)prefs.getUChar(kPrefsKeySeqExpPct, 100);
+  {
+    const uint8_t mask = prefs.getUChar(kPrefsKeyBtnDisable, 0);
+    for (int i = 0; i < 4; i++) barmode_btn_disabled[i] = (mask >> i) & 1;
+  }
   stored_desc.trim();
 
   const bool unprogrammed = stored_id.length() == 0;
@@ -1442,6 +1453,11 @@ String BuildTelemetryApiJson() {
   payload += "\"btn_press_counts\":[" + String(barmode_btn_counts[0]) + "," +
              String(barmode_btn_counts[1]) + "," + String(barmode_btn_counts[2]) + "," +
              String(barmode_btn_counts[3]) + "],";
+  payload += "\"btn_disabled\":[" +
+             String(barmode_btn_disabled[0]?"true":"false") + "," +
+             String(barmode_btn_disabled[1]?"true":"false") + "," +
+             String(barmode_btn_disabled[2]?"true":"false") + "," +
+             String(barmode_btn_disabled[3]?"true":"false") + "],";
   payload += "\"wifi_ssid\":\"" + JsonEscape(user_wifi_ssid) + "\",";
   payload += "\"failsafe_ms\":" + String(boosh_failsafe_timeout_ms) + ",";
   payload += "\"target_ip\":\"" + JsonEscape(target_ip_string) + "\",";
@@ -1600,6 +1616,13 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           <span style="color:var(--muted);font-size:13px">Solenoid Safety</span>
           <label>Failsafe timeout (s) <input id="cfg-failsafe-s" name="failsafe_s" type="number" min="1" max="60" step="0.1" style="width:80px"></label>
           <label>Index <input id="cfg-index" name="index" type="number" min="-99" max="99" step="1" style="width:60px"> <span style="color:var(--muted);font-size:12px">(barmode sequence order; negative=skip seq)</span></label>
+          <div id="cfg-btn-disable-wrap" style="display:none;gap:10px;align-items:center">
+            <span style="color:var(--muted);font-size:12px">Disable buttons:</span>
+            <label style="color:#4caf50"><input type="checkbox" id="cfg-btn-dis-0" style="accent-color:#4caf50"> Green</label>
+            <label style="color:#2196f3"><input type="checkbox" id="cfg-btn-dis-1" style="accent-color:#2196f3"> Blue</label>
+            <label style="color:#ff9800"><input type="checkbox" id="cfg-btn-dis-2" style="accent-color:#ff9800"> Orange</label>
+            <label style="color:#f44336"><input type="checkbox" id="cfg-btn-dis-3" style="accent-color:#f44336"> Red</label>
+          </div>
           <div id="cfg-seq-max-wrap" style="display:none;gap:6px">
             <label>Seq max (s) <input id="cfg-seq-max-s" name="seq_max_s" type="number" min="1" max="120" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(barmode btn1 hold timeout)</span></label>
             <label>Seq step decrement (ms) <input id="cfg-seq-dec-ms" name="seq_dec_ms" type="number" min="0" max="2000" step="10" style="width:70px"> <span style="color:var(--muted);font-size:12px">(delay reduction per pylon step)</span></label>
@@ -1767,6 +1790,14 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         seqExpInput.value = data.seq_exp_pct != null ? data.seq_exp_pct : 100;
       const apBox = document.getElementById('cfg-ap');
       if (apBox && document.activeElement !== apBox) apBox.checked = !!data.ap_enabled;
+      const disWrap = document.getElementById('cfg-btn-disable-wrap');
+      if (disWrap) disWrap.style.display = barmodeActive ? 'flex' : 'none';
+      if (barmodeActive && Array.isArray(data.btn_disabled)) {
+        for (let i = 0; i < 4; i++) {
+          const cb = document.getElementById('cfg-btn-dis-' + i);
+          if (cb && document.activeElement !== cb) cb.checked = !!data.btn_disabled[i];
+        }
+      }
     }
     async function refreshTelemetry() {
       renderMeta(await fetchJson('/api/telemetry'));
@@ -1854,6 +1885,14 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       if (seqDecVal !== '') body.set('seq_dec_ms', seqDecVal);
       const seqExpVal = document.getElementById('cfg-seq-exp-pct').value.trim();
       if (seqExpVal !== '') body.set('seq_exp_pct', seqExpVal);
+      if (barmodeActive) {
+        let disStr = '';
+        for (let i = 0; i < 4; i++) {
+          const cb = document.getElementById('cfg-btn-dis-' + i);
+          disStr += (cb && cb.checked) ? '1' : '0';
+        }
+        body.set('btn_disabled', disStr);
+      }
       try {
         const result = await fetchJson('/api/config', {
           method:'POST',
@@ -2251,11 +2290,12 @@ void HandleConfigPostApi() {
   const bool has_index       = webServer.hasArg("index");
   const bool has_seq_max_s   = webServer.hasArg("seq_max_s");
   const bool has_seq_dec_ms  = webServer.hasArg("seq_dec_ms");
-  const bool has_seq_exp_pct = webServer.hasArg("seq_exp_pct");
+  const bool has_seq_exp_pct  = webServer.hasArg("seq_exp_pct");
+  const bool has_btn_disabled = webServer.hasArg("btn_disabled");
 
   if (!has_node && !has_id && !has_host && !has_desc &&
-      !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index && !has_seq_max_s && !has_seq_dec_ms && !has_seq_exp_pct) {
-    SendApiError(400, "expected one of: node, id, host, description, wifi_ssid, wifi_pass, failsafe_s, index, seq_max_s, seq_dec_ms, seq_exp_pct");
+      !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index && !has_seq_max_s && !has_seq_dec_ms && !has_seq_exp_pct && !has_btn_disabled) {
+    SendApiError(400, "expected one of: node, id, host, description, wifi_ssid, wifi_pass, failsafe_s, index, seq_max_s, seq_dec_ms, seq_exp_pct, btn_disabled");
     return;
   }
 
@@ -2281,7 +2321,14 @@ void HandleConfigPostApi() {
   if (has_index)      ok = ok && SetConfigFieldValue("index",      webServer.arg("index"));
   if (has_seq_max_s)  ok = ok && SetConfigFieldValue("seq_max_s",  webServer.arg("seq_max_s"));
   if (has_seq_dec_ms)  ok = ok && SetConfigFieldValue("seq_dec_ms",  webServer.arg("seq_dec_ms"));
-  if (has_seq_exp_pct) ok = ok && SetConfigFieldValue("seq_exp_pct", webServer.arg("seq_exp_pct"));
+  if (has_seq_exp_pct)  ok = ok && SetConfigFieldValue("seq_exp_pct",  webServer.arg("seq_exp_pct"));
+  if (has_btn_disabled) {
+    // Accepts "0101" bitmask string: index 0=green,1=blue,2=orange,3=red; '1'=disabled
+    const String v = webServer.arg("btn_disabled");
+    for (int i = 0; i < 4 && i < (int)v.length(); i++)
+      barmode_btn_disabled[i] = (v[i] == '1');
+    SavePylonConfig();
+  }
 
   if (!ok) {
     SendApiError(400, "invalid config value");
@@ -3505,24 +3552,32 @@ void PollBarModeButtons() {
     static bool btn_prev_stable[4] = {};
 
     // Button 0 — Green button: BooshMain hold
-    if (btn_stable[0] && !btn_prev_stable[0]) {
-      barmode_btn_counts[0]++;
-      barmode_btn_event_ms[barmode_btn_event_head]  = now;
-      barmode_btn_event_btn[barmode_btn_event_head] = 0;
-      barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
-      if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
-      SendOscFloatToAllPylons(kOscAddress, 1.0f);
-      barmode_btn0_held = true;
-      display.invertDisplay(true);
-    } else if (!btn_stable[0] && btn_prev_stable[0]) {
-      SendOscFloatToAllPylons(kOscAddress, 0.0f);
+    if (!barmode_btn_disabled[0]) {
+      if (btn_stable[0] && !btn_prev_stable[0]) {
+        barmode_btn_counts[0]++;
+        barmode_btn_event_ms[barmode_btn_event_head]  = now;
+        barmode_btn_event_btn[barmode_btn_event_head] = 0;
+        barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
+        if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
+        SendOscFloatToAllPylons(kOscAddress, 1.0f);
+        barmode_btn0_held = true;
+        display.invertDisplay(true);
+      } else if (!btn_stable[0] && btn_prev_stable[0]) {
+        SendOscFloatToAllPylons(kOscAddress, 0.0f);
+        barmode_btn0_held = false;
+        display.invertDisplay(false);
+      }
+    } else if (!btn_stable[0] && btn_prev_stable[0] && barmode_btn0_held) {
+      // release while disabled (was held before disable): tidy up
       barmode_btn0_held = false;
       display.invertDisplay(false);
     }
-    // Green lamp: solid while held; sine wave 2Hz idle
+    // Green lamp: disabled=30%, held=solid, idle=sine 2Hz
     {
       uint8_t v;
-      if (barmode_btn0_held) {
+      if (barmode_btn_disabled[0]) {
+        v = 77;  // 30%
+      } else if (barmode_btn0_held) {
         v = 255;
       } else {
         const float t = millis() / 1000.0f;
@@ -3547,7 +3602,7 @@ void PollBarModeButtons() {
       const bool rising  = btn_stable[1] && !btn_prev_stable[1];
       const bool falling = !btn_stable[1] && btn_prev_stable[1];
 
-      if (rising) {
+      if (rising && !barmode_btn_disabled[1]) {
         barmode_btn_counts[1]++;
         barmode_btn_event_ms[barmode_btn_event_head]  = now;
         barmode_btn_event_btn[barmode_btn_event_head] = 1;
@@ -3614,15 +3669,15 @@ void PollBarModeButtons() {
       }
     }
 
-    // Blue lamp: 50ms pulse per second idle
-    ledcWrite(5, (now % 1000 < 200) ? 255 : 0);
+    // Blue lamp: disabled=30%, idle=200ms pulse per second
+    ledcWrite(5, barmode_btn_disabled[1] ? 77 : (now % 1000 < 200) ? 255 : 0);
 
     // Button 2 — Orange button: BooshPulseTrain; IO35 strobes 5x pulse pattern once then returns to idle sawtooth
     {
       static bool          io35_strobe      = false;
       static unsigned long io35_strobe_start = 0;
 
-      if (btn_stable[2] && !btn_prev_stable[2]) {
+      if (btn_stable[2] && !btn_prev_stable[2] && !barmode_btn_disabled[2]) {
         barmode_btn_counts[2]++;
         barmode_btn_event_ms[barmode_btn_event_head]  = now;
         barmode_btn_event_btn[barmode_btn_event_head] = 2;
@@ -3644,20 +3699,20 @@ void PollBarModeButtons() {
         }
       }
       if (!io35_strobe) {
-        // Idle: sawtooth 4Hz (period 250ms, ramp 0→255)
-        ledcWrite(3, (uint8_t)((now % 250) * 255 / 250));
+        // Orange lamp: disabled=30%, idle=sawtooth 4Hz
+        ledcWrite(3, barmode_btn_disabled[2] ? 77 : (uint8_t)((now % 250) * 255 / 250));
       }
     }
 
     // Button 3 — Red button: BooshSteam hold; red lamp mirrors steam ramp while held, Morse LAVA idle
-    if (btn_stable[3] && !btn_prev_stable[3]) {
+    if (btn_stable[3] && !btn_prev_stable[3] && !barmode_btn_disabled[3]) {
       barmode_btn_counts[3]++;
       barmode_btn_event_ms[barmode_btn_event_head]  = now;
       barmode_btn_event_btn[barmode_btn_event_head] = 3;
       barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
       if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
       SendOscFloatToAllPylons(kOscAddrSteam, 1.0f);
-    } else if (!btn_stable[3] && btn_prev_stable[3]) {
+    } else if (!btn_stable[3] && btn_prev_stable[3] && !barmode_btn_disabled[3]) {
       SendOscFloatToAllPylons(kOscAddrSteam, 0.0f);
     }
     {
@@ -3671,7 +3726,9 @@ void PollBarModeButtons() {
         lamp_red_step_ms  = now - 10000;  // expire immediately so first pulse fires without delay
       }
 
-      if (btn_stable[3]) {
+      if (barmode_btn_disabled[3]) {
+        ledcWrite(6, 77);  // 30% dim when disabled
+      } else if (btn_stable[3]) {
         // Steam ramp: freq 1→10 Hz over 4s (same timing as solenoid sequence), full on after 4s
         const unsigned long elapsed = now - lamp_red_press_ms;
         if (elapsed >= 4000) {
