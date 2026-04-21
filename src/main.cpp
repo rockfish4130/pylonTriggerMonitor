@@ -140,6 +140,15 @@ unsigned long barmode_red_seq_step_ms  = 200;   // red hold-seq interval between
 unsigned long barmode_all4_lockout_s   = 300;  // all-4 lockout countdown duration after sequence; BARMODE NVS; default 5 min
 unsigned long barmode_all4_lockout_until_ms = 0; // millis() deadline; 0 = not locked
 bool          barmode_show_wait_oled   = false; // true while blue held but lockout active → WAIT screen
+unsigned long barmode_green_recovery_ms  = 0;   // recovery period after green tap; BARMODE NVS; default 0
+unsigned long barmode_blue_recovery_ms   = 0;   // recovery period after blue tap; BARMODE NVS; default 0
+unsigned long barmode_orange_recovery_ms = 0;   // recovery period after orange tap; BARMODE NVS; default 0
+unsigned long barmode_red_recovery_ms    = 0;   // recovery period after red steam; BARMODE NVS; default 0
+unsigned long barmode_recovery_wait_until_ms = 0; // WAIT screen deadline when tap blocked by recovery
+unsigned long green_recovery_until  = 0;  // runtime deadline; 0 = not in recovery
+unsigned long blue_recovery_until   = 0;
+unsigned long orange_recovery_until = 0;
+unsigned long red_recovery_until    = 0;
 // Manually-pinned pylons (supplement the rpiboosh registry, NVS-persisted)
 constexpr int kManualPylonMax = 8;
 struct ManualPylon {
@@ -271,6 +280,10 @@ constexpr const char *kPrefsKeyRedSeqValveMs = "red_seq_vlv_ms"; // uint32 ms; r
 constexpr const char *kPrefsKeyRedSeqStepMs  = "red_seq_stp_ms"; // uint32 ms; red hold-seq step interval
 constexpr const char *kPrefsKeyAll4LockoutS  = "all4_lck_s";  // uint32 s; all-4 lockout countdown duration
 constexpr const char *kPrefsKeyManualPylons  = "man_pylons";  // string; "host|index\n" lines
+constexpr const char *kPrefsKeyGreenRecovMs  = "grn_rec_ms";  // uint32 ms; green tap recovery period
+constexpr const char *kPrefsKeyBlueRecovMs   = "blu_rec_ms";  // uint32 ms; blue tap recovery period
+constexpr const char *kPrefsKeyOrangeRecovMs = "org_rec_ms";  // uint32 ms; orange tap recovery period
+constexpr const char *kPrefsKeyRedRecovMs    = "red_rec_ms";  // uint32 ms; red steam recovery period
 constexpr uint32_t kBooshFailsafeMinMs  = 1000;
 constexpr uint32_t kBooshFailsafeMaxMs  = 60000;
 
@@ -510,6 +523,10 @@ bool SavePylonConfig() {
   prefs.putUInt(kPrefsKeyRedSeqValveMs, static_cast<uint32_t>(barmode_red_seq_valve_ms));
   prefs.putUInt(kPrefsKeyRedSeqStepMs,  static_cast<uint32_t>(barmode_red_seq_step_ms));
   prefs.putUInt(kPrefsKeyAll4LockoutS, static_cast<uint32_t>(barmode_all4_lockout_s));
+  prefs.putUInt(kPrefsKeyGreenRecovMs,  static_cast<uint32_t>(barmode_green_recovery_ms));
+  prefs.putUInt(kPrefsKeyBlueRecovMs,   static_cast<uint32_t>(barmode_blue_recovery_ms));
+  prefs.putUInt(kPrefsKeyOrangeRecovMs, static_cast<uint32_t>(barmode_orange_recovery_ms));
+  prefs.putUInt(kPrefsKeyRedRecovMs,    static_cast<uint32_t>(barmode_red_recovery_ms));
   {
     uint8_t mask = 0;
     for (int i = 0; i < 4; i++) if (barmode_btn_disabled[i]) mask |= (1 << i);
@@ -591,6 +608,10 @@ void LoadPylonConfig() {
   barmode_red_seq_valve_ms = prefs.getUInt(kPrefsKeyRedSeqValveMs, 66);
   barmode_red_seq_step_ms  = prefs.getUInt(kPrefsKeyRedSeqStepMs,  200);
   barmode_all4_lockout_s   = prefs.getUInt(kPrefsKeyAll4LockoutS, 300);
+  barmode_green_recovery_ms  = prefs.getUInt(kPrefsKeyGreenRecovMs,  0);
+  barmode_blue_recovery_ms   = prefs.getUInt(kPrefsKeyBlueRecovMs,   0);
+  barmode_orange_recovery_ms = prefs.getUInt(kPrefsKeyOrangeRecovMs, 0);
+  barmode_red_recovery_ms    = prefs.getUInt(kPrefsKeyRedRecovMs,    0);
   {
     const uint8_t mask = prefs.getUChar(kPrefsKeyBtnDisable, 0);
     for (int i = 0; i < 4; i++) barmode_btn_disabled[i] = (mask >> i) & 1;
@@ -889,6 +910,30 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
     barmode_all4_lockout_s = (unsigned long)s;
     changed = true;
     if (log_output) Console.printf("[CFG] all4_lockout_s set: %lu\n", barmode_all4_lockout_s);
+  } else if (field == "green_recovery_ms") {
+    const long ms = value.toInt();
+    if (ms < 0 || ms > 300000) { if (log_output) Console.println("[CFG] green_recovery_ms out of range (0-300000)"); return false; }
+    barmode_green_recovery_ms = (unsigned long)ms;
+    changed = true;
+    if (log_output) Console.printf("[CFG] green_recovery_ms set: %lu\n", barmode_green_recovery_ms);
+  } else if (field == "blue_recovery_ms") {
+    const long ms = value.toInt();
+    if (ms < 0 || ms > 300000) { if (log_output) Console.println("[CFG] blue_recovery_ms out of range (0-300000)"); return false; }
+    barmode_blue_recovery_ms = (unsigned long)ms;
+    changed = true;
+    if (log_output) Console.printf("[CFG] blue_recovery_ms set: %lu\n", barmode_blue_recovery_ms);
+  } else if (field == "orange_recovery_ms") {
+    const long ms = value.toInt();
+    if (ms < 0 || ms > 300000) { if (log_output) Console.println("[CFG] orange_recovery_ms out of range (0-300000)"); return false; }
+    barmode_orange_recovery_ms = (unsigned long)ms;
+    changed = true;
+    if (log_output) Console.printf("[CFG] orange_recovery_ms set: %lu\n", barmode_orange_recovery_ms);
+  } else if (field == "red_recovery_ms") {
+    const long ms = value.toInt();
+    if (ms < 0 || ms > 300000) { if (log_output) Console.println("[CFG] red_recovery_ms out of range (0-300000)"); return false; }
+    barmode_red_recovery_ms = (unsigned long)ms;
+    changed = true;
+    if (log_output) Console.printf("[CFG] red_recovery_ms set: %lu\n", barmode_red_recovery_ms);
   } else if (field == "pulse1_dur_ms") {
     const int ms = (int)value.toInt();
     if (ms < 10 || ms > 5000) { if (log_output) Console.println("[CFG] pulse1_dur_ms out of range (10-5000)"); return false; }
@@ -1661,6 +1706,10 @@ String BuildTelemetryApiJson() {
   payload += "\"seq_dec_ms\":" + String(barmode_seq_dec_ms) + ",";
   payload += "\"seq_exp_pct\":" + String(barmode_seq_exp_pct) + ",";
   payload += "\"green_timeout_ms\":" + String(barmode_green_timeout_ms) + ",";
+  payload += "\"green_recovery_ms\":" + String(barmode_green_recovery_ms) + ",";
+  payload += "\"blue_recovery_ms\":" + String(barmode_blue_recovery_ms) + ",";
+  payload += "\"orange_recovery_ms\":" + String(barmode_orange_recovery_ms) + ",";
+  payload += "\"red_recovery_ms\":" + String(barmode_red_recovery_ms) + ",";
   payload += "\"bpm\":" + String(barmode_bpm, 1) + ",";
   payload += "\"all4_valve_ms\":" + String(barmode_all4_valve_ms) + ",";
   payload += "\"all4_lockout_s\":" + String(barmode_all4_lockout_s) + ",";
@@ -1897,6 +1946,16 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           <label>Valve open (ms) <input id="cfg-red-seq-valve-ms" name="red_seq_valve_ms" type="number" min="20" max="2000" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(each pylon valve open time; default 66ms)</span></label>
           <label>Step delay (ms) <input id="cfg-red-seq-step-ms" name="red_seq_step_ms" type="number" min="50" max="5000" step="50" style="width:70px"> <span style="color:var(--muted);font-size:12px">(interval between pylon steps; default 200ms)</span></label>
         </div>
+        <div id="cfg-grp-recovery" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
+          <span style="color:var(--muted);font-size:13px">Button Recovery (ms)</span>
+          <span style="color:var(--muted);font-size:12px">After each tap action completes, the button is locked out for this duration. Lamp goes dark. Tap during lockout shows WAIT on display. 0 = disabled.</span>
+          <div style="display:flex;gap:16px;flex-wrap:wrap">
+            <label style="color:#4caf50;font-size:13px">&#11044; Green <input id="cfg-green-recovery-ms" name="green_recovery_ms" type="number" min="0" max="300000" step="500" style="width:80px;margin-left:6px"> ms</label>
+            <label style="color:#2196f3;font-size:13px">&#11044; Blue <input id="cfg-blue-recovery-ms" name="blue_recovery_ms" type="number" min="0" max="300000" step="500" style="width:80px;margin-left:6px"> ms</label>
+            <label style="color:#ff9800;font-size:13px">&#11044; Orange <input id="cfg-orange-recovery-ms" name="orange_recovery_ms" type="number" min="0" max="300000" step="500" style="width:80px;margin-left:6px"> ms</label>
+            <label style="color:#f44336;font-size:13px">&#11044; Red <input id="cfg-red-recovery-ms" name="red_recovery_ms" type="number" min="0" max="300000" step="500" style="width:80px;margin-left:6px"> ms</label>
+          </div>
+        </div>
         <div style="border-top:1px solid var(--line);padding-top:10px;display:flex;align-items:center;gap:10px">
           <input type="checkbox" id="cfg-ap" style="width:18px;height:18px;margin:0;cursor:pointer;accent-color:var(--accent)">
           <span style="color:var(--muted);font-size:14px">Enable WiFi AP &mdash; SSID: <code>PYLON_<em>id</em></code>, IP <code>10.1.2.3</code></span>
@@ -2117,7 +2176,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       const idxInput = document.getElementById('cfg-index');
       if (idxInput && document.activeElement !== idxInput)
         idxInput.value = data.pylon_index != null ? data.pylon_index : 0;
-      ['cfg-grp-green','cfg-grp-blue','cfg-grp-all4','cfg-grp-red','cfg-btn-disable-wrap'].forEach(id => {
+      ['cfg-grp-green','cfg-grp-blue','cfg-grp-all4','cfg-grp-red','cfg-grp-recovery','cfg-btn-disable-wrap'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = data.barmode_active ? 'grid' : 'none';
       });
@@ -2173,6 +2232,18 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       const seqExpInput = document.getElementById('cfg-seq-exp-pct');
       if (seqExpInput && document.activeElement !== seqExpInput)
         seqExpInput.value = data.seq_exp_pct != null ? data.seq_exp_pct : 100;
+      const grnRecInput = document.getElementById('cfg-green-recovery-ms');
+      if (grnRecInput && document.activeElement !== grnRecInput)
+        grnRecInput.value = data.green_recovery_ms != null ? data.green_recovery_ms : 0;
+      const bluRecInput = document.getElementById('cfg-blue-recovery-ms');
+      if (bluRecInput && document.activeElement !== bluRecInput)
+        bluRecInput.value = data.blue_recovery_ms != null ? data.blue_recovery_ms : 0;
+      const orgRecInput = document.getElementById('cfg-orange-recovery-ms');
+      if (orgRecInput && document.activeElement !== orgRecInput)
+        orgRecInput.value = data.orange_recovery_ms != null ? data.orange_recovery_ms : 0;
+      const redRecInput = document.getElementById('cfg-red-recovery-ms');
+      if (redRecInput && document.activeElement !== redRecInput)
+        redRecInput.value = data.red_recovery_ms != null ? data.red_recovery_ms : 0;
       const apBox = document.getElementById('cfg-ap');
       if (apBox && document.activeElement !== apBox) apBox.checked = !!data.ap_enabled;
       const disWrap = document.getElementById('cfg-btn-disable-wrap');
@@ -2299,6 +2370,14 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       if (seqDecVal !== '') body.set('seq_dec_ms', seqDecVal);
       const seqExpVal = document.getElementById('cfg-seq-exp-pct').value.trim();
       if (seqExpVal !== '') body.set('seq_exp_pct', seqExpVal);
+      const grnRecVal = document.getElementById('cfg-green-recovery-ms').value.trim();
+      if (grnRecVal !== '') body.set('green_recovery_ms', grnRecVal);
+      const bluRecVal = document.getElementById('cfg-blue-recovery-ms').value.trim();
+      if (bluRecVal !== '') body.set('blue_recovery_ms', bluRecVal);
+      const orgRecVal = document.getElementById('cfg-orange-recovery-ms').value.trim();
+      if (orgRecVal !== '') body.set('orange_recovery_ms', orgRecVal);
+      const redRecVal = document.getElementById('cfg-red-recovery-ms').value.trim();
+      if (redRecVal !== '') body.set('red_recovery_ms', redRecVal);
       if (barmodeActive) {
         let disStr = '';
         for (let i = 0; i < 4; i++) {
@@ -4271,25 +4350,31 @@ void PollBarModeButtons() {
 
       if (!barmode_btn_disabled[0]) {
         if (btn_stable[0] && !btn_prev_stable[0]) {
-          barmode_btn_counts[0]++;
-          barmode_btn_event_ms[barmode_btn_event_head]  = now;
-          barmode_btn_event_btn[barmode_btn_event_head] = 0;
-          barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
-          if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
-          if (!btn0_pulse_active) {
-            SendOscFloatToAllPylons(kOscAddress, 1.0f);
-            barmode_act_counts[0]++;
+          if (now < green_recovery_until) {
+            // In recovery: show WAIT, block action
+            barmode_recovery_wait_until_ms = green_recovery_until;
+          } else {
+            barmode_btn_counts[0]++;
+            barmode_btn_event_ms[barmode_btn_event_head]  = now;
+            barmode_btn_event_btn[barmode_btn_event_head] = 0;
+            barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
+            if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
+            if (!btn0_pulse_active) {
+              SendOscFloatToAllPylons(kOscAddress, 1.0f);
+              barmode_act_counts[0]++;
+            }
+            btn0_pulse_active = true;
+            btn0_pulse_ms     = now;
+            barmode_btn0_held = true;
+            display.invertDisplay(true);
           }
-          btn0_pulse_active = true;
-          btn0_pulse_ms     = now;
-          barmode_btn0_held = true;
-          display.invertDisplay(true);
         }
       }
       // Physical release: clear lamp/display state; timer still handles OSC close
       if (!btn_stable[0] && btn_prev_stable[0] && barmode_btn0_held) {
         barmode_btn0_held = false;
         display.invertDisplay(false);
+        if (barmode_green_recovery_ms > 0) green_recovery_until = now + barmode_green_recovery_ms;
       }
       // Timer-based close
       if (btn0_pulse_active && now - btn0_pulse_ms >= barmode_green_timeout_ms) {
@@ -4297,11 +4382,13 @@ void PollBarModeButtons() {
         btn0_pulse_active = false;
       }
     }
-    // Green lamp: disabled=30%, held=solid, idle=sine 2Hz
+    // Green lamp: disabled=30%, recovery=off, held=solid, idle=sine 2Hz
     {
       uint8_t v;
       if (barmode_btn_disabled[0]) {
         v = 77;  // 30%
+      } else if (now < green_recovery_until) {
+        v = 0;  // recovery: lamp off
       } else if (barmode_btn0_held) {
         v = 255;
       } else {
@@ -4325,32 +4412,40 @@ void PollBarModeButtons() {
       static PylonTarget   btn1_seq_targets[16];
       static int           btn1_seq_count        = 0;
       static int           btn1_seq_group        = 0;  // index of current group start in sorted targets[]
+      static bool          btn1_single_fired      = false;  // true if single-tap fired this press
 
       const bool rising  = btn_stable[1] && !btn_prev_stable[1];
       const bool falling = !btn_stable[1] && btn_prev_stable[1];
 
       if (rising && !barmode_btn_disabled[1]) {
-        barmode_btn_counts[1]++;
-        barmode_btn_event_ms[barmode_btn_event_head]  = now;
-        barmode_btn_event_btn[barmode_btn_event_head] = 1;
-        barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
-        if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
-        if (btn1_release_ms > 0 && now - btn1_release_ms <= 300) {
-          // Double-tap: enter index-ordered sequential looping mode
-          btn1_seq_count = ExtractRegistryTargets(btn1_seq_targets, 16);
-          if (btn1_seq_count > 0) {
-            btn1_seq_active       = true;
-            btn1_seq_start_ms     = now;
-            btn1_seq_delay_ms     = 1000;
-            btn1_seq_last_fire_ms = now - 1000;  // fire first group immediately
-            btn1_seq_group        = 0;
-            barmode_act_counts[2]++;
-            Console.printf("[BarMode] Btn1 seq: %d pylons\n", btn1_seq_count);
-          }
+        if (now < blue_recovery_until) {
+          // In recovery: show WAIT, block action
+          barmode_recovery_wait_until_ms = blue_recovery_until;
         } else {
-          // Normal single fire to all pylons simultaneously
-          SendOscFloatToAllPylons(kOscAddrPulseSingle, 1.0f);
-          barmode_act_counts[1]++;
+          barmode_btn_counts[1]++;
+          barmode_btn_event_ms[barmode_btn_event_head]  = now;
+          barmode_btn_event_btn[barmode_btn_event_head] = 1;
+          barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
+          if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
+          if (btn1_release_ms > 0 && now - btn1_release_ms <= 300) {
+            // Double-tap: enter index-ordered sequential looping mode
+            btn1_single_fired = false;
+            btn1_seq_count = ExtractRegistryTargets(btn1_seq_targets, 16);
+            if (btn1_seq_count > 0) {
+              btn1_seq_active       = true;
+              btn1_seq_start_ms     = now;
+              btn1_seq_delay_ms     = 1000;
+              btn1_seq_last_fire_ms = now - 1000;  // fire first group immediately
+              btn1_seq_group        = 0;
+              barmode_act_counts[2]++;
+              Console.printf("[BarMode] Btn1 seq: %d pylons\n", btn1_seq_count);
+            }
+          } else {
+            // Normal single fire to all pylons simultaneously
+            SendOscFloatToAllPylons(kOscAddrPulseSingle, 1.0f);
+            barmode_act_counts[1]++;
+            btn1_single_fired = true;
+          }
         }
       }
 
@@ -4359,7 +4454,10 @@ void PollBarModeButtons() {
         if (btn1_seq_active) {
           btn1_seq_active = false;
           Console.println("[BarMode] Btn1 seq stopped");
+        } else if (btn1_single_fired && barmode_blue_recovery_ms > 0) {
+          blue_recovery_until = now + barmode_blue_recovery_ms;
         }
+        btn1_single_fired = false;
       }
 
       // Sequence ticker: fire one group (same pylon_index) per 100ms step
@@ -4398,29 +4496,44 @@ void PollBarModeButtons() {
       }
     }
 
-    // Blue lamp: disabled=30%, idle=200ms pulse per second
+    // Blue lamp: disabled=30%, recovery=off, idle=200ms pulse per second
     {
       const float bpm_b = barmode_bpm;
       const unsigned long blue_period = (bpm_b >= 40.0f)
           ? (unsigned long)(60000.0f / bpm_b) : 1000UL;  // 1 pulse per beat, or 1Hz default
-      ledcWrite(5, barmode_btn_disabled[1] ? 77 : (now % blue_period < 50) ? 255 : 51);
+      ledcWrite(5, barmode_btn_disabled[1] ? 77 : (now < blue_recovery_until) ? 0 : (now % blue_period < 50) ? 255 : 51);
     }
 
     // Button 2 — Orange button: BooshPulseTrain; IO35 strobes 5x pulse pattern once then returns to idle sawtooth
     {
-      static bool          io35_strobe      = false;
-      static unsigned long io35_strobe_start = 0;
+      static bool          io35_strobe           = false;
+      static unsigned long io35_strobe_start      = 0;
+      static bool          btn2_pending_release   = false;  // true if action fired; start recovery on release
 
-      if (btn_stable[2] && !btn_prev_stable[2] && !barmode_btn_disabled[2]) {
-        barmode_btn_counts[2]++;
-        barmode_btn_event_ms[barmode_btn_event_head]  = now;
-        barmode_btn_event_btn[barmode_btn_event_head] = 2;
-        barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
-        if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
-        SendOscFloatToAllPylons(kOscAddrPulseTrain, 1.0f);
-        barmode_act_counts[3]++;
-        io35_strobe       = true;
-        io35_strobe_start = now;
+      const bool o_rising  = btn_stable[2] && !btn_prev_stable[2];
+      const bool o_falling = !btn_stable[2] && btn_prev_stable[2];
+
+      if (o_rising && !barmode_btn_disabled[2]) {
+        if (now < orange_recovery_until) {
+          // In recovery: show WAIT, block action
+          barmode_recovery_wait_until_ms = orange_recovery_until;
+        } else {
+          barmode_btn_counts[2]++;
+          barmode_btn_event_ms[barmode_btn_event_head]  = now;
+          barmode_btn_event_btn[barmode_btn_event_head] = 2;
+          barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
+          if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
+          SendOscFloatToAllPylons(kOscAddrPulseTrain, 1.0f);
+          barmode_act_counts[3]++;
+          io35_strobe        = true;
+          io35_strobe_start  = now;
+          btn2_pending_release = true;
+        }
+      }
+
+      if (o_falling && btn2_pending_release) {
+        if (barmode_orange_recovery_ms > 0) orange_recovery_until = now + barmode_orange_recovery_ms;
+        btn2_pending_release = false;
       }
 
       if (io35_strobe) {
@@ -4434,12 +4547,16 @@ void PollBarModeButtons() {
         }
       }
       if (!io35_strobe) {
-        // Orange lamp: disabled=30%, idle=sawtooth 4Hz
+        // Orange lamp: disabled=30%, recovery=off, idle=sawtooth 4Hz
         {
           const float bpm_o = barmode_bpm;
           const unsigned long saw_period = (bpm_o >= 40.0f)
               ? (unsigned long)(60000.0f / bpm_o) : 250UL;  // 1 ramp per beat, or 4Hz default
-          ledcWrite(3, barmode_btn_disabled[2] ? 77 : (uint8_t)((now % saw_period) * 255 / saw_period));
+          uint8_t v;
+          if (barmode_btn_disabled[2]) v = 77;
+          else if (now < orange_recovery_until) v = 0;
+          else v = (uint8_t)((now % saw_period) * 255 / saw_period);
+          ledcWrite(3, v);
         }
       }
     }
@@ -4522,16 +4639,24 @@ void PollBarModeButtons() {
               SendOscFloatToIP(kOscAddress, 0.0f, red_seq_close_ip);
               red_seq_close_pend = false;
             }
-            red_state = (held < 400) ? 1 : 0;
-            if (red_state == 1) {
-              red_press1_ms = now;
-              Console.printf("[BarMode] Red: quick-tap end (%lums), steam window\n", held);
+            if (held < 400 && now < red_recovery_until) {
+              // Recovery active: block entering triple-tap steam window
+              barmode_recovery_wait_until_ms = red_recovery_until;
+              red_state = 0;
+              Console.printf("[BarMode] Red: quick-tap blocked by recovery (%lums held)\n", held);
             } else {
-              Console.printf("[BarMode] Red: seq end (%lums)\n", held);
+              red_state = (held < 400) ? 1 : 0;
+              if (red_state == 1) {
+                red_press1_ms = now;
+                Console.printf("[BarMode] Red: quick-tap end (%lums), steam window\n", held);
+              } else {
+                Console.printf("[BarMode] Red: seq end (%lums)\n", held);
+              }
             }
           } else if (red_state == 3) {
             SendOscFloatToAllPylons(kOscAddrSteam, 0.0f);
             red_state = 0;
+            if (barmode_red_recovery_ms > 0) red_recovery_until = now + barmode_red_recovery_ms;
             Console.println("[BarMode] Red: steam released");
           }
         }
@@ -4592,7 +4717,7 @@ void PollBarModeButtons() {
         if (red_state == 2 && now - red_press2_ms > 500) { red_state = 0; }
       }
 
-      // Red lamp: disabled=30%, seq=pulse with valve, steam=ramp, idle=Morse LAVA
+      // Red lamp: disabled=30%, seq=pulse with valve, steam=ramp, recovery=off, idle=Morse LAVA
       if (barmode_btn_disabled[3]) {
         ledcWrite(6, 77);
       } else if (red_state == 3) {
@@ -4615,6 +4740,9 @@ void PollBarModeButtons() {
       } else if (red_state == 4 || now < red_seq_lamp_until) {
         // Sequential: on while valve is open
         ledcWrite(6, now < red_seq_lamp_until ? 255 : 0);
+      } else if (now < red_recovery_until) {
+        // Recovery: lamp off
+        ledcWrite(6, 0);
       } else {
         // Idle: Morse "LAVA" — unit scales to beat/4 when BPM locked (16th note), else 150ms
         static const uint8_t kLavaMorseUnits[] = {
@@ -5057,8 +5185,9 @@ void loop() {
   } else if (boosh_failsafe_note_until_ms == 0 || now >= boosh_failsafe_note_until_ms) {
     boosh_failsafe_note_until_ms = 0;
 
-    // Barmode WAIT screen: override display while blue held during lockout
+    // Barmode WAIT screen: override display while blue held during lockout, or on blocked tap (recovery)
     static unsigned long lastWaitDisplayMs = 0;
+    const bool show_recovery_wait = (barmode_recovery_wait_until_ms > 0 && now < barmode_recovery_wait_until_ms);
     if (barmode_show_wait_oled) {
       if (now - lastWaitDisplayMs >= 500) {
         lastWaitDisplayMs = now;
@@ -5077,6 +5206,27 @@ void loop() {
         // "MM:SS" at size 3 = 5 chars × 18px = 90px wide; center at x = (128-90)/2 = 19
         display.setCursor(19, 8);
         display.print(timebuf);
+        display.display();
+      }
+    } else if (show_recovery_wait) {
+      if (now - lastWaitDisplayMs >= 500) {
+        lastWaitDisplayMs = now;
+        unsigned long rem_ms = (barmode_recovery_wait_until_ms > now) ? (barmode_recovery_wait_until_ms - now) : 0;
+        unsigned int rem_s = (unsigned int)((rem_ms + 999) / 1000);  // ceiling seconds
+        char secbuf[8];
+        if (rem_s >= 60) {
+          snprintf(secbuf, sizeof(secbuf), "%u:%02u", rem_s / 60, rem_s % 60);
+        } else {
+          snprintf(secbuf, sizeof(secbuf), "%us", rem_s);
+        }
+        display.clearDisplay();
+        display.setTextColor(SSD1306_WHITE);
+        display.setTextSize(1);
+        display.setCursor(0, 0);
+        display.print("WAIT");
+        display.setTextSize(3);
+        display.setCursor(0, 8);
+        display.print(secbuf);
         display.display();
       }
     } else if (lastDisplayMs == 0) {
@@ -5098,7 +5248,7 @@ void loop() {
     // Slot 0, 1 → temp °F + battery pct  |  Slot 2 → time remaining + voltage
     // Slot 3 → info sub-pages (ping/wifi/wifi-detail/node/firmware)
     // In barmode slots 0-2 are skipped entirely (no sensor hardware).
-    if (barmode_show_wait_oled) {
+    if (barmode_show_wait_oled || show_recovery_wait) {
       // WAIT screen rendered above; skip normal pages
     } else if (!barmode_active && (displayPage == 0 || displayPage == 1)) {
       ShowTempPctPage();
