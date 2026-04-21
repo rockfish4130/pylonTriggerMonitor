@@ -1758,7 +1758,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
             </tr>
             <tr>
               <td style="padding:5px 10px 5px 0;color:#f44336;white-space:nowrap">&#11044; Red tap</td>
-              <td style="padding:5px 0">Steam pulse — opens all pylon steam valves for 100 ms, then closes automatically.</td>
+              <td style="padding:5px 0">Steam pulse — opens all pylon steam valves for 150 ms, then closes automatically.</td>
             </tr>
             <tr>
               <td style="padding:5px 10px 5px 0;color:#f44336;white-space:nowrap">&#11044; Red triple-tap + hold</td>
@@ -3911,7 +3911,7 @@ void PollBarModeButtons() {
 
     // Button 3 — Red button: tap=100ms steam pulse; triple-tap+hold=steam hold mode
     // State 0: idle
-    // State 1: first press fired (100ms close pending); ≤300ms window for 2nd press
+    // State 1: first press fired (150ms close pending); ≤300ms window for 2nd press
     // State 2: second press suppressed; ≤300ms window for 3rd press+hold
     // State 3: steam hold active (hold open until released)
     {
@@ -3919,7 +3919,7 @@ void PollBarModeButtons() {
       static unsigned long red_press1_ms    = 0;   // time of 1st press
       static unsigned long red_press2_ms    = 0;   // time of 2nd press
       static bool          red_close_pending= false;
-      static unsigned long red_close_ms     = 0;   // when 100ms close should fire
+      static unsigned long red_close_ms     = 0;   // when 150ms close should fire
       static unsigned long lamp_red_press_ms = 0;
       static bool          lamp_red_on      = false;
       static unsigned long lamp_red_step_ms = 0;
@@ -3972,8 +3972,8 @@ void PollBarModeButtons() {
           Console.println("[BarMode] Red: steam hold released");
         }
 
-        // 100ms close timer
-        if (red_close_pending && now - red_close_ms >= 100) {
+        // 150ms close timer
+        if (red_close_pending && now - red_close_ms >= 150) {
           SendOscFloatToAllPylons(kOscAddrSteam, 0.0f);
           red_close_pending = false;
           Console.println("[BarMode] Red: pulse close");
