@@ -1758,11 +1758,11 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
             </tr>
             <tr>
               <td style="padding:5px 10px 5px 0;color:#f44336;white-space:nowrap">&#11044; Red tap</td>
-              <td style="padding:5px 0">Steam pulse — opens all pylon steam valves for 150 ms, then closes automatically.</td>
+              <td style="padding:5px 0">Main valve pulse — opens all pylon valves for 100 ms, then closes automatically.</td>
             </tr>
             <tr>
               <td style="padding:5px 10px 5px 0;color:#f44336;white-space:nowrap">&#11044; Red triple-tap + hold</td>
-              <td style="padding:5px 0">Steam hold — tap, tap (suppressed), tap &amp; hold: opens all steam valves while held (ramping frequency); closes on release. Each tap must be within 300 ms of the previous.</td>
+              <td style="padding:5px 0">Steam hold — tap, tap (silent), tap &amp; hold: opens all steam valves while held (ramping frequency); closes on release. Each tap must be within 500 ms of the previous.</td>
             </tr>
           </table>
         </div>
@@ -3909,17 +3909,17 @@ void PollBarModeButtons() {
       }
     }
 
-    // Button 3 — Red button: tap=100ms steam pulse; triple-tap+hold=steam hold mode
+    // Button 3 — Red button: tap=100ms BooshMain pulse; triple-tap+hold=BooshSteam hold
     // State 0: idle
-    // State 1: first press fired (150ms close pending); ≤300ms window for 2nd press
-    // State 2: second press suppressed; ≤300ms window for 3rd press+hold
-    // State 3: steam hold active (hold open until released)
+    // State 1: first press fired (100ms close pending); ≤500ms window for 2nd press
+    // State 2: second press suppressed (no action); ≤500ms window for 3rd press+hold
+    // State 3: steam hold active (open until released)
     {
       static int           red_state        = 0;
       static unsigned long red_press1_ms    = 0;   // time of 1st press
       static unsigned long red_press2_ms    = 0;   // time of 2nd press
       static bool          red_close_pending= false;
-      static unsigned long red_close_ms     = 0;   // when 150ms close should fire
+      static unsigned long red_close_ms     = 0;   // when 100ms close should fire
       static unsigned long lamp_red_press_ms = 0;
       static bool          lamp_red_on      = false;
       static unsigned long lamp_red_step_ms = 0;
@@ -3930,25 +3930,25 @@ void PollBarModeButtons() {
       if (!barmode_btn_disabled[3]) {
         if (r_rising) {
           if (red_state == 0) {
-            // First press: fire 100ms pulse
+            // First press: fire 100ms BooshMain pulse
             barmode_btn_counts[3]++;
             barmode_btn_event_ms[barmode_btn_event_head]  = now;
             barmode_btn_event_btn[barmode_btn_event_head] = 3;
             barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
             if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
-            SendOscFloatToAllPylons(kOscAddrSteam, 1.0f);
+            SendOscFloatToAllPylons(kOscAddress, 1.0f);
             red_close_pending = true;
             red_close_ms      = now;
             red_press1_ms     = now;
             red_state         = 1;
-            Console.println("[BarMode] Red: pulse open");
-          } else if (red_state == 1 && now - red_press1_ms <= 300) {
-            // Second press within 300ms: suppress
+            Console.println("[BarMode] Red: pulse open (BooshMain)");
+          } else if (red_state == 1 && now - red_press1_ms <= 500) {
+            // Second press within 500ms: suppress (no action, no feedback)
             red_press2_ms = now;
             red_state     = 2;
             Console.println("[BarMode] Red: 2nd press suppressed");
-          } else if (red_state == 2 && now - red_press2_ms <= 300) {
-            // Third press within 300ms of second + hold: activate steam
+          } else if (red_state == 2 && now - red_press2_ms <= 500) {
+            // Third press within 500ms of second + hold: activate steam
             SendOscFloatToAllPylons(kOscAddrSteam, 1.0f);
             lamp_red_press_ms = now;
             lamp_red_on       = false;
@@ -3957,8 +3957,7 @@ void PollBarModeButtons() {
             Console.println("[BarMode] Red: steam hold active");
           } else {
             // Out-of-window press: treat as a fresh first press
-            red_close_pending = false;  // cancel any pending close (was already sent if fired)
-            SendOscFloatToAllPylons(kOscAddrSteam, 1.0f);
+            SendOscFloatToAllPylons(kOscAddress, 1.0f);
             red_close_pending = true;
             red_close_ms      = now;
             red_press1_ms     = now;
@@ -3972,16 +3971,16 @@ void PollBarModeButtons() {
           Console.println("[BarMode] Red: steam hold released");
         }
 
-        // 150ms close timer
-        if (red_close_pending && now - red_close_ms >= 150) {
-          SendOscFloatToAllPylons(kOscAddrSteam, 0.0f);
+        // 100ms close timer (BooshMain pulse)
+        if (red_close_pending && now - red_close_ms >= 100) {
+          SendOscFloatToAllPylons(kOscAddress, 0.0f);
           red_close_pending = false;
           Console.println("[BarMode] Red: pulse close");
         }
 
         // State timeout: reset to idle if window expires without next press
-        if (red_state == 1 && now - red_press1_ms > 300) { red_state = 0; }
-        if (red_state == 2 && now - red_press2_ms > 300) { red_state = 0; }
+        if (red_state == 1 && now - red_press1_ms > 500) { red_state = 0; }
+        if (red_state == 2 && now - red_press2_ms > 500) { red_state = 0; }
       }
 
       // Red lamp: disabled=30%, steam hold ramp, idle=Morse LAVA
