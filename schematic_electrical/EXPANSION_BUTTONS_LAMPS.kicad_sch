@@ -493,6 +493,126 @@
 				)
 			)
 		)
+		(symbol "power:+12V"
+			(power)
+			(pin_numbers hide)
+			(pin_names
+				(offset 0) hide)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "#PWR"
+				(at 0 -3.81 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Value" "+12V"
+				(at 0 3.556 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+				)
+			)
+			(property "Footprint" ""
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Datasheet" ""
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Description" "Power symbol creates a global label with name \"+12V\""
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "ki_keywords" "global power"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(symbol "+12V_0_1"
+				(polyline
+					(pts
+						(xy -0.762 1.27) (xy 0 2.54)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 0 0) (xy 0 2.54)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 0 2.54) (xy 0.762 1.27)
+					)
+					(stroke
+						(width 0)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+			)
+			(symbol "+12V_1_1"
+				(pin power_in line
+					(at 0 0 90)
+					(length 0)
+					(name "~"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+		)
 		(symbol "power:+3.3V"
 			(power)
 			(pin_numbers hide)
@@ -613,102 +733,6 @@
 				)
 			)
 		)
-		(symbol "power:GND"
-			(power)
-			(pin_numbers hide)
-			(pin_names
-				(offset 0) hide)
-			(exclude_from_sim no)
-			(in_bom yes)
-			(on_board yes)
-			(property "Reference" "#PWR"
-				(at 0 -6.35 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "Value" "GND"
-				(at 0 -3.81 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-				)
-			)
-			(property "Footprint" ""
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "Datasheet" ""
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "ki_keywords" "global power"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(symbol "GND_0_1"
-				(polyline
-					(pts
-						(xy 0 0) (xy 0 -1.27) (xy 1.27 -1.27) (xy 0 -2.54) (xy -1.27 -1.27) (xy 0 -1.27)
-					)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-			)
-			(symbol "GND_1_1"
-				(pin power_in line
-					(at 0 0 270)
-					(length 0)
-					(name "~"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "1"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-			)
-		)
 	)
 	(no_connect
 		(at 198.12 60.96)
@@ -754,6 +778,16 @@
 	)
 	(wire
 		(pts
+			(xy 124.46 62.23) (xy 137.16 62.23)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "0f6ed156-e887-42a0-a55f-3a33604784bc")
+	)
+	(wire
+		(pts
 			(xy 195.58 52.07) (xy 198.12 52.07)
 		)
 		(stroke
@@ -771,16 +805,6 @@
 			(type default)
 		)
 		(uuid "1ddaba8a-0bca-4db1-aa4b-cfd0a16b23e1")
-	)
-	(wire
-		(pts
-			(xy 223.52 85.09) (xy 223.52 67.31)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "63cdd626-9769-49d1-9eee-3d159b97610a")
 	)
 	(wire
 		(pts
@@ -804,6 +828,26 @@
 	)
 	(wire
 		(pts
+			(xy 222.25 129.54) (xy 234.95 129.54)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "94db103e-5faf-442c-9c5e-675f43d17913")
+	)
+	(wire
+		(pts
+			(xy 124.46 123.19) (xy 137.16 123.19)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "a7aaff9b-d948-438e-94ed-901251573a8a")
+	)
+	(wire
+		(pts
 			(xy 194.31 105.41) (xy 194.31 114.3)
 		)
 		(stroke
@@ -811,26 +855,6 @@
 			(type default)
 		)
 		(uuid "a868ae96-7dab-441b-b7bd-2bea13008ff5")
-	)
-	(wire
-		(pts
-			(xy 124.46 140.97) (xy 124.46 123.19)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "ac4b4522-b5b0-4f04-850d-8ed5e167a9b7")
-	)
-	(wire
-		(pts
-			(xy 124.46 80.01) (xy 124.46 62.23)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "ad884246-4328-43ee-b136-b05213c550ee")
 	)
 	(wire
 		(pts
@@ -844,6 +868,16 @@
 	)
 	(wire
 		(pts
+			(xy 223.52 67.31) (xy 236.22 67.31)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c8521c0a-e27f-4fa5-b979-ca218c6ba82b")
+	)
+	(wire
+		(pts
 			(xy 194.31 114.3) (xy 196.85 114.3)
 		)
 		(stroke
@@ -851,16 +885,6 @@
 			(type default)
 		)
 		(uuid "dc8a7365-614b-43c4-a2e0-365cb1d9ec4a")
-	)
-	(wire
-		(pts
-			(xy 222.25 147.32) (xy 222.25 129.54)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "ef498ba8-5b99-44a7-a876-2e9eb4e7f6ec")
 	)
 	(rectangle
 		(start 16.51 16.51)
@@ -873,6 +897,16 @@
 			(type none)
 		)
 		(uuid 7f1a87d4-f234-4d92-9dc5-ddbb43b545e5)
+	)
+	(text "TODO: BUTTONS NEED 12V,\nMCU END IS A GND PATH"
+		(exclude_from_sim no)
+		(at 119.38 71.12 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "993147e3-4624-446e-af15-cbe0b31eea60")
 	)
 	(text "INSTALLED ONLY ON PYLON CONFIGURED FOR BAR PLACEMENT \nDRIVES THE STREET SIGN, BUT ALSO HAS BUTTONS TO WIRELESS TRIGGER OTHER PYLONS"
 		(exclude_from_sim no)
@@ -1127,17 +1161,17 @@
 		)
 	)
 	(symbol
-		(lib_id "power:GND")
-		(at 124.46 80.01 0)
+		(lib_id "power:+12V")
+		(at 137.16 123.19 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "47cc39ea-bd96-443d-a8c8-583848e8e329")
+		(uuid "454db4d2-feb2-48c2-a838-6cc87af17722")
 		(property "Reference" "#PWR08"
-			(at 124.46 86.36 0)
+			(at 137.16 127 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1145,8 +1179,8 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "GND"
-			(at 124.46 85.09 0)
+		(property "Value" "+12V_MASTER_ARM_SW"
+			(at 137.16 118.11 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1154,7 +1188,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 124.46 80.01 0)
+			(at 137.16 123.19 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1163,7 +1197,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 124.46 80.01 0)
+			(at 137.16 123.19 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1171,8 +1205,8 @@
 				(hide yes)
 			)
 		)
-		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 124.46 80.01 0)
+		(property "Description" "Power symbol creates a global label with name \"+12V\""
+			(at 137.16 123.19 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1181,12 +1215,78 @@
 			)
 		)
 		(pin "1"
-			(uuid "806587e2-a9cc-40c3-b27e-a97533ba2f45")
+			(uuid "dce1ee93-784a-45d1-9890-e6381fec080a")
 		)
 		(instances
 			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/b24d42a2-b819-4d3a-a71f-6b9dc6d378ef"
 					(reference "#PWR08")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:+12V")
+		(at 236.22 67.31 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "4dc3a534-addc-4838-8736-c8e53021e0be")
+		(property "Reference" "#PWR015"
+			(at 236.22 71.12 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "+12V_MASTER_ARM_SW"
+			(at 236.22 62.23 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 236.22 67.31 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 236.22 67.31 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"+12V\""
+			(at 236.22 67.31 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "0eb08334-6268-479b-90b5-d28a7a430761")
+		)
+		(instances
+			(project "pylons_boosh_remote_reciver"
+				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/b24d42a2-b819-4d3a-a71f-6b9dc6d378ef"
+					(reference "#PWR015")
 					(unit 1)
 				)
 			)
@@ -1253,72 +1353,6 @@
 			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/b24d42a2-b819-4d3a-a71f-6b9dc6d378ef"
 					(reference "#PWR022")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:GND")
-		(at 223.52 85.09 0)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "55b8319b-23da-4e0c-b7ee-d857c8d3c0a2")
-		(property "Reference" "#PWR015"
-			(at 223.52 91.44 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Value" "GND"
-			(at 223.52 90.17 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 223.52 85.09 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 223.52 85.09 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 223.52 85.09 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "1"
-			(uuid "6626ac57-8ccf-4be9-92ec-9fe436a5c80a")
-		)
-		(instances
-			(project "pylons_boosh_remote_reciver"
-				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/b24d42a2-b819-4d3a-a71f-6b9dc6d378ef"
-					(reference "#PWR015")
 					(unit 1)
 				)
 			)
@@ -1477,17 +1511,17 @@
 		)
 	)
 	(symbol
-		(lib_id "power:GND")
-		(at 124.46 140.97 0)
+		(lib_id "power:+12V")
+		(at 234.95 129.54 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
 		(dnp no)
 		(fields_autoplaced yes)
-		(uuid "b10c6dd2-9993-49e7-98b9-9ec16a20546f")
+		(uuid "c4063ce9-2da5-4018-b99b-50b3ec646894")
 		(property "Reference" "#PWR017"
-			(at 124.46 147.32 0)
+			(at 234.95 133.35 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1495,8 +1529,8 @@
 				(hide yes)
 			)
 		)
-		(property "Value" "GND"
-			(at 124.46 146.05 0)
+		(property "Value" "+12V_MASTER_ARM_SW"
+			(at 234.95 124.46 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1504,7 +1538,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 124.46 140.97 0)
+			(at 234.95 129.54 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1513,7 +1547,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 124.46 140.97 0)
+			(at 234.95 129.54 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1521,8 +1555,8 @@
 				(hide yes)
 			)
 		)
-		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 124.46 140.97 0)
+		(property "Description" "Power symbol creates a global label with name \"+12V\""
+			(at 234.95 129.54 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1531,7 +1565,7 @@
 			)
 		)
 		(pin "1"
-			(uuid "bd459bb7-b661-45ad-a978-59b9d10bbe57")
+			(uuid "8731b81c-a8c3-4abb-84cc-2969a1077687")
 		)
 		(instances
 			(project "pylons_boosh_remote_reciver"
@@ -1781,72 +1815,6 @@
 		)
 	)
 	(symbol
-		(lib_id "power:GND")
-		(at 222.25 147.32 0)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "d2d19957-5573-40ec-8f02-6887e5cf37d5")
-		(property "Reference" "#PWR018"
-			(at 222.25 153.67 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Value" "GND"
-			(at 222.25 152.4 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 222.25 147.32 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 222.25 147.32 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 222.25 147.32 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "1"
-			(uuid "131dddc0-16a3-48bc-b6b2-14b65b220926")
-		)
-		(instances
-			(project "pylons_boosh_remote_reciver"
-				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/b24d42a2-b819-4d3a-a71f-6b9dc6d378ef"
-					(reference "#PWR018")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
 		(lib_id "AB_800T-QT24:AB_800T-QT24")
 		(at 111.76 53.34 0)
 		(unit 1)
@@ -1927,6 +1895,72 @@
 			(project "pylons_boosh_remote_reciver"
 				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/b24d42a2-b819-4d3a-a71f-6b9dc6d378ef"
 					(reference "SW1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:+12V")
+		(at 137.16 62.23 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "ebde1ff1-8279-4d26-8a48-da4e618cf900")
+		(property "Reference" "#PWR023"
+			(at 137.16 66.04 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "+12V_MASTER_ARM_SW"
+			(at 137.16 57.15 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 137.16 62.23 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 137.16 62.23 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"+12V\""
+			(at 137.16 62.23 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "672b2840-6759-4a11-b543-2b59b1386aaa")
+		)
+		(instances
+			(project "pylons_boosh_remote_reciver"
+				(path "/f3653ac0-a28a-4ee8-bcf5-236139001455/b24d42a2-b819-4d3a-a71f-6b9dc6d378ef"
+					(reference "#PWR023")
 					(unit 1)
 				)
 			)
