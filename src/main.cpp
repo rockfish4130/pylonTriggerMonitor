@@ -122,6 +122,7 @@ int pylon_index = 0;  // sequencing index reported in telemetry; persisted in NV
 unsigned long barmode_seq_max_ms = 30000;  // btn1 double-tap seq max hold duration; BARMODE NVS; default 30s
 unsigned long barmode_seq_dec_ms = 50;     // delay decrement per step in btn1 seq; BARMODE NVS; default 50ms
 uint8_t barmode_seq_exp_pct = 100;         // exponential factor % (1-100) applied after linear dec; 100=off
+unsigned long barmode_green_timeout_ms = 300; // btn0 timed pulse open duration; BARMODE NVS; default 300ms
 uint32_t barmode_btn_counts[4]   = {0,0,0,0};   // running press counts: [green, blue, orange, red]
 bool     barmode_btn_disabled[4] = {false,false,false,false}; // NVS-persisted disable flags
 // Ring buffer: up to 1024 button press events (ms + btn index), oldest overwritten
@@ -219,7 +220,8 @@ constexpr const char *kPrefsKeyIndex = "pylon_idx";
 constexpr const char *kPrefsKeySeqMaxMs = "seq_max_ms";
 constexpr const char *kPrefsKeySeqDecMs = "seq_dec_ms";
 constexpr const char *kPrefsKeySeqExpPct  = "seq_exp_pct";  // 1-100; applied as factor delay*=(pct/100)
-constexpr const char *kPrefsKeyBtnDisable = "btn_dis";      // uint8 bitmask: bit0=green,1=blue,2=orange,3=red
+constexpr const char *kPrefsKeyBtnDisable    = "btn_dis";      // uint8 bitmask: bit0=green,1=blue,2=orange,3=red
+constexpr const char *kPrefsKeyGreenTimeout = "grn_to_ms";   // uint32 ms; btn0 timed pulse duration
 constexpr uint32_t kBooshFailsafeMinMs  = 1000;
 constexpr uint32_t kBooshFailsafeMaxMs  = 60000;
 
@@ -444,6 +446,7 @@ bool SavePylonConfig() {
   prefs.putUInt(kPrefsKeySeqMaxMs, static_cast<uint32_t>(barmode_seq_max_ms));
   prefs.putUInt(kPrefsKeySeqDecMs, static_cast<uint32_t>(barmode_seq_dec_ms));
   prefs.putUChar(kPrefsKeySeqExpPct, barmode_seq_exp_pct);
+  prefs.putUInt(kPrefsKeyGreenTimeout, static_cast<uint32_t>(barmode_green_timeout_ms));
   {
     uint8_t mask = 0;
     for (int i = 0; i < 4; i++) if (barmode_btn_disabled[i]) mask |= (1 << i);
@@ -509,7 +512,8 @@ void LoadPylonConfig() {
   pylon_index = prefs.getInt(kPrefsKeyIndex, 0);
   barmode_seq_max_ms = prefs.getUInt(kPrefsKeySeqMaxMs, 30000);
   barmode_seq_dec_ms = prefs.getUInt(kPrefsKeySeqDecMs, 50);
-  barmode_seq_exp_pct = (uint8_t)prefs.getUChar(kPrefsKeySeqExpPct, 100);
+  barmode_seq_exp_pct    = (uint8_t)prefs.getUChar(kPrefsKeySeqExpPct, 100);
+  barmode_green_timeout_ms = prefs.getUInt(kPrefsKeyGreenTimeout, 300);
   {
     const uint8_t mask = prefs.getUChar(kPrefsKeyBtnDisable, 0);
     for (int i = 0; i < 4; i++) barmode_btn_disabled[i] = (mask >> i) & 1;
@@ -718,6 +722,15 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
     barmode_seq_exp_pct = (uint8_t)pct;
     changed = true;
     if (log_output) Console.printf("[CFG] seq_exp_pct set: %d\n", barmode_seq_exp_pct);
+  } else if (field == "green_timeout_ms" || field == "grn_to_ms") {
+    const int ms = (int)value.toInt();
+    if (ms < 50 || ms > 10000) {
+      if (log_output) Console.println("[CFG] green_timeout_ms out of range (50-10000ms)");
+      return false;
+    }
+    barmode_green_timeout_ms = (unsigned long)ms;
+    changed = true;
+    if (log_output) Console.printf("[CFG] green_timeout_ms set: %lu\n", barmode_green_timeout_ms);
   } else {
     if (log_output) {
       Console.println("[CFG] unknown set field. use id|host|desc|node|ap|failsafe_s|index|seq_max_s|seq_dec_ms|seq_exp_pct");
@@ -1450,6 +1463,7 @@ String BuildTelemetryApiJson() {
   payload += "\"seq_max_ms\":" + String(barmode_seq_max_ms) + ",";
   payload += "\"seq_dec_ms\":" + String(barmode_seq_dec_ms) + ",";
   payload += "\"seq_exp_pct\":" + String(barmode_seq_exp_pct) + ",";
+  payload += "\"green_timeout_ms\":" + String(barmode_green_timeout_ms) + ",";
   payload += "\"btn_press_counts\":[" + String(barmode_btn_counts[0]) + "," +
              String(barmode_btn_counts[1]) + "," + String(barmode_btn_counts[2]) + "," +
              String(barmode_btn_counts[3]) + "],";
@@ -1624,6 +1638,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
             <label style="color:#f44336"><input type="checkbox" id="cfg-btn-dis-3" style="accent-color:#f44336"> Red</label>
           </div>
           <div id="cfg-seq-max-wrap" style="display:none;gap:6px">
+            <label>Green timeout (ms) <input id="cfg-green-timeout-ms" name="green_timeout_ms" type="number" min="50" max="10000" step="50" style="width:80px"> <span style="color:var(--muted);font-size:12px">(btn0 timed pulse open duration)</span></label>
             <label>Seq max (s) <input id="cfg-seq-max-s" name="seq_max_s" type="number" min="1" max="120" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(barmode btn1 hold timeout)</span></label>
             <label>Seq step decrement (ms) <input id="cfg-seq-dec-ms" name="seq_dec_ms" type="number" min="0" max="2000" step="10" style="width:70px"> <span style="color:var(--muted);font-size:12px">(delay reduction per pylon step)</span></label>
             <label>Seq exp factor (%) <input id="cfg-seq-exp-pct" name="seq_exp_pct" type="number" min="1" max="100" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(multiply delay each step; 100=linear only)</span></label>
@@ -1779,6 +1794,9 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         idxInput.value = data.pylon_index != null ? data.pylon_index : 0;
       const seqWrap = document.getElementById('cfg-seq-max-wrap');
       if (seqWrap) seqWrap.style.display = data.barmode_active ? 'grid' : 'none';
+      const grnToInput = document.getElementById('cfg-green-timeout-ms');
+      if (grnToInput && document.activeElement !== grnToInput)
+        grnToInput.value = data.green_timeout_ms != null ? data.green_timeout_ms : 300;
       const seqInput = document.getElementById('cfg-seq-max-s');
       if (seqInput && document.activeElement !== seqInput)
         seqInput.value = data.seq_max_ms != null ? Math.round(data.seq_max_ms / 1000) : 30;
@@ -1811,7 +1829,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     }
     const triggerButton = document.getElementById('trigger');
     const configForm = document.getElementById('config-form');
-    const configInputs = ['cfg-id', 'cfg-host', 'cfg-description', 'cfg-node', 'cfg-wifi-ssid', 'cfg-wifi-pass', 'cfg-failsafe-s', 'cfg-index', 'cfg-seq-max-s', 'cfg-seq-dec-ms', 'cfg-seq-exp-pct']
+    const configInputs = ['cfg-id', 'cfg-host', 'cfg-description', 'cfg-node', 'cfg-wifi-ssid', 'cfg-wifi-pass', 'cfg-failsafe-s', 'cfg-index', 'cfg-green-timeout-ms', 'cfg-seq-max-s', 'cfg-seq-dec-ms', 'cfg-seq-exp-pct']
       .map((id) => document.getElementById(id))
       .filter(Boolean);
     let holdActive = false;
@@ -1879,6 +1897,8 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       if (failsafeS) body.set('failsafe_s', failsafeS);
       const idxVal = document.getElementById('cfg-index').value.trim();
       if (idxVal !== '') body.set('index', idxVal);
+      const grnToVal = document.getElementById('cfg-green-timeout-ms').value.trim();
+      if (grnToVal !== '') body.set('green_timeout_ms', grnToVal);
       const seqMaxVal = document.getElementById('cfg-seq-max-s').value.trim();
       if (seqMaxVal !== '') body.set('seq_max_s', seqMaxVal);
       const seqDecVal = document.getElementById('cfg-seq-dec-ms').value.trim();
@@ -2291,11 +2311,12 @@ void HandleConfigPostApi() {
   const bool has_seq_max_s   = webServer.hasArg("seq_max_s");
   const bool has_seq_dec_ms  = webServer.hasArg("seq_dec_ms");
   const bool has_seq_exp_pct  = webServer.hasArg("seq_exp_pct");
-  const bool has_btn_disabled = webServer.hasArg("btn_disabled");
+  const bool has_btn_disabled   = webServer.hasArg("btn_disabled");
+  const bool has_green_timeout  = webServer.hasArg("green_timeout_ms");
 
   if (!has_node && !has_id && !has_host && !has_desc &&
-      !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index && !has_seq_max_s && !has_seq_dec_ms && !has_seq_exp_pct && !has_btn_disabled) {
-    SendApiError(400, "expected one of: node, id, host, description, wifi_ssid, wifi_pass, failsafe_s, index, seq_max_s, seq_dec_ms, seq_exp_pct, btn_disabled");
+      !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index && !has_seq_max_s && !has_seq_dec_ms && !has_seq_exp_pct && !has_btn_disabled && !has_green_timeout) {
+    SendApiError(400, "expected one of: node, id, host, description, wifi_ssid, wifi_pass, failsafe_s, index, seq_max_s, seq_dec_ms, seq_exp_pct, btn_disabled, green_timeout_ms");
     return;
   }
 
@@ -2321,7 +2342,8 @@ void HandleConfigPostApi() {
   if (has_index)      ok = ok && SetConfigFieldValue("index",      webServer.arg("index"));
   if (has_seq_max_s)  ok = ok && SetConfigFieldValue("seq_max_s",  webServer.arg("seq_max_s"));
   if (has_seq_dec_ms)  ok = ok && SetConfigFieldValue("seq_dec_ms",  webServer.arg("seq_dec_ms"));
-  if (has_seq_exp_pct)  ok = ok && SetConfigFieldValue("seq_exp_pct",  webServer.arg("seq_exp_pct"));
+  if (has_seq_exp_pct)   ok = ok && SetConfigFieldValue("seq_exp_pct",     webServer.arg("seq_exp_pct"));
+  if (has_green_timeout) ok = ok && SetConfigFieldValue("green_timeout_ms", webServer.arg("green_timeout_ms"));
   if (has_btn_disabled) {
     // Accepts "0101" bitmask string: index 0=green,1=blue,2=orange,3=red; '1'=disabled
     const String v = webServer.arg("btn_disabled");
@@ -3551,26 +3573,84 @@ void PollBarModeButtons() {
   {
     static bool btn_prev_stable[4] = {};
 
-    // Button 0 — Green button: BooshMain hold
-    if (!barmode_btn_disabled[0]) {
-      if (btn_stable[0] && !btn_prev_stable[0]) {
-        barmode_btn_counts[0]++;
-        barmode_btn_event_ms[barmode_btn_event_head]  = now;
-        barmode_btn_event_btn[barmode_btn_event_head] = 0;
-        barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
-        if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
+    // ---- All-4-buttons simultaneous hold detection -------------------------
+    // When all 4 buttons are held together: suppress individual actions,
+    // escalate lamp strobe, open valves at 3s, auto-close after 3 more seconds.
+    static bool          all4_was_active    = false;
+    static unsigned long all4_start_ms      = 0;
+    static bool          all4_valve_open    = false;
+    static unsigned long all4_valve_open_ms = 0;
+    static bool          all4_auto_closed   = false;
+
+    const bool all4_now     = btn_stable[0] && btn_stable[1] && btn_stable[2] && btn_stable[3];
+    const bool all4_rising  = all4_now && !all4_was_active;
+    const bool all4_falling = !all4_now && all4_was_active;
+
+    if (all4_rising) {
+      all4_start_ms    = now;
+      all4_valve_open  = false;
+      all4_auto_closed = false;
+      Console.println("[BarMode] All4: hold start");
+    }
+    if (all4_now && !all4_auto_closed) {
+      const unsigned long elapsed = now - all4_start_ms;
+      if (elapsed >= 3000 && !all4_valve_open) {
         SendOscFloatToAllPylons(kOscAddress, 1.0f);
-        barmode_btn0_held = true;
-        display.invertDisplay(true);
-      } else if (!btn_stable[0] && btn_prev_stable[0]) {
+        all4_valve_open    = true;
+        all4_valve_open_ms = now;
+        Console.println("[BarMode] All4: valve open");
+      }
+      if (all4_valve_open && now - all4_valve_open_ms >= 3000) {
         SendOscFloatToAllPylons(kOscAddress, 0.0f);
+        all4_valve_open  = false;
+        all4_auto_closed = true;
+        Console.println("[BarMode] All4: auto-close after 3s valve");
+      }
+    }
+    if (all4_falling) {
+      if (all4_valve_open) {
+        SendOscFloatToAllPylons(kOscAddress, 0.0f);
+        Console.println("[BarMode] All4: valve close on release");
+      }
+      all4_valve_open = false;
+      Console.println("[BarMode] All4: hold ended");
+    }
+    all4_was_active = all4_now;
+
+    // ---- Individual button actions (suppressed during all-4 hold) ----------
+    if (!all4_now) {
+
+    // Button 0 — Green button: BooshMain timed pulse (duration = barmode_green_timeout_ms)
+    {
+      static bool          btn0_pulse_active = false;
+      static unsigned long btn0_pulse_ms     = 0;
+
+      if (!barmode_btn_disabled[0]) {
+        if (btn_stable[0] && !btn_prev_stable[0]) {
+          barmode_btn_counts[0]++;
+          barmode_btn_event_ms[barmode_btn_event_head]  = now;
+          barmode_btn_event_btn[barmode_btn_event_head] = 0;
+          barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
+          if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
+          if (!btn0_pulse_active) {
+            SendOscFloatToAllPylons(kOscAddress, 1.0f);
+          }
+          btn0_pulse_active = true;
+          btn0_pulse_ms     = now;
+          barmode_btn0_held = true;
+          display.invertDisplay(true);
+        }
+      }
+      // Physical release: clear lamp/display state; timer still handles OSC close
+      if (!btn_stable[0] && btn_prev_stable[0] && barmode_btn0_held) {
         barmode_btn0_held = false;
         display.invertDisplay(false);
       }
-    } else if (!btn_stable[0] && btn_prev_stable[0] && barmode_btn0_held) {
-      // release while disabled (was held before disable): tidy up
-      barmode_btn0_held = false;
-      display.invertDisplay(false);
+      // Timer-based close
+      if (btn0_pulse_active && now - btn0_pulse_ms >= barmode_green_timeout_ms) {
+        SendOscFloatToAllPylons(kOscAddress, 0.0f);
+        btn0_pulse_active = false;
+      }
     }
     // Green lamp: disabled=30%, held=solid, idle=sine 2Hz
     {
@@ -3670,7 +3750,7 @@ void PollBarModeButtons() {
     }
 
     // Blue lamp: disabled=30%, idle=200ms pulse per second
-    ledcWrite(5, barmode_btn_disabled[1] ? 77 : (now % 1000 < 200) ? 255 : 0);
+    ledcWrite(5, barmode_btn_disabled[1] ? 77 : (now % 1000 < 50) ? 255 : 0);
 
     // Button 2 — Orange button: BooshPulseTrain; IO35 strobes 5x pulse pattern once then returns to idle sawtooth
     {
@@ -3762,6 +3842,27 @@ void PollBarModeButtons() {
         }
         ledcWrite(6, lamp);
       }
+    }
+
+    } // end if (!all4_now) — individual button actions
+
+    // ---- All-4 lamp override: escalating strobe ----------------------------
+    if (all4_now) {
+      const unsigned long elapsed = now - all4_start_ms;
+      uint8_t lamp_val;
+      if (elapsed < 1000) {
+        lamp_val = (now % 500 < 125) ? 64 : 0;   // 2Hz 25%
+      } else if (elapsed < 2000) {
+        lamp_val = (now % 250 < 125) ? 128 : 0;  // 4Hz 50%
+      } else if (elapsed < 3000) {
+        lamp_val = (now % 167 < 125) ? 192 : 0;  // 6Hz 75%
+      } else {
+        lamp_val = (now % 125 < 100) ? 204 : 0;  // 8Hz 80%
+      }
+      ledcWrite(3, lamp_val);  // orange
+      ledcWrite(4, lamp_val);  // green
+      ledcWrite(5, lamp_val);  // blue
+      ledcWrite(6, lamp_val);  // red
     }
 
     for (int i = 0; i < 4; i++) btn_prev_stable[i] = btn_stable[i];
