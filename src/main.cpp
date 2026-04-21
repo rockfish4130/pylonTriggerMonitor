@@ -164,6 +164,7 @@ String barmode_registry_json;           // cached GET /api/pylons response; prot
 unsigned long barmode_registry_last_fetch_ms = 0;
 volatile bool  barmode_registry_fetch_now = false;  // set to trigger immediate PingTask fetch
 volatile float barmode_bpm = 0.0f;  // 0 = no BPM lock; updated by PingTask from llled.local/v0/bpm
+String llled_ip_string;             // cached IP for llled.local; resolved once, used as mDNS fallback
 
 // ---- Sequence state ---------------------------------------------------------
 enum SeqType { SEQ_NONE, SEQ_PULSE_ONCE, SEQ_PULSE_5X, SEQ_STEAM };
@@ -4255,20 +4256,28 @@ void PingTask(void *) {
           now_r - barmode_registry_last_fetch_ms >= kBarModeRegistryIntervalMs) {
         barmode_registry_fetch_now = false;
         barmode_registry_last_fetch_ms = now_r;
-        HTTPClient http;
-        http.begin(String(kRegistryBaseUrlPrimary) + "/api/pylons");
-        http.setTimeout(kRegistryHttpTimeoutMs);
-        const int code = http.GET();
-        if (code == 200) {
-          const String body = http.getString();
+        // Try primary URL (rpiboosh.local); fall back to resolved IP if mDNS fails
+        auto doRegistryGet = [](const String &baseUrl) -> String {
+          HTTPClient http;
+          http.begin(baseUrl + "/api/pylons");
+          http.setTimeout(kRegistryHttpTimeoutMs);
+          const int code = http.GET();
+          String body;
+          if (code == 200) body = http.getString();
+          else Console.printf("[BarMode] registry fetch %s: %d\n", baseUrl.c_str(), code);
+          http.end();
+          return body;
+        };
+        String body = doRegistryGet(String(kRegistryBaseUrlPrimary));
+        if (body.length() == 0 && target_ip_string.length() > 0) {
+          body = doRegistryGet("http://" + target_ip_string + ":5000");
+        }
+        if (body.length() > 0) {
           if (xSemaphoreTake(barmode_registry_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
             barmode_registry_json = body;
             xSemaphoreGive(barmode_registry_mutex);
           }
-        } else {
-          Console.printf("[BarMode] registry fetch failed: %d\n", code);
         }
-        http.end();
       }
     }
 
@@ -4278,25 +4287,48 @@ void PingTask(void *) {
       const unsigned long now_b = millis();
       if (now_b - lastBpmFetchMs >= 3000) {
         lastBpmFetchMs = now_b;
-        HTTPClient http;
-        http.begin("http://llled.local/v0/bpm");
-        http.setTimeout(2000);
-        const int code = http.GET();
-        if (code == 200) {
-          const String body = http.getString();
-          // Parse "enabled": must be true
-          bool enabled = body.indexOf("\"enabled\":true") >= 0;
-          // Parse "bpm": <number>
+        // Resolve llled.local IP once and cache for fallback
+        if (llled_ip_string.length() == 0) {
+          IPAddress llledIp;
+          if (WiFi.hostByName("llled.local", llledIp)) {
+            llled_ip_string = llledIp.toString();
+          }
+        }
+        auto doBpmGet = [](const String &url) -> int {
+          // Returns HTTP code; body parsing happens outside
+          HTTPClient http;
+          http.begin(url);
+          http.setTimeout(2000);
+          const int code = http.GET();
+          http.end();
+          return code;
+        };
+        // Try mDNS first, then IP fallback
+        auto doBpmFetch = [](const String &url) -> String {
+          HTTPClient http;
+          http.begin(url);
+          http.setTimeout(2000);
+          const int code = http.GET();
+          String body;
+          if (code == 200) body = http.getString();
+          http.end();
+          return body;
+        };
+        String body = doBpmFetch("http://llled.local/v0/bpm");
+        if (body.length() == 0 && llled_ip_string.length() > 0) {
+          body = doBpmFetch("http://" + llled_ip_string + "/v0/bpm");
+        }
+        if (body.length() > 0) {
+          const bool enabled = body.indexOf("\"enabled\":true") >= 0;
           float bpm = 0.0f;
-          int bp = body.indexOf("\"bpm\":");
+          const int bp = body.indexOf("\"bpm\":");
           if (bp >= 0) bpm = body.substring(bp + 6).toFloat();
           barmode_bpm = (enabled && bpm >= 40.0f && bpm <= 220.0f) ? bpm : 0.0f;
           Console.printf("[BPM] %.1f (enabled=%d)\n", barmode_bpm, (int)enabled);
         } else {
           barmode_bpm = 0.0f;  // offline or error: revert to default patterns
-          if (code != -1) Console.printf("[BPM] fetch failed: %d\n", code);
+          Console.println("[BPM] fetch failed, reverting to default patterns");
         }
-        http.end();
       }
     }
 
