@@ -124,6 +124,9 @@ unsigned long barmode_seq_dec_ms = 50;     // delay decrement per step in btn1 s
 uint8_t barmode_seq_exp_pct = 100;         // exponential factor % (1-100) applied after linear dec; 100=off
 unsigned long barmode_green_timeout_ms = 300; // btn0 timed pulse open duration; BARMODE NVS; default 300ms
 unsigned long barmode_all4_valve_ms    = 3000; // all-4 hold: valve open duration before auto-close; BARMODE NVS; default 3s
+unsigned long barmode_red_seq_max_ms   = 10000; // red hold-seq max duration; BARMODE NVS; default 10s
+unsigned long barmode_red_seq_valve_ms = 66;    // red hold-seq valve open time per step; BARMODE NVS; default 66ms
+unsigned long barmode_red_seq_step_ms  = 200;   // red hold-seq interval between steps; BARMODE NVS; default 200ms
 unsigned long barmode_all4_lockout_s   = 300;  // all-4 lockout countdown duration after sequence; BARMODE NVS; default 5 min
 unsigned long barmode_all4_lockout_until_ms = 0; // millis() deadline; 0 = not locked
 bool          barmode_show_wait_oled   = false; // true while blue held but lockout active → WAIT screen
@@ -243,6 +246,9 @@ constexpr const char *kPrefsKeySeqExpPct  = "seq_exp_pct";  // 1-100; applied as
 constexpr const char *kPrefsKeyBtnDisable    = "btn_dis";      // uint8 bitmask: bit0=green,1=blue,2=orange,3=red
 constexpr const char *kPrefsKeyGreenTimeout  = "grn_to_ms";   // uint32 ms; btn0 timed pulse duration
 constexpr const char *kPrefsKeyAll4ValveMs   = "all4_vlv_ms"; // uint32 ms; all-4 hold valve open duration
+constexpr const char *kPrefsKeyRedSeqMaxMs   = "red_seq_max_ms"; // uint32 ms; red hold-seq max duration
+constexpr const char *kPrefsKeyRedSeqValveMs = "red_seq_vlv_ms"; // uint32 ms; red hold-seq valve open per step
+constexpr const char *kPrefsKeyRedSeqStepMs  = "red_seq_stp_ms"; // uint32 ms; red hold-seq step interval
 constexpr const char *kPrefsKeyAll4LockoutS  = "all4_lck_s";  // uint32 s; all-4 lockout countdown duration
 constexpr const char *kPrefsKeyManualPylons  = "man_pylons";  // string; "host|index\n" lines
 constexpr uint32_t kBooshFailsafeMinMs  = 1000;
@@ -471,6 +477,9 @@ bool SavePylonConfig() {
   prefs.putUChar(kPrefsKeySeqExpPct, barmode_seq_exp_pct);
   prefs.putUInt(kPrefsKeyGreenTimeout, static_cast<uint32_t>(barmode_green_timeout_ms));
   prefs.putUInt(kPrefsKeyAll4ValveMs,  static_cast<uint32_t>(barmode_all4_valve_ms));
+  prefs.putUInt(kPrefsKeyRedSeqMaxMs,   static_cast<uint32_t>(barmode_red_seq_max_ms));
+  prefs.putUInt(kPrefsKeyRedSeqValveMs, static_cast<uint32_t>(barmode_red_seq_valve_ms));
+  prefs.putUInt(kPrefsKeyRedSeqStepMs,  static_cast<uint32_t>(barmode_red_seq_step_ms));
   prefs.putUInt(kPrefsKeyAll4LockoutS, static_cast<uint32_t>(barmode_all4_lockout_s));
   {
     uint8_t mask = 0;
@@ -540,6 +549,9 @@ void LoadPylonConfig() {
   barmode_seq_exp_pct    = (uint8_t)prefs.getUChar(kPrefsKeySeqExpPct, 100);
   barmode_green_timeout_ms = prefs.getUInt(kPrefsKeyGreenTimeout, 300);
   barmode_all4_valve_ms    = prefs.getUInt(kPrefsKeyAll4ValveMs,  3000);
+  barmode_red_seq_max_ms   = prefs.getUInt(kPrefsKeyRedSeqMaxMs,   10000);
+  barmode_red_seq_valve_ms = prefs.getUInt(kPrefsKeyRedSeqValveMs, 66);
+  barmode_red_seq_step_ms  = prefs.getUInt(kPrefsKeyRedSeqStepMs,  200);
   barmode_all4_lockout_s   = prefs.getUInt(kPrefsKeyAll4LockoutS, 300);
   {
     const uint8_t mask = prefs.getUChar(kPrefsKeyBtnDisable, 0);
@@ -812,6 +824,24 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
     barmode_all4_valve_ms = (unsigned long)ms;
     changed = true;
     if (log_output) Console.printf("[CFG] all4_valve_ms set: %lu\n", barmode_all4_valve_ms);
+  } else if (field == "red_seq_max_s") {
+    const int s = (int)value.toInt();
+    if (s < 1 || s > 120) { if (log_output) Console.println("[CFG] red_seq_max_s out of range (1-120s)"); return false; }
+    barmode_red_seq_max_ms = (unsigned long)s * 1000UL;
+    changed = true;
+    if (log_output) Console.printf("[CFG] red_seq_max_ms set: %lu\n", barmode_red_seq_max_ms);
+  } else if (field == "red_seq_valve_ms") {
+    const int ms = (int)value.toInt();
+    if (ms < 20 || ms > 2000) { if (log_output) Console.println("[CFG] red_seq_valve_ms out of range (20-2000ms)"); return false; }
+    barmode_red_seq_valve_ms = (unsigned long)ms;
+    changed = true;
+    if (log_output) Console.printf("[CFG] red_seq_valve_ms set: %lu\n", barmode_red_seq_valve_ms);
+  } else if (field == "red_seq_step_ms") {
+    const int ms = (int)value.toInt();
+    if (ms < 50 || ms > 5000) { if (log_output) Console.println("[CFG] red_seq_step_ms out of range (50-5000ms)"); return false; }
+    barmode_red_seq_step_ms = (unsigned long)ms;
+    changed = true;
+    if (log_output) Console.printf("[CFG] red_seq_step_ms set: %lu\n", barmode_red_seq_step_ms);
   } else if (field == "all4_lockout_s") {
     const int s = (int)value.toInt();
     if (s < 0 || s > 3600) {
@@ -1558,6 +1588,9 @@ String BuildTelemetryApiJson() {
   payload += "\"all4_valve_ms\":" + String(barmode_all4_valve_ms) + ",";
   payload += "\"all4_lockout_s\":" + String(barmode_all4_lockout_s) + ",";
   payload += "\"all4_lockout_remaining_s\":" + String(barmode_all4_lockout_until_ms > millis() ? (barmode_all4_lockout_until_ms - millis()) / 1000UL : 0UL) + ",";
+  payload += "\"red_seq_max_ms\":" + String(barmode_red_seq_max_ms) + ",";
+  payload += "\"red_seq_valve_ms\":" + String(barmode_red_seq_valve_ms) + ",";
+  payload += "\"red_seq_step_ms\":" + String(barmode_red_seq_step_ms) + ",";
   payload += "\"btn_press_counts\":[" + String(barmode_btn_counts[0]) + "," +
              String(barmode_btn_counts[1]) + "," + String(barmode_btn_counts[2]) + "," +
              String(barmode_btn_counts[3]) + "],";
@@ -1750,6 +1783,12 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           <span style="color:var(--muted);font-size:13px">All-4 Sequence</span>
           <label>Valve open duration (ms) <input id="cfg-all4-valve-ms" name="all4_valve_ms" type="number" min="500" max="30000" step="500" style="width:80px"> <span style="color:var(--muted);font-size:12px">(how long all valves stay open)</span></label>
           <label>Lockout after sequence (s) <input id="cfg-all4-lockout-s" name="all4_lockout_s" type="number" min="0" max="3600" step="30" style="width:80px"> <span style="color:var(--muted);font-size:12px">(cooldown before another sequence can start; 0=disabled)</span></label>
+        </div>
+        <div id="cfg-grp-red" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
+          <span style="color:var(--muted);font-size:13px">Red Sequential</span>
+          <label>Seq max hold (s) <input id="cfg-red-seq-max-s" name="red_seq_max_s" type="number" min="1" max="120" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(max hold duration; default 10s)</span></label>
+          <label>Valve open (ms) <input id="cfg-red-seq-valve-ms" name="red_seq_valve_ms" type="number" min="20" max="2000" step="10" style="width:70px"> <span style="color:var(--muted);font-size:12px">(each pylon valve open time; default 66ms)</span></label>
+          <label>Step delay (ms) <input id="cfg-red-seq-step-ms" name="red_seq_step_ms" type="number" min="50" max="5000" step="50" style="width:70px"> <span style="color:var(--muted);font-size:12px">(interval between pylon steps; default 200ms)</span></label>
         </div>
         <div style="border-top:1px solid var(--line);padding-top:10px;display:flex;align-items:center;gap:10px">
           <input type="checkbox" id="cfg-ap" style="width:18px;height:18px;margin:0;cursor:pointer;accent-color:var(--accent)">
@@ -1968,7 +2007,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       const idxInput = document.getElementById('cfg-index');
       if (idxInput && document.activeElement !== idxInput)
         idxInput.value = data.pylon_index != null ? data.pylon_index : 0;
-      ['cfg-grp-green','cfg-grp-blue','cfg-grp-all4','cfg-btn-disable-wrap'].forEach(id => {
+      ['cfg-grp-green','cfg-grp-blue','cfg-grp-all4','cfg-grp-red','cfg-btn-disable-wrap'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = data.barmode_active ? 'grid' : 'none';
       });
@@ -1981,6 +2020,15 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       const all4LckInput = document.getElementById('cfg-all4-lockout-s');
       if (all4LckInput && document.activeElement !== all4LckInput)
         all4LckInput.value = data.all4_lockout_s != null ? data.all4_lockout_s : 300;
+      const redSeqMaxInput = document.getElementById('cfg-red-seq-max-s');
+      if (redSeqMaxInput && document.activeElement !== redSeqMaxInput)
+        redSeqMaxInput.value = data.red_seq_max_ms != null ? Math.round(data.red_seq_max_ms / 1000) : 10;
+      const redSeqVlvInput = document.getElementById('cfg-red-seq-valve-ms');
+      if (redSeqVlvInput && document.activeElement !== redSeqVlvInput)
+        redSeqVlvInput.value = data.red_seq_valve_ms != null ? data.red_seq_valve_ms : 66;
+      const redSeqStpInput = document.getElementById('cfg-red-seq-step-ms');
+      if (redSeqStpInput && document.activeElement !== redSeqStpInput)
+        redSeqStpInput.value = data.red_seq_step_ms != null ? data.red_seq_step_ms : 200;
       const seqInput = document.getElementById('cfg-seq-max-s');
       if (seqInput && document.activeElement !== seqInput)
         seqInput.value = data.seq_max_ms != null ? Math.round(data.seq_max_ms / 1000) : 30;
@@ -2087,6 +2135,12 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       if (all4VlvVal !== '') body.set('all4_valve_ms', all4VlvVal);
       const all4LckVal = document.getElementById('cfg-all4-lockout-s').value.trim();
       if (all4LckVal !== '') body.set('all4_lockout_s', all4LckVal);
+      const redSeqMaxVal = document.getElementById('cfg-red-seq-max-s').value.trim();
+      if (redSeqMaxVal !== '') body.set('red_seq_max_s', redSeqMaxVal);
+      const redSeqVlvVal = document.getElementById('cfg-red-seq-valve-ms').value.trim();
+      if (redSeqVlvVal !== '') body.set('red_seq_valve_ms', redSeqVlvVal);
+      const redSeqStpVal = document.getElementById('cfg-red-seq-step-ms').value.trim();
+      if (redSeqStpVal !== '') body.set('red_seq_step_ms', redSeqStpVal);
       const seqMaxVal = document.getElementById('cfg-seq-max-s').value.trim();
       if (seqMaxVal !== '') body.set('seq_max_s', seqMaxVal);
       const seqDecVal = document.getElementById('cfg-seq-dec-ms').value.trim();
@@ -2619,10 +2673,14 @@ void HandleConfigPostApi() {
   const bool has_green_timeout   = webServer.hasArg("green_timeout_ms");
   const bool has_all4_valve_ms   = webServer.hasArg("all4_valve_ms");
   const bool has_all4_lockout_s  = webServer.hasArg("all4_lockout_s");
+  const bool has_red_seq_max_s   = webServer.hasArg("red_seq_max_s");
+  const bool has_red_seq_valve_ms = webServer.hasArg("red_seq_valve_ms");
+  const bool has_red_seq_step_ms  = webServer.hasArg("red_seq_step_ms");
 
   if (!has_node && !has_id && !has_host && !has_desc &&
-      !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index && !has_seq_max_s && !has_seq_dec_ms && !has_seq_exp_pct && !has_btn_disabled && !has_green_timeout && !has_all4_valve_ms && !has_all4_lockout_s) {
-    SendApiError(400, "expected one of: node, id, host, description, wifi_ssid, wifi_pass, failsafe_s, index, seq_max_s, seq_dec_ms, seq_exp_pct, btn_disabled, green_timeout_ms, all4_valve_ms, all4_lockout_s");
+      !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index && !has_seq_max_s && !has_seq_dec_ms && !has_seq_exp_pct && !has_btn_disabled && !has_green_timeout && !has_all4_valve_ms && !has_all4_lockout_s &&
+      !has_red_seq_max_s && !has_red_seq_valve_ms && !has_red_seq_step_ms) {
+    SendApiError(400, "expected one of: node, id, host, description, wifi_ssid, wifi_pass, failsafe_s, index, seq_max_s, seq_dec_ms, seq_exp_pct, btn_disabled, green_timeout_ms, all4_valve_ms, all4_lockout_s, red_seq_max_s, red_seq_valve_ms, red_seq_step_ms");
     return;
   }
 
@@ -2652,6 +2710,9 @@ void HandleConfigPostApi() {
   if (has_green_timeout) ok = ok && SetConfigFieldValue("green_timeout_ms", webServer.arg("green_timeout_ms"));
   if (has_all4_valve_ms)  ok = ok && SetConfigFieldValue("all4_valve_ms",   webServer.arg("all4_valve_ms"));
   if (has_all4_lockout_s) ok = ok && SetConfigFieldValue("all4_lockout_s",  webServer.arg("all4_lockout_s"));
+  if (has_red_seq_max_s)   ok = ok && SetConfigFieldValue("red_seq_max_s",   webServer.arg("red_seq_max_s"));
+  if (has_red_seq_valve_ms) ok = ok && SetConfigFieldValue("red_seq_valve_ms", webServer.arg("red_seq_valve_ms"));
+  if (has_red_seq_step_ms)  ok = ok && SetConfigFieldValue("red_seq_step_ms",  webServer.arg("red_seq_step_ms"));
   if (has_btn_disabled) {
     // Accepts "0101" bitmask string: index 0=green,1=blue,2=orange,3=red; '1'=disabled
     const String v = webServer.arg("btn_disabled");
@@ -4205,84 +4266,155 @@ void PollBarModeButtons() {
       }
     }
 
-    // Button 3 — Red button: tap=100ms BooshMain pulse; triple-tap+hold=BooshSteam hold
+    // Button 3 — Red button: hold=sequential pylon fire (ping-pong index order, open+close per pylon)
+    // Triple-quick-tap+hold=BooshSteam hold (unchanged).
     // State 0: idle
-    // State 1: first press fired (100ms close pending); ≤500ms window for 2nd press
-    // State 2: second press suppressed (no action); ≤500ms window for 3rd press+hold
-    // State 3: steam hold active (open until released)
+    // State 1: first quick-tap released (<400ms held); 500ms window for 2nd tap (triple-tap steam)
+    // State 2: second tap done; 500ms window for 3rd press+hold (steam)
+    // State 3: steam hold active
+    // State 4: sequential hold active — fires pylons in ping-pong index order
     {
-      static int           red_state        = 0;
-      static unsigned long red_press1_ms    = 0;   // time of 1st press
-      static unsigned long red_press2_ms    = 0;   // time of 2nd press
-      static bool          red_close_pending= false;
-      static unsigned long red_close_ms     = 0;   // when 100ms close should fire
-      static unsigned long lamp_red_press_ms = 0;
-      static bool          lamp_red_on      = false;
-      static unsigned long lamp_red_step_ms = 0;
+      static int           red_state          = 0;
+      static unsigned long red_seq_press_ms   = 0;   // millis() when state-4 press started
+      static unsigned long red_press1_ms      = 0;   // millis() of 1st quick-tap release
+      static unsigned long red_press2_ms      = 0;   // millis() of 2nd tap
+      static unsigned long lamp_red_press_ms  = 0;
+      static bool          lamp_red_on        = false;
+      static unsigned long lamp_red_step_ms   = 0;
+      static unsigned long red_seq_lamp_until = 0;   // lamp on while valve open
+
+      // Sequential state
+      static PylonTarget   red_seq_targets[16];
+      static int           red_seq_count      = 0;
+      static int           red_seq_pos        = 0;
+      static bool          red_seq_ascending  = true;
+      static unsigned long red_seq_start_ms   = 0;
+      static unsigned long red_seq_last_ms    = 0;   // millis() of last step fire
+      // Pending close (one at a time — we fire close before next open if needed)
+      static bool          red_seq_close_pend = false;
+      static IPAddress     red_seq_close_ip;
+      static unsigned long red_seq_close_at   = 0;
 
       const bool r_rising  = btn_stable[3] && !btn_prev_stable[3];
       const bool r_falling = !btn_stable[3] && btn_prev_stable[3];
 
       if (!barmode_btn_disabled[3]) {
+        // --- Rising edge ---
         if (r_rising) {
-          if (red_state == 0) {
-            // First press: fire 100ms BooshMain pulse
+          if (red_state == 0 || (red_state == 1 && now - red_press1_ms > 500) || (red_state == 2 && now - red_press2_ms > 500)) {
+            // State 0 or out-of-window: start sequential
             barmode_btn_counts[3]++;
             barmode_btn_event_ms[barmode_btn_event_head]  = now;
             barmode_btn_event_btn[barmode_btn_event_head] = 3;
             barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
             if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
-            SendOscFloatToAllPylons(kOscAddress, 1.0f);
+            red_seq_count      = ExtractRegistryTargets(red_seq_targets, 16);
+            red_seq_pos        = 0;
+            red_seq_ascending  = true;
+            red_seq_start_ms   = now;
+            red_seq_last_ms    = now - barmode_red_seq_step_ms;  // fire first step immediately
+            red_seq_close_pend = false;
+            red_seq_press_ms   = now;
             barmode_act_counts[4]++;
-            red_close_pending = true;
-            red_close_ms      = now;
-            red_press1_ms     = now;
-            red_state         = 1;
-            Console.println("[BarMode] Red: pulse open (BooshMain)");
+            red_state          = 4;
+            Console.printf("[BarMode] Red: seq start, %d pylons\n", red_seq_count);
           } else if (red_state == 1 && now - red_press1_ms <= 500) {
-            // Second press within 500ms: suppress (no action, no feedback)
+            // Second tap in triple-tap sequence
             red_press2_ms = now;
             red_state     = 2;
-            Console.println("[BarMode] Red: 2nd press suppressed");
+            Console.println("[BarMode] Red: 2nd tap");
           } else if (red_state == 2 && now - red_press2_ms <= 500) {
-            // Third press within 500ms of second + hold: activate steam
+            // Third press + hold → steam
             SendOscFloatToAllPylons(kOscAddrSteam, 1.0f);
             barmode_act_counts[5]++;
             lamp_red_press_ms = now;
             lamp_red_on       = false;
-            lamp_red_step_ms  = now - 10000;  // expire so first pulse fires immediately
+            lamp_red_step_ms  = now - 10000;
             red_state         = 3;
             Console.println("[BarMode] Red: steam hold active");
-          } else {
-            // Out-of-window press: treat as a fresh first press
-            SendOscFloatToAllPylons(kOscAddress, 1.0f);
-            barmode_act_counts[4]++;
-            red_close_pending = true;
-            red_close_ms      = now;
-            red_press1_ms     = now;
-            red_state         = 1;
           }
         }
 
-        if (r_falling && red_state == 3) {
-          SendOscFloatToAllPylons(kOscAddrSteam, 0.0f);
-          red_state = 0;
-          Console.println("[BarMode] Red: steam hold released");
+        // --- Falling edge ---
+        if (r_falling) {
+          if (red_state == 4) {
+            const unsigned long held = now - red_seq_press_ms;
+            // Fire pending close immediately on release
+            if (red_seq_close_pend) {
+              SendOscFloatToIP(kOscAddress, 0.0f, red_seq_close_ip);
+              red_seq_close_pend = false;
+            }
+            red_state = (held < 400) ? 1 : 0;
+            if (red_state == 1) {
+              red_press1_ms = now;
+              Console.printf("[BarMode] Red: quick-tap end (%lums), steam window\n", held);
+            } else {
+              Console.printf("[BarMode] Red: seq end (%lums)\n", held);
+            }
+          } else if (red_state == 3) {
+            SendOscFloatToAllPylons(kOscAddrSteam, 0.0f);
+            red_state = 0;
+            Console.println("[BarMode] Red: steam released");
+          }
         }
 
-        // 100ms close timer (BooshMain pulse)
-        if (red_close_pending && now - red_close_ms >= 100) {
-          SendOscFloatToAllPylons(kOscAddress, 0.0f);
-          red_close_pending = false;
-          Console.println("[BarMode] Red: pulse close");
+        // --- State 4: sequential tick ---
+        if (red_state == 4) {
+          if (now - red_seq_start_ms >= barmode_red_seq_max_ms) {
+            // Max time elapsed: stop
+            if (red_seq_close_pend) {
+              SendOscFloatToIP(kOscAddress, 0.0f, red_seq_close_ip);
+              red_seq_close_pend = false;
+            }
+            red_state = 0;
+            Console.println("[BarMode] Red: seq max time");
+          } else {
+            // Pending close check
+            if (red_seq_close_pend && now >= red_seq_close_at) {
+              SendOscFloatToIP(kOscAddress, 0.0f, red_seq_close_ip);
+              red_seq_close_pend = false;
+            }
+            // Step tick
+            if (red_seq_count > 0 && now - red_seq_last_ms >= barmode_red_seq_step_ms) {
+              red_seq_last_ms = now;
+              // Flush any still-pending close before next open (safety for step_ms < valve_ms)
+              if (red_seq_close_pend) {
+                SendOscFloatToIP(kOscAddress, 0.0f, red_seq_close_ip);
+                red_seq_close_pend = false;
+              }
+              // Fire open to current position
+              SendOscFloatToIP(kOscAddress, 1.0f, red_seq_targets[red_seq_pos].ip);
+              red_seq_close_ip   = red_seq_targets[red_seq_pos].ip;
+              red_seq_close_at   = now + barmode_red_seq_valve_ms;
+              red_seq_close_pend = true;
+              red_seq_lamp_until = now + barmode_red_seq_valve_ms;
+              Console.printf("[BarMode] Red seq: open idx=%d\n", red_seq_targets[red_seq_pos].seq_idx);
+              // Advance ping-pong
+              if (red_seq_count == 1) {
+                red_seq_pos = 0;
+              } else if (red_seq_ascending) {
+                red_seq_pos++;
+                if (red_seq_pos >= red_seq_count) {
+                  red_seq_ascending = false;
+                  red_seq_pos = red_seq_count - 2;
+                }
+              } else {
+                red_seq_pos--;
+                if (red_seq_pos < 0) {
+                  red_seq_ascending = true;
+                  red_seq_pos = 1;
+                }
+              }
+            }
+          }
         }
 
-        // State timeout: reset to idle if window expires without next press
+        // --- Triple-tap window timeouts ---
         if (red_state == 1 && now - red_press1_ms > 500) { red_state = 0; }
         if (red_state == 2 && now - red_press2_ms > 500) { red_state = 0; }
       }
 
-      // Red lamp: disabled=30%, steam hold ramp, idle=Morse LAVA
+      // Red lamp: disabled=30%, seq=pulse with valve, steam=ramp, idle=Morse LAVA
       if (barmode_btn_disabled[3]) {
         ledcWrite(6, 77);
       } else if (red_state == 3) {
@@ -4302,9 +4434,11 @@ void PollBarModeButtons() {
           }
           ledcWrite(6, lamp_red_on ? 255 : 0);
         }
+      } else if (red_state == 4 || now < red_seq_lamp_until) {
+        // Sequential: on while valve is open
+        ledcWrite(6, now < red_seq_lamp_until ? 255 : 0);
       } else {
         // Idle: Morse "LAVA" — unit scales to beat/4 when BPM locked (16th note), else 150ms
-        // Ratios (÷unit): L=1,1,3,1,1,1,1,3  A=1,1,3,3  V=1,1,1,1,1,1,3,3  A=1,1,3,7 (44 units total)
         static const uint8_t kLavaMorseUnits[] = {
           1,1,3,1,1,1,1,3,  // L + inter-char
           1,1,3,3,            // A + inter-char
@@ -4313,7 +4447,7 @@ void PollBarModeButtons() {
         };
         const float bpm_r = barmode_bpm;
         const unsigned long beat_r = (bpm_r >= 40.0f) ? (unsigned long)(60000.0f / bpm_r) : 600UL;
-        const unsigned long mu = beat_r / 4;  // 16th note; clamped to reasonable range
+        const unsigned long mu = beat_r / 4;
         const unsigned long morse_unit = (mu < 50) ? 50 : (mu > 400) ? 400 : mu;
         unsigned long total_ms = 0;
         for (int i = 0; i < 24; i++) total_ms += kLavaMorseUnits[i] * morse_unit;
