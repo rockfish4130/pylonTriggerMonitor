@@ -123,6 +123,12 @@ unsigned long barmode_seq_max_ms = 30000;  // btn1 double-tap seq max hold durat
 unsigned long barmode_seq_dec_ms = 50;     // delay decrement per step in btn1 seq; BARMODE NVS; default 50ms
 uint8_t barmode_seq_exp_pct = 100;         // exponential factor % (1-100) applied after linear dec; 100=off
 uint32_t barmode_btn_counts[4] = {0,0,0,0}; // running press counts: [green, blue, orange, red]
+// Ring buffer: up to 1024 button press events (ms + btn index), oldest overwritten
+constexpr int kBtnEventBufSize = 1024;
+uint32_t barmode_btn_event_ms[kBtnEventBufSize];
+uint8_t  barmode_btn_event_btn[kBtnEventBufSize];
+int      barmode_btn_event_head  = 0;   // next write slot
+int      barmode_btn_event_count = 0;   // events stored (0–kBtnEventBufSize)
 unsigned long wifi_connected_since_ms = 0;
 uint8_t last_disconnect_reason = WIFI_REASON_UNSPECIFIED;
 bool wifi_has_ip = false;
@@ -1665,8 +1671,15 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         <span style="color:#ff9800">&#11044; Orange&nbsp;<b id="cnt-2">0</b></span>
         <span style="color:#f44336">&#11044; Red&nbsp;<b id="cnt-3">0</b></span>
       </div>
+      <div style="margin-bottom:6px">
+        <span style="color:var(--muted);font-size:12px;margin-right:8px">Window:</span>
+        <button class="win-btn" data-ms="600000">10m</button>
+        <button class="win-btn" data-ms="3600000">1h</button>
+        <button class="win-btn" data-ms="14400000">4h</button>
+        <button class="win-btn" data-ms="43200000">12h</button>
+      </div>
       <canvas id="btn-chart" height="120" style="width:100%;display:block;background:#111;border-radius:6px"></canvas>
-      <div style="color:var(--muted);font-size:11px;margin-top:4px">Event timeline &mdash; last 10 minutes, newest at right. Each tick = one press.</div>
+      <div style="color:var(--muted);font-size:11px;margin-top:4px">Event timeline, newest at right. Each tick = one press. Up to 1024 events stored since boot.</div>
     </div>
     <div class="grid" style="margin-top:16px">
       <section class="panel"><h2>Telemetry</h2><div id="meta" class="meta"></div></section>
@@ -2044,30 +2057,49 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       try { renderRegistry(await fetchJson('/api/registry')); }
       catch(e) { document.getElementById('registry-content').innerHTML = '<span style="color:#e57373;font-size:13px">Error: '+esc(e.message)+'</span>'; }
     }
-    // --- Button activity tracking & chart ---
+    // --- Button activity chart ---
     const BTN_COLORS = ['#4caf50','#2196f3','#ff9800','#f44336'];
     const BTN_NAMES  = ['Green','Blue','Orange','Red'];
-    const HISTORY_MS = 10 * 60 * 1000;
-    let btnCounts = [0,0,0,0];
-    let btnEvents = []; // [{t:ms, btn:0-3}]
+    let btnCounts  = [0,0,0,0];
+    let btnEvents  = [];          // [{t: wall-clock ms, btn: 0-3}]
+    let chartWinMs = 600000;      // default 10 min
+
+    // Window selector buttons
+    document.querySelectorAll('.win-btn').forEach(b => {
+      b.addEventListener('click', () => {
+        chartWinMs = parseInt(b.dataset.ms);
+        document.querySelectorAll('.win-btn').forEach(x => x.style.fontWeight = '');
+        b.style.fontWeight = 'bold';
+        drawBtnChart();
+      });
+    });
+    // Highlight default window button
+    const defaultWinBtn = document.querySelector('.win-btn[data-ms="600000"]');
+    if (defaultWinBtn) defaultWinBtn.style.fontWeight = 'bold';
 
     function updateBtnActivity(counts) {
       const panel = document.getElementById('btn-activity-panel');
       if (!counts || !barmodeActive) { if (panel) panel.style.display='none'; return; }
       panel.style.display = '';
-      const now = Date.now();
       for (let i = 0; i < 4; i++) {
-        const delta = (counts[i] || 0) - btnCounts[i];
-        if (delta > 0) {
-          for (let d = 0; d < delta; d++) btnEvents.push({t: now, btn: i});
-          btnCounts[i] = counts[i];
-        }
+        btnCounts[i] = counts[i] || 0;
         const el = document.getElementById('cnt-' + i);
-        if (el) el.textContent = counts[i] || 0;
+        if (el) el.textContent = btnCounts[i];
       }
-      const cutoff = now - HISTORY_MS;
-      btnEvents = btnEvents.filter(e => e.t >= cutoff);
-      drawBtnChart();
+    }
+
+    async function refreshBtnEvents() {
+      if (!barmodeActive) return;
+      try {
+        const data = await fetchJson('/api/events');
+        const nowWall = Date.now();
+        const nowDev  = data.now_ms;
+        btnEvents = (data.events || []).map(([ms, btn]) => ({
+          t: nowWall - (nowDev - ms),
+          btn
+        }));
+        drawBtnChart();
+      } catch(e) {}
     }
 
     function drawBtnChart() {
@@ -2085,7 +2117,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
 
       ctx.fillStyle = '#111'; ctx.fillRect(0, 0, W, H);
 
-      // Grid lines & row labels
+      // Row labels & grid
       for (let i = 0; i < 4; i++) {
         const y = TP + i * ROW;
         ctx.strokeStyle = '#2a2a2a'; ctx.lineWidth = 1;
@@ -2100,21 +2132,28 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       // Event ticks
       for (const e of btnEvents) {
         const age = now - e.t;
-        if (age > HISTORY_MS) continue;
-        const x = LP + CW * (1 - age / HISTORY_MS);
+        if (age > chartWinMs || age < 0) continue;
+        const x = LP + CW * (1 - age / chartWinMs);
         const y = TP + e.btn * ROW;
         ctx.fillStyle = BTN_COLORS[e.btn];
         ctx.fillRect(Math.round(x)-2, y+2, 4, ROW-4);
       }
 
-      // Time axis — every 2 minutes
-      ctx.fillStyle = '#666'; ctx.font = '10px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-      for (let m = 0; m <= 10; m += 2) {
-        const x = LP + CW * (m / 10);
-        const label = m === 10 ? 'now' : '-'+(10-m)+'m';
-        ctx.fillStyle = '#444'; ctx.lineWidth = 1;
+      // Time axis — pick sensible tick interval
+      const winMin = chartWinMs / 60000;
+      const tickMin = winMin <= 10 ? 2 : winMin <= 60 ? 10 : winMin <= 240 ? 30 : 60;
+      const ticks = Math.floor(winMin / tickMin);
+      ctx.font = '10px monospace'; ctx.textBaseline = 'top';
+      for (let i = 0; i <= ticks; i++) {
+        const frac = i / ticks;
+        const x = LP + CW * frac;
+        const minsAgo = Math.round(winMin * (1 - frac));
+        const label = minsAgo === 0 ? 'now'
+                    : minsAgo < 60 ? '-'+minsAgo+'m'
+                    : '-'+(minsAgo/60).toFixed(minsAgo%60?1:0)+'h';
+        ctx.strokeStyle = '#2a2a2a'; ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(x, TP); ctx.lineTo(x, TP+CH); ctx.stroke();
-        ctx.fillStyle = '#666';
+        ctx.fillStyle = '#666'; ctx.textAlign = 'center';
         ctx.fillText(label, x, TP+CH+3);
       }
     }
@@ -2123,11 +2162,13 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     refreshLogs();
     refreshCharts();
     refreshRegistry();
+    refreshBtnEvents();
     setInterval(refreshTelemetry, 1000);
     setInterval(refreshLogs, 1500);
     setInterval(refreshCharts, 15000);
     setInterval(refreshRegistry, 10000);
-    setInterval(drawBtnChart, 5000);  // redraw to scroll even without new presses
+    setInterval(refreshBtnEvents, 10000);
+    setInterval(drawBtnChart, 5000);
   </script>
 </body>
 </html>
@@ -2145,6 +2186,27 @@ void HandleLogsApi() {
   String payload;
   payload.reserve(web_log_text.length() + 32);
   payload = "{\"log\":\"" + JsonEscape(web_log_text) + "\"}";
+  webServer.send(200, "application/json", payload);
+}
+
+void HandleBtnEventsApi() {
+  // Return ring buffer as [[ms,btn],...] in chronological order + current millis for wall-clock conversion
+  String payload;
+  payload.reserve(barmode_btn_event_count * 16 + 48);
+  payload += "{\"now_ms\":";
+  payload += String(millis());
+  payload += ",\"events\":[";
+  const int start = (barmode_btn_event_count < kBtnEventBufSize) ? 0 : barmode_btn_event_head;
+  for (int i = 0; i < barmode_btn_event_count; i++) {
+    const int idx = (start + i) % kBtnEventBufSize;
+    if (i > 0) payload += ',';
+    payload += '[';
+    payload += String(barmode_btn_event_ms[idx]);
+    payload += ',';
+    payload += String(barmode_btn_event_btn[idx]);
+    payload += ']';
+  }
+  payload += "]}";
   webServer.send(200, "application/json", payload);
 }
 
@@ -2623,6 +2685,7 @@ void SetupWebServer() {
   webServer.on("/api/chart/temp/long",     HTTP_GET, HandleChartTempLongApi);
   webServer.on("/api/chart/temp/short",    HTTP_GET, HandleChartTempShortApi);
   webServer.on("/api/registry", HTTP_GET, HandleBarModeRegistryApi);
+  webServer.on("/api/events",   HTTP_GET, HandleBtnEventsApi);
   webServer.on("/api/ota", HTTP_POST, HandleOtaApi, HandleOtaUploadBody);
   webServer.on("/api/identify", HTTP_POST, HandleIdentifyApi);
   webServer.on("/api/sequence/pulse_once", HTTP_POST, HandleSeqPulseOnceApi);
@@ -3444,6 +3507,10 @@ void PollBarModeButtons() {
     // Button 0 — Green button: BooshMain hold
     if (btn_stable[0] && !btn_prev_stable[0]) {
       barmode_btn_counts[0]++;
+      barmode_btn_event_ms[barmode_btn_event_head]  = now;
+      barmode_btn_event_btn[barmode_btn_event_head] = 0;
+      barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
+      if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
       SendOscFloatToAllPylons(kOscAddress, 1.0f);
       barmode_btn0_held = true;
       display.invertDisplay(true);
@@ -3482,6 +3549,10 @@ void PollBarModeButtons() {
 
       if (rising) {
         barmode_btn_counts[1]++;
+        barmode_btn_event_ms[barmode_btn_event_head]  = now;
+        barmode_btn_event_btn[barmode_btn_event_head] = 1;
+        barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
+        if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
         if (btn1_release_ms > 0 && now - btn1_release_ms <= 300) {
           // Double-tap: enter index-ordered sequential looping mode
           btn1_seq_count = ExtractRegistryTargets(btn1_seq_targets, 16);
@@ -3553,6 +3624,10 @@ void PollBarModeButtons() {
 
       if (btn_stable[2] && !btn_prev_stable[2]) {
         barmode_btn_counts[2]++;
+        barmode_btn_event_ms[barmode_btn_event_head]  = now;
+        barmode_btn_event_btn[barmode_btn_event_head] = 2;
+        barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
+        if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
         SendOscFloatToAllPylons(kOscAddrPulseTrain, 1.0f);
         io35_strobe       = true;
         io35_strobe_start = now;
@@ -3577,6 +3652,10 @@ void PollBarModeButtons() {
     // Button 3 — Red button: BooshSteam hold; red lamp mirrors steam ramp while held, Morse LAVA idle
     if (btn_stable[3] && !btn_prev_stable[3]) {
       barmode_btn_counts[3]++;
+      barmode_btn_event_ms[barmode_btn_event_head]  = now;
+      barmode_btn_event_btn[barmode_btn_event_head] = 3;
+      barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
+      if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
       SendOscFloatToAllPylons(kOscAddrSteam, 1.0f);
     } else if (!btn_stable[3] && btn_prev_stable[3]) {
       SendOscFloatToAllPylons(kOscAddrSteam, 0.0f);
