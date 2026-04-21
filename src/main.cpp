@@ -124,6 +124,9 @@ unsigned long barmode_seq_dec_ms = 50;     // delay decrement per step in btn1 s
 uint8_t barmode_seq_exp_pct = 100;         // exponential factor % (1-100) applied after linear dec; 100=off
 unsigned long barmode_green_timeout_ms = 300; // btn0 timed pulse open duration; BARMODE NVS; default 300ms
 unsigned long barmode_all4_valve_ms    = 3000; // all-4 hold: valve open duration before auto-close; BARMODE NVS; default 3s
+unsigned long barmode_all4_lockout_s   = 300;  // all-4 lockout countdown duration after sequence; BARMODE NVS; default 5 min
+unsigned long barmode_all4_lockout_until_ms = 0; // millis() deadline; 0 = not locked
+bool          barmode_show_wait_oled   = false; // true while blue held but lockout active → WAIT screen
 uint32_t barmode_btn_counts[4]   = {0,0,0,0};   // running press counts: [green, blue, orange, red]
 bool     barmode_btn_disabled[4] = {false,false,false,false}; // NVS-persisted disable flags
 // Ring buffer: up to 1024 button press events (ms + btn index), oldest overwritten
@@ -226,6 +229,7 @@ constexpr const char *kPrefsKeySeqExpPct  = "seq_exp_pct";  // 1-100; applied as
 constexpr const char *kPrefsKeyBtnDisable    = "btn_dis";      // uint8 bitmask: bit0=green,1=blue,2=orange,3=red
 constexpr const char *kPrefsKeyGreenTimeout  = "grn_to_ms";   // uint32 ms; btn0 timed pulse duration
 constexpr const char *kPrefsKeyAll4ValveMs   = "all4_vlv_ms"; // uint32 ms; all-4 hold valve open duration
+constexpr const char *kPrefsKeyAll4LockoutS  = "all4_lck_s";  // uint32 s; all-4 lockout countdown duration
 constexpr uint32_t kBooshFailsafeMinMs  = 1000;
 constexpr uint32_t kBooshFailsafeMaxMs  = 60000;
 
@@ -452,6 +456,7 @@ bool SavePylonConfig() {
   prefs.putUChar(kPrefsKeySeqExpPct, barmode_seq_exp_pct);
   prefs.putUInt(kPrefsKeyGreenTimeout, static_cast<uint32_t>(barmode_green_timeout_ms));
   prefs.putUInt(kPrefsKeyAll4ValveMs,  static_cast<uint32_t>(barmode_all4_valve_ms));
+  prefs.putUInt(kPrefsKeyAll4LockoutS, static_cast<uint32_t>(barmode_all4_lockout_s));
   {
     uint8_t mask = 0;
     for (int i = 0; i < 4; i++) if (barmode_btn_disabled[i]) mask |= (1 << i);
@@ -520,6 +525,7 @@ void LoadPylonConfig() {
   barmode_seq_exp_pct    = (uint8_t)prefs.getUChar(kPrefsKeySeqExpPct, 100);
   barmode_green_timeout_ms = prefs.getUInt(kPrefsKeyGreenTimeout, 300);
   barmode_all4_valve_ms    = prefs.getUInt(kPrefsKeyAll4ValveMs,  3000);
+  barmode_all4_lockout_s   = prefs.getUInt(kPrefsKeyAll4LockoutS, 300);
   {
     const uint8_t mask = prefs.getUChar(kPrefsKeyBtnDisable, 0);
     for (int i = 0; i < 4; i++) barmode_btn_disabled[i] = (mask >> i) & 1;
@@ -746,6 +752,15 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
     barmode_all4_valve_ms = (unsigned long)ms;
     changed = true;
     if (log_output) Console.printf("[CFG] all4_valve_ms set: %lu\n", barmode_all4_valve_ms);
+  } else if (field == "all4_lockout_s") {
+    const int s = (int)value.toInt();
+    if (s < 0 || s > 3600) {
+      if (log_output) Console.println("[CFG] all4_lockout_s out of range (0-3600s)");
+      return false;
+    }
+    barmode_all4_lockout_s = (unsigned long)s;
+    changed = true;
+    if (log_output) Console.printf("[CFG] all4_lockout_s set: %lu\n", barmode_all4_lockout_s);
   } else {
     if (log_output) {
       Console.println("[CFG] unknown set field. use id|host|desc|node|ap|failsafe_s|index|seq_max_s|seq_dec_ms|seq_exp_pct");
@@ -1481,6 +1496,8 @@ String BuildTelemetryApiJson() {
   payload += "\"green_timeout_ms\":" + String(barmode_green_timeout_ms) + ",";
   payload += "\"bpm\":" + String(barmode_bpm, 1) + ",";
   payload += "\"all4_valve_ms\":" + String(barmode_all4_valve_ms) + ",";
+  payload += "\"all4_lockout_s\":" + String(barmode_all4_lockout_s) + ",";
+  payload += "\"all4_lockout_remaining_s\":" + String(barmode_all4_lockout_until_ms > millis() ? (barmode_all4_lockout_until_ms - millis()) / 1000UL : 0UL) + ",";
   payload += "\"btn_press_counts\":[" + String(barmode_btn_counts[0]) + "," +
              String(barmode_btn_counts[1]) + "," + String(barmode_btn_counts[2]) + "," +
              String(barmode_btn_counts[3]) + "],";
@@ -1657,6 +1674,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           <div id="cfg-seq-max-wrap" style="display:none;gap:6px">
             <label>Green timeout (ms) <input id="cfg-green-timeout-ms" name="green_timeout_ms" type="number" min="50" max="10000" step="50" style="width:80px"> <span style="color:var(--muted);font-size:12px">(btn0 timed pulse open duration)</span></label>
             <label>All-4 valve open (ms) <input id="cfg-all4-valve-ms" name="all4_valve_ms" type="number" min="500" max="30000" step="500" style="width:80px"> <span style="color:var(--muted);font-size:12px">(all-4 hold: valve open duration before auto-close)</span></label>
+            <label>All-4 lockout (s) <input id="cfg-all4-lockout-s" name="all4_lockout_s" type="number" min="0" max="3600" step="30" style="width:80px"> <span style="color:var(--muted);font-size:12px">(cooldown after all-4 sequence; 0=disabled)</span></label>
             <label>Seq max (s) <input id="cfg-seq-max-s" name="seq_max_s" type="number" min="1" max="120" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(barmode btn1 hold timeout)</span></label>
             <label>Seq step decrement (ms) <input id="cfg-seq-dec-ms" name="seq_dec_ms" type="number" min="0" max="2000" step="10" style="width:70px"> <span style="color:var(--muted);font-size:12px">(delay reduction per pylon step)</span></label>
             <label>Seq exp factor (%) <input id="cfg-seq-exp-pct" name="seq_exp_pct" type="number" min="1" max="100" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(multiply delay each step; 100=linear only)</span></label>
@@ -1863,6 +1881,9 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       const all4VlvInput = document.getElementById('cfg-all4-valve-ms');
       if (all4VlvInput && document.activeElement !== all4VlvInput)
         all4VlvInput.value = data.all4_valve_ms != null ? data.all4_valve_ms : 3000;
+      const all4LckInput = document.getElementById('cfg-all4-lockout-s');
+      if (all4LckInput && document.activeElement !== all4LckInput)
+        all4LckInput.value = data.all4_lockout_s != null ? data.all4_lockout_s : 300;
       const seqInput = document.getElementById('cfg-seq-max-s');
       if (seqInput && document.activeElement !== seqInput)
         seqInput.value = data.seq_max_ms != null ? Math.round(data.seq_max_ms / 1000) : 30;
@@ -1895,7 +1916,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     }
     const triggerButton = document.getElementById('trigger');
     const configForm = document.getElementById('config-form');
-    const configInputs = ['cfg-id', 'cfg-host', 'cfg-description', 'cfg-node', 'cfg-wifi-ssid', 'cfg-wifi-pass', 'cfg-failsafe-s', 'cfg-index', 'cfg-green-timeout-ms', 'cfg-all4-valve-ms', 'cfg-seq-max-s', 'cfg-seq-dec-ms', 'cfg-seq-exp-pct']
+    const configInputs = ['cfg-id', 'cfg-host', 'cfg-description', 'cfg-node', 'cfg-wifi-ssid', 'cfg-wifi-pass', 'cfg-failsafe-s', 'cfg-index', 'cfg-green-timeout-ms', 'cfg-all4-valve-ms', 'cfg-all4-lockout-s', 'cfg-seq-max-s', 'cfg-seq-dec-ms', 'cfg-seq-exp-pct']
       .map((id) => document.getElementById(id))
       .filter(Boolean);
     let holdActive = false;
@@ -1967,6 +1988,8 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       if (grnToVal !== '') body.set('green_timeout_ms', grnToVal);
       const all4VlvVal = document.getElementById('cfg-all4-valve-ms').value.trim();
       if (all4VlvVal !== '') body.set('all4_valve_ms', all4VlvVal);
+      const all4LckVal = document.getElementById('cfg-all4-lockout-s').value.trim();
+      if (all4LckVal !== '') body.set('all4_lockout_s', all4LckVal);
       const seqMaxVal = document.getElementById('cfg-seq-max-s').value.trim();
       if (seqMaxVal !== '') body.set('seq_max_s', seqMaxVal);
       const seqDecVal = document.getElementById('cfg-seq-dec-ms').value.trim();
@@ -2385,13 +2408,14 @@ void HandleConfigPostApi() {
   const bool has_seq_max_s   = webServer.hasArg("seq_max_s");
   const bool has_seq_dec_ms  = webServer.hasArg("seq_dec_ms");
   const bool has_seq_exp_pct  = webServer.hasArg("seq_exp_pct");
-  const bool has_btn_disabled   = webServer.hasArg("btn_disabled");
-  const bool has_green_timeout  = webServer.hasArg("green_timeout_ms");
-  const bool has_all4_valve_ms  = webServer.hasArg("all4_valve_ms");
+  const bool has_btn_disabled    = webServer.hasArg("btn_disabled");
+  const bool has_green_timeout   = webServer.hasArg("green_timeout_ms");
+  const bool has_all4_valve_ms   = webServer.hasArg("all4_valve_ms");
+  const bool has_all4_lockout_s  = webServer.hasArg("all4_lockout_s");
 
   if (!has_node && !has_id && !has_host && !has_desc &&
-      !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index && !has_seq_max_s && !has_seq_dec_ms && !has_seq_exp_pct && !has_btn_disabled && !has_green_timeout && !has_all4_valve_ms) {
-    SendApiError(400, "expected one of: node, id, host, description, wifi_ssid, wifi_pass, failsafe_s, index, seq_max_s, seq_dec_ms, seq_exp_pct, btn_disabled, green_timeout_ms, all4_valve_ms");
+      !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index && !has_seq_max_s && !has_seq_dec_ms && !has_seq_exp_pct && !has_btn_disabled && !has_green_timeout && !has_all4_valve_ms && !has_all4_lockout_s) {
+    SendApiError(400, "expected one of: node, id, host, description, wifi_ssid, wifi_pass, failsafe_s, index, seq_max_s, seq_dec_ms, seq_exp_pct, btn_disabled, green_timeout_ms, all4_valve_ms, all4_lockout_s");
     return;
   }
 
@@ -2419,7 +2443,8 @@ void HandleConfigPostApi() {
   if (has_seq_dec_ms)  ok = ok && SetConfigFieldValue("seq_dec_ms",  webServer.arg("seq_dec_ms"));
   if (has_seq_exp_pct)   ok = ok && SetConfigFieldValue("seq_exp_pct",     webServer.arg("seq_exp_pct"));
   if (has_green_timeout) ok = ok && SetConfigFieldValue("green_timeout_ms", webServer.arg("green_timeout_ms"));
-  if (has_all4_valve_ms) ok = ok && SetConfigFieldValue("all4_valve_ms",    webServer.arg("all4_valve_ms"));
+  if (has_all4_valve_ms)  ok = ok && SetConfigFieldValue("all4_valve_ms",   webServer.arg("all4_valve_ms"));
+  if (has_all4_lockout_s) ok = ok && SetConfigFieldValue("all4_lockout_s",  webServer.arg("all4_lockout_s"));
   if (has_btn_disabled) {
     // Accepts "0101" bitmask string: index 0=green,1=blue,2=orange,3=red; '1'=disabled
     const String v = webServer.arg("btn_disabled");
@@ -3675,16 +3700,22 @@ void PollBarModeButtons() {
 
     // Arm per-button hold timers on rising edge within the correct phase
     if (blue_rising  && seq_phase == 0) { seq_blue_press_ms  = now; seq_blue_armed   = true; }
-    if (blue_falling && seq_phase == 0) { seq_blue_armed = false; }
+    if (blue_falling && seq_phase == 0) { seq_blue_armed = false; barmode_show_wait_oled = false; }
     if (green_rising  && seq_phase == 1) { seq_green_press_ms  = now; seq_green_armed  = true; }
     if (orange_rising && seq_phase == 2) { seq_orange_press_ms = now; seq_orange_armed = true; }
     if (red_rising    && seq_phase == 3) { seq_red_press_ms    = now; seq_red_armed    = true; }
 
     // Phase advancement (checked every tick)
     if (seq_phase == 0 && seq_blue_armed && btn_stable[1] && now - seq_blue_press_ms >= 3000) {
-      seq_phase = 1;
-      seq_green_armed = seq_orange_armed = seq_red_armed = false;
-      Console.println("[BarMode] Seq phase 1: blue held 3s");
+      if (barmode_all4_lockout_s > 0 && now < barmode_all4_lockout_until_ms) {
+        // locked out — show WAIT screen while blue is held
+        barmode_show_wait_oled = true;
+      } else {
+        barmode_show_wait_oled = false;
+        seq_phase = 1;
+        seq_green_armed = seq_orange_armed = seq_red_armed = false;
+        Console.println("[BarMode] Seq phase 1: blue held 3s");
+      }
     }
     if (seq_phase == 1 && seq_green_armed && btn_stable[0] && now - seq_green_press_ms >= 3000) {
       seq_phase = 2;
@@ -3708,24 +3739,40 @@ void PollBarModeButtons() {
     // Note: check seq_phase before clearing seq_valve_open so we go to phase 5 if valve was open
     if (seq_phase >= 1 && !btn_stable[1]) {   // BLUE released
       const int next = (seq_phase == 4) ? 5 : 0;
-      if (seq_valve_open) { SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false; }
+      if (seq_valve_open) {
+        SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false;
+        if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
+        Console.printf("[BarMode] Lockout started: %lu s\n", barmode_all4_lockout_s);
+      }
       seq_phase = next;
       seq_blue_armed = seq_green_armed = seq_orange_armed = seq_red_armed = false;
       Console.printf("[BarMode] Seq %s: blue released\n", next == 0 ? "reset" : "closing");
     } else if (seq_phase >= 2 && !btn_stable[0]) {  // GREEN released in phase 2+
       const int next = (seq_phase == 4) ? 5 : 0;
-      if (seq_valve_open) { SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false; }
+      if (seq_valve_open) {
+        SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false;
+        if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
+        Console.printf("[BarMode] Lockout started: %lu s\n", barmode_all4_lockout_s);
+      }
       seq_phase = next;
       seq_green_armed = seq_orange_armed = seq_red_armed = false;
       Console.printf("[BarMode] Seq %s: green released\n", next == 0 ? "reset" : "closing");
     } else if (seq_phase >= 3 && !btn_stable[2]) {  // ORANGE released in phase 3+
       const int next = (seq_phase == 4) ? 5 : 0;
-      if (seq_valve_open) { SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false; }
+      if (seq_valve_open) {
+        SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false;
+        if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
+        Console.printf("[BarMode] Lockout started: %lu s\n", barmode_all4_lockout_s);
+      }
       seq_phase = next;
       seq_orange_armed = seq_red_armed = false;
       Console.printf("[BarMode] Seq %s: orange released\n", next == 0 ? "reset" : "closing");
     } else if (seq_phase == 4 && !btn_stable[3]) {  // RED released in phase 4
-      if (seq_valve_open) { SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false; }
+      if (seq_valve_open) {
+        SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false;
+        if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
+        Console.printf("[BarMode] Lockout started: %lu s\n", barmode_all4_lockout_s);
+      }
       seq_phase = 5;
       Console.println("[BarMode] Seq phase 5: closing (red released)");
     }
@@ -3734,6 +3781,8 @@ void PollBarModeButtons() {
     if (seq_phase == 4 && seq_valve_open && now - seq_valve_open_ms >= barmode_all4_valve_ms) {
       SendOscFloatToAllPylons(kOscAddress, 0.0f);
       seq_valve_open = false;
+      if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
+      Console.printf("[BarMode] Lockout started: %lu s\n", barmode_all4_lockout_s);
       seq_phase = 5;
       Console.println("[BarMode] Seq phase 5: auto-close timeout");
     }
@@ -4443,7 +4492,30 @@ void loop() {
     }
   } else if (boosh_failsafe_note_until_ms == 0 || now >= boosh_failsafe_note_until_ms) {
     boosh_failsafe_note_until_ms = 0;
-    if (lastDisplayMs == 0) {
+
+    // Barmode WAIT screen: override display while blue held during lockout
+    static unsigned long lastWaitDisplayMs = 0;
+    if (barmode_show_wait_oled) {
+      if (now - lastWaitDisplayMs >= 500) {
+        lastWaitDisplayMs = now;
+        unsigned long rem_ms = (barmode_all4_lockout_until_ms > now) ? (barmode_all4_lockout_until_ms - now) : 0;
+        unsigned int rem_s = (unsigned int)(rem_ms / 1000);
+        const unsigned int mins = rem_s / 60;
+        const unsigned int secs = rem_s % 60;
+        char timebuf[6];
+        snprintf(timebuf, sizeof(timebuf), "%02u:%02u", mins, secs);
+        display.clearDisplay();
+        display.setTextColor(SSD1306_WHITE);
+        display.setTextSize(1);
+        display.setCursor(0, 0);
+        display.print("WAIT");
+        display.setTextSize(3);
+        // "MM:SS" at size 3 = 5 chars × 18px = 90px wide; center at x = (128-90)/2 = 19
+        display.setCursor(19, 8);
+        display.print(timebuf);
+        display.display();
+      }
+    } else if (lastDisplayMs == 0) {
       lastDisplayMs = now;
     } else if (now - lastDisplayMs >= kDisplayCycleMs) {
       lastDisplayMs = now;
@@ -4462,7 +4534,9 @@ void loop() {
     // Slot 0, 1 → temp °F + battery pct  |  Slot 2 → time remaining + voltage
     // Slot 3 → info sub-pages (ping/wifi/wifi-detail/node/firmware)
     // In barmode slots 0-2 are skipped entirely (no sensor hardware).
-    if (!barmode_active && (displayPage == 0 || displayPage == 1)) {
+    if (barmode_show_wait_oled) {
+      // WAIT screen rendered above; skip normal pages
+    } else if (!barmode_active && (displayPage == 0 || displayPage == 1)) {
       ShowTempPctPage();
     } else if (!barmode_active && displayPage == 2) {
       ShowTimeVoltagePage();
