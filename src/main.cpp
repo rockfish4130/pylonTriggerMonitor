@@ -123,6 +123,7 @@ unsigned long barmode_seq_max_ms = 30000;  // btn1 double-tap seq max hold durat
 unsigned long barmode_seq_dec_ms = 50;     // delay decrement per step in btn1 seq; BARMODE NVS; default 50ms
 uint8_t barmode_seq_exp_pct = 100;         // exponential factor % (1-100) applied after linear dec; 100=off
 unsigned long barmode_green_timeout_ms = 300; // btn0 timed pulse open duration; BARMODE NVS; default 300ms
+unsigned long barmode_all4_valve_ms    = 3000; // all-4 hold: valve open duration before auto-close; BARMODE NVS; default 3s
 uint32_t barmode_btn_counts[4]   = {0,0,0,0};   // running press counts: [green, blue, orange, red]
 bool     barmode_btn_disabled[4] = {false,false,false,false}; // NVS-persisted disable flags
 // Ring buffer: up to 1024 button press events (ms + btn index), oldest overwritten
@@ -221,7 +222,8 @@ constexpr const char *kPrefsKeySeqMaxMs = "seq_max_ms";
 constexpr const char *kPrefsKeySeqDecMs = "seq_dec_ms";
 constexpr const char *kPrefsKeySeqExpPct  = "seq_exp_pct";  // 1-100; applied as factor delay*=(pct/100)
 constexpr const char *kPrefsKeyBtnDisable    = "btn_dis";      // uint8 bitmask: bit0=green,1=blue,2=orange,3=red
-constexpr const char *kPrefsKeyGreenTimeout = "grn_to_ms";   // uint32 ms; btn0 timed pulse duration
+constexpr const char *kPrefsKeyGreenTimeout  = "grn_to_ms";   // uint32 ms; btn0 timed pulse duration
+constexpr const char *kPrefsKeyAll4ValveMs   = "all4_vlv_ms"; // uint32 ms; all-4 hold valve open duration
 constexpr uint32_t kBooshFailsafeMinMs  = 1000;
 constexpr uint32_t kBooshFailsafeMaxMs  = 60000;
 
@@ -447,6 +449,7 @@ bool SavePylonConfig() {
   prefs.putUInt(kPrefsKeySeqDecMs, static_cast<uint32_t>(barmode_seq_dec_ms));
   prefs.putUChar(kPrefsKeySeqExpPct, barmode_seq_exp_pct);
   prefs.putUInt(kPrefsKeyGreenTimeout, static_cast<uint32_t>(barmode_green_timeout_ms));
+  prefs.putUInt(kPrefsKeyAll4ValveMs,  static_cast<uint32_t>(barmode_all4_valve_ms));
   {
     uint8_t mask = 0;
     for (int i = 0; i < 4; i++) if (barmode_btn_disabled[i]) mask |= (1 << i);
@@ -514,6 +517,7 @@ void LoadPylonConfig() {
   barmode_seq_dec_ms = prefs.getUInt(kPrefsKeySeqDecMs, 50);
   barmode_seq_exp_pct    = (uint8_t)prefs.getUChar(kPrefsKeySeqExpPct, 100);
   barmode_green_timeout_ms = prefs.getUInt(kPrefsKeyGreenTimeout, 300);
+  barmode_all4_valve_ms    = prefs.getUInt(kPrefsKeyAll4ValveMs,  3000);
   {
     const uint8_t mask = prefs.getUChar(kPrefsKeyBtnDisable, 0);
     for (int i = 0; i < 4; i++) barmode_btn_disabled[i] = (mask >> i) & 1;
@@ -731,6 +735,15 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
     barmode_green_timeout_ms = (unsigned long)ms;
     changed = true;
     if (log_output) Console.printf("[CFG] green_timeout_ms set: %lu\n", barmode_green_timeout_ms);
+  } else if (field == "all4_valve_ms") {
+    const int ms = (int)value.toInt();
+    if (ms < 500 || ms > 30000) {
+      if (log_output) Console.println("[CFG] all4_valve_ms out of range (500-30000ms)");
+      return false;
+    }
+    barmode_all4_valve_ms = (unsigned long)ms;
+    changed = true;
+    if (log_output) Console.printf("[CFG] all4_valve_ms set: %lu\n", barmode_all4_valve_ms);
   } else {
     if (log_output) {
       Console.println("[CFG] unknown set field. use id|host|desc|node|ap|failsafe_s|index|seq_max_s|seq_dec_ms|seq_exp_pct");
@@ -1464,6 +1477,7 @@ String BuildTelemetryApiJson() {
   payload += "\"seq_dec_ms\":" + String(barmode_seq_dec_ms) + ",";
   payload += "\"seq_exp_pct\":" + String(barmode_seq_exp_pct) + ",";
   payload += "\"green_timeout_ms\":" + String(barmode_green_timeout_ms) + ",";
+  payload += "\"all4_valve_ms\":" + String(barmode_all4_valve_ms) + ",";
   payload += "\"btn_press_counts\":[" + String(barmode_btn_counts[0]) + "," +
              String(barmode_btn_counts[1]) + "," + String(barmode_btn_counts[2]) + "," +
              String(barmode_btn_counts[3]) + "],";
@@ -1639,6 +1653,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           </div>
           <div id="cfg-seq-max-wrap" style="display:none;gap:6px">
             <label>Green timeout (ms) <input id="cfg-green-timeout-ms" name="green_timeout_ms" type="number" min="50" max="10000" step="50" style="width:80px"> <span style="color:var(--muted);font-size:12px">(btn0 timed pulse open duration)</span></label>
+            <label>All-4 valve open (ms) <input id="cfg-all4-valve-ms" name="all4_valve_ms" type="number" min="500" max="30000" step="500" style="width:80px"> <span style="color:var(--muted);font-size:12px">(all-4 hold: valve open duration before auto-close)</span></label>
             <label>Seq max (s) <input id="cfg-seq-max-s" name="seq_max_s" type="number" min="1" max="120" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(barmode btn1 hold timeout)</span></label>
             <label>Seq step decrement (ms) <input id="cfg-seq-dec-ms" name="seq_dec_ms" type="number" min="0" max="2000" step="10" style="width:70px"> <span style="color:var(--muted);font-size:12px">(delay reduction per pylon step)</span></label>
             <label>Seq exp factor (%) <input id="cfg-seq-exp-pct" name="seq_exp_pct" type="number" min="1" max="100" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(multiply delay each step; 100=linear only)</span></label>
@@ -1797,6 +1812,9 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       const grnToInput = document.getElementById('cfg-green-timeout-ms');
       if (grnToInput && document.activeElement !== grnToInput)
         grnToInput.value = data.green_timeout_ms != null ? data.green_timeout_ms : 300;
+      const all4VlvInput = document.getElementById('cfg-all4-valve-ms');
+      if (all4VlvInput && document.activeElement !== all4VlvInput)
+        all4VlvInput.value = data.all4_valve_ms != null ? data.all4_valve_ms : 3000;
       const seqInput = document.getElementById('cfg-seq-max-s');
       if (seqInput && document.activeElement !== seqInput)
         seqInput.value = data.seq_max_ms != null ? Math.round(data.seq_max_ms / 1000) : 30;
@@ -1829,7 +1847,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     }
     const triggerButton = document.getElementById('trigger');
     const configForm = document.getElementById('config-form');
-    const configInputs = ['cfg-id', 'cfg-host', 'cfg-description', 'cfg-node', 'cfg-wifi-ssid', 'cfg-wifi-pass', 'cfg-failsafe-s', 'cfg-index', 'cfg-green-timeout-ms', 'cfg-seq-max-s', 'cfg-seq-dec-ms', 'cfg-seq-exp-pct']
+    const configInputs = ['cfg-id', 'cfg-host', 'cfg-description', 'cfg-node', 'cfg-wifi-ssid', 'cfg-wifi-pass', 'cfg-failsafe-s', 'cfg-index', 'cfg-green-timeout-ms', 'cfg-all4-valve-ms', 'cfg-seq-max-s', 'cfg-seq-dec-ms', 'cfg-seq-exp-pct']
       .map((id) => document.getElementById(id))
       .filter(Boolean);
     let holdActive = false;
@@ -1899,6 +1917,8 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       if (idxVal !== '') body.set('index', idxVal);
       const grnToVal = document.getElementById('cfg-green-timeout-ms').value.trim();
       if (grnToVal !== '') body.set('green_timeout_ms', grnToVal);
+      const all4VlvVal = document.getElementById('cfg-all4-valve-ms').value.trim();
+      if (all4VlvVal !== '') body.set('all4_valve_ms', all4VlvVal);
       const seqMaxVal = document.getElementById('cfg-seq-max-s').value.trim();
       if (seqMaxVal !== '') body.set('seq_max_s', seqMaxVal);
       const seqDecVal = document.getElementById('cfg-seq-dec-ms').value.trim();
@@ -2313,10 +2333,11 @@ void HandleConfigPostApi() {
   const bool has_seq_exp_pct  = webServer.hasArg("seq_exp_pct");
   const bool has_btn_disabled   = webServer.hasArg("btn_disabled");
   const bool has_green_timeout  = webServer.hasArg("green_timeout_ms");
+  const bool has_all4_valve_ms  = webServer.hasArg("all4_valve_ms");
 
   if (!has_node && !has_id && !has_host && !has_desc &&
-      !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index && !has_seq_max_s && !has_seq_dec_ms && !has_seq_exp_pct && !has_btn_disabled && !has_green_timeout) {
-    SendApiError(400, "expected one of: node, id, host, description, wifi_ssid, wifi_pass, failsafe_s, index, seq_max_s, seq_dec_ms, seq_exp_pct, btn_disabled, green_timeout_ms");
+      !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index && !has_seq_max_s && !has_seq_dec_ms && !has_seq_exp_pct && !has_btn_disabled && !has_green_timeout && !has_all4_valve_ms) {
+    SendApiError(400, "expected one of: node, id, host, description, wifi_ssid, wifi_pass, failsafe_s, index, seq_max_s, seq_dec_ms, seq_exp_pct, btn_disabled, green_timeout_ms, all4_valve_ms");
     return;
   }
 
@@ -2344,6 +2365,7 @@ void HandleConfigPostApi() {
   if (has_seq_dec_ms)  ok = ok && SetConfigFieldValue("seq_dec_ms",  webServer.arg("seq_dec_ms"));
   if (has_seq_exp_pct)   ok = ok && SetConfigFieldValue("seq_exp_pct",     webServer.arg("seq_exp_pct"));
   if (has_green_timeout) ok = ok && SetConfigFieldValue("green_timeout_ms", webServer.arg("green_timeout_ms"));
+  if (has_all4_valve_ms) ok = ok && SetConfigFieldValue("all4_valve_ms",    webServer.arg("all4_valve_ms"));
   if (has_btn_disabled) {
     // Accepts "0101" bitmask string: index 0=green,1=blue,2=orange,3=red; '1'=disabled
     const String v = webServer.arg("btn_disabled");
@@ -3600,7 +3622,7 @@ void PollBarModeButtons() {
         all4_valve_open_ms = now;
         Console.println("[BarMode] All4: valve open");
       }
-      if (all4_valve_open && now - all4_valve_open_ms >= 3000) {
+      if (all4_valve_open && now - all4_valve_open_ms >= barmode_all4_valve_ms) {
         SendOscFloatToAllPylons(kOscAddress, 0.0f);
         all4_valve_open  = false;
         all4_auto_closed = true;
@@ -3750,7 +3772,7 @@ void PollBarModeButtons() {
     }
 
     // Blue lamp: disabled=30%, idle=200ms pulse per second
-    ledcWrite(5, barmode_btn_disabled[1] ? 77 : (now % 1000 < 50) ? 255 : 0);
+    ledcWrite(5, barmode_btn_disabled[1] ? 77 : (now % 1000 < 50) ? 255 : 51);
 
     // Button 2 — Orange button: BooshPulseTrain; IO35 strobes 5x pulse pattern once then returns to idle sawtooth
     {
@@ -3846,18 +3868,22 @@ void PollBarModeButtons() {
 
     } // end if (!all4_now) — individual button actions
 
-    // ---- All-4 lamp override: escalating strobe ----------------------------
+    // ---- All-4 lamp override: escalating strobe, then off after valve closes --
     if (all4_now) {
-      const unsigned long elapsed = now - all4_start_ms;
       uint8_t lamp_val;
-      if (elapsed < 1000) {
-        lamp_val = (now % 500 < 125) ? 64 : 0;   // 2Hz 25%
-      } else if (elapsed < 2000) {
-        lamp_val = (now % 250 < 125) ? 128 : 0;  // 4Hz 50%
-      } else if (elapsed < 3000) {
-        lamp_val = (now % 167 < 125) ? 192 : 0;  // 6Hz 75%
+      if (all4_auto_closed) {
+        lamp_val = 0;  // valves closed, buttons still held — lamps off until release
       } else {
-        lamp_val = (now % 125 < 100) ? 204 : 0;  // 8Hz 80%
+        const unsigned long elapsed = now - all4_start_ms;
+        if (elapsed < 1000) {
+          lamp_val = (now % 500 < 125) ? 64 : 0;   // 2Hz 25%
+        } else if (elapsed < 2000) {
+          lamp_val = (now % 250 < 125) ? 128 : 0;  // 4Hz 50%
+        } else if (elapsed < 3000) {
+          lamp_val = (now % 167 < 125) ? 192 : 0;  // 6Hz 75%
+        } else {
+          lamp_val = (now % 125 < 100) ? 204 : 0;  // 8Hz 80%
+        }
       }
       ledcWrite(3, lamp_val);  // orange
       ledcWrite(4, lamp_val);  // green
