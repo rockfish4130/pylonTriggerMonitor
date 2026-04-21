@@ -2200,7 +2200,6 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       if (!input) return;
       if (formDirty) return;  // never overwrite user edits between keystroke and save
       if (document.activeElement === input) return;
-      if (input.dataset.dirty === 'true') return;
       input.value = nextValue ?? '';
     }
     let barmodeActive = false;
@@ -2247,118 +2246,41 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       syncConfigField('cfg-host', (data.hostname || '').replace(/\.local$/,''));
       syncConfigField('cfg-description', data.description || '');
       syncConfigField('cfg-wifi-ssid', data.wifi_ssid || '');
-      const fsInput = document.getElementById('cfg-failsafe-s');
-      if (fsInput && document.activeElement !== fsInput)
-        fsInput.value = data.failsafe_ms != null ? (data.failsafe_ms / 1000).toFixed(1) : '5.0';
-      const idxInput = document.getElementById('cfg-index');
-      if (idxInput && document.activeElement !== idxInput)
-        idxInput.value = data.pylon_index != null ? data.pylon_index : 0;
+      syncConfigField('cfg-failsafe-s',       data.failsafe_ms != null ? (data.failsafe_ms / 1000).toFixed(1) : '5.0');
+      syncConfigField('cfg-index',             data.pylon_index != null ? data.pylon_index : 0);
       ['cfg-grp-green','cfg-grp-blue','cfg-grp-all4','cfg-grp-red','cfg-grp-recovery','cfg-btn-disable-wrap'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = data.barmode_active ? 'grid' : 'none';
       });
-      const grnToInput = document.getElementById('cfg-green-timeout-ms');
-      if (grnToInput && document.activeElement !== grnToInput)
-        grnToInput.value = data.green_timeout_ms != null ? data.green_timeout_ms : 300;
-      const all4VlvInput = document.getElementById('cfg-all4-valve-ms');
-      if (all4VlvInput && document.activeElement !== all4VlvInput)
-        all4VlvInput.value = data.all4_valve_ms != null ? data.all4_valve_ms : 3000;
-      const all4LckInput = document.getElementById('cfg-all4-lockout-s');
-      if (all4LckInput && document.activeElement !== all4LckInput)
-        all4LckInput.value = data.all4_lockout_s != null ? data.all4_lockout_s : 300;
-      const redSeqMaxInput = document.getElementById('cfg-red-seq-max-s');
-      if (redSeqMaxInput && document.activeElement !== redSeqMaxInput)
-        redSeqMaxInput.value = data.red_seq_max_ms != null ? Math.round(data.red_seq_max_ms / 1000) : 10;
-      const redSeqVlvInput = document.getElementById('cfg-red-seq-valve-ms');
-      if (redSeqVlvInput && document.activeElement !== redSeqVlvInput)
-        redSeqVlvInput.value = data.red_seq_valve_ms != null ? data.red_seq_valve_ms : 66;
-      const redSeqStpInput = document.getElementById('cfg-red-seq-step-ms');
-      if (redSeqStpInput && document.activeElement !== redSeqStpInput)
-        redSeqStpInput.value = data.red_seq_step_ms != null ? data.red_seq_step_ms : 200;
-      // OSC action params (all pylons)
-      const p1DurInput = document.getElementById('cfg-pulse1-dur');
-      if (p1DurInput && document.activeElement !== p1DurInput)
-        p1DurInput.value = data.pulse1_dur_ms != null ? data.pulse1_dur_ms : 50;
+      syncConfigField('cfg-green-timeout-ms',  data.green_timeout_ms  != null ? data.green_timeout_ms  : 300);
+      syncConfigField('cfg-all4-valve-ms',     data.all4_valve_ms     != null ? data.all4_valve_ms     : 3000);
+      syncConfigField('cfg-all4-lockout-s',    data.all4_lockout_s    != null ? data.all4_lockout_s    : 300);
+      syncConfigField('cfg-red-seq-max-s',     data.red_seq_max_ms    != null ? Math.round(data.red_seq_max_ms / 1000) : 10);
+      syncConfigField('cfg-red-seq-valve-ms',  data.red_seq_valve_ms  != null ? data.red_seq_valve_ms  : 66);
+      syncConfigField('cfg-red-seq-step-ms',   data.red_seq_step_ms   != null ? data.red_seq_step_ms   : 200);
+      syncConfigField('cfg-pulse1-dur',        data.pulse1_dur_ms     != null ? data.pulse1_dur_ms     : 50);
       const p1DisInput = document.getElementById('cfg-pulse1-dis');
       if (p1DisInput) p1DisInput.checked = !!data.pulse1_dis;
-      const ptDurInput = document.getElementById('cfg-pt-dur');
-      if (ptDurInput && document.activeElement !== ptDurInput)
-        ptDurInput.value = data.pt_dur_ms != null ? data.pt_dur_ms : 50;
-      const ptOffInput = document.getElementById('cfg-pt-off');
-      if (ptOffInput && document.activeElement !== ptOffInput)
-        ptOffInput.value = data.pt_off_ms != null ? data.pt_off_ms : 50;
-      const ptCntInput = document.getElementById('cfg-pt-count');
-      if (ptCntInput && document.activeElement !== ptCntInput)
-        ptCntInput.value = data.pt_count != null ? data.pt_count : 5;
+      syncConfigField('cfg-pt-dur',            data.pt_dur_ms         != null ? data.pt_dur_ms         : 50);
+      syncConfigField('cfg-pt-off',            data.pt_off_ms         != null ? data.pt_off_ms         : 50);
+      syncConfigField('cfg-pt-count',          data.pt_count          != null ? data.pt_count          : 5);
       const ptDisInput = document.getElementById('cfg-pt-dis');
       if (ptDisInput) ptDisInput.checked = !!data.pt_dis;
-      const stmRampInput = document.getElementById('cfg-steam-ramp');
-      if (stmRampInput && document.activeElement !== stmRampInput)
-        stmRampInput.value = data.steam_ramp_ms != null ? data.steam_ramp_ms : 4000;
-      const stmOpenInput = document.getElementById('cfg-steam-open');
-      if (stmOpenInput && document.activeElement !== stmOpenInput)
-        stmOpenInput.value = data.steam_open_ms != null ? data.steam_open_ms : 1000;
+      syncConfigField('cfg-steam-ramp',        data.steam_ramp_ms     != null ? data.steam_ramp_ms     : 4000);
+      syncConfigField('cfg-steam-open',        data.steam_open_ms     != null ? data.steam_open_ms     : 1000);
       const stmDisInput = document.getElementById('cfg-steam-dis');
       if (stmDisInput) stmDisInput.checked = !!data.steam_dis;
-      const seqInput = document.getElementById('cfg-seq-max-s');
-      if (seqInput && document.activeElement !== seqInput)
-        seqInput.value = data.seq_max_ms != null ? Math.round(data.seq_max_ms / 1000) : 30;
-      const seqDecInput = document.getElementById('cfg-seq-dec-ms');
-      if (seqDecInput && document.activeElement !== seqDecInput)
-        seqDecInput.value = data.seq_dec_ms != null ? data.seq_dec_ms : 50;
-      const seqExpInput = document.getElementById('cfg-seq-exp-pct');
-      if (seqExpInput && document.activeElement !== seqExpInput)
-        seqExpInput.value = data.seq_exp_pct != null ? data.seq_exp_pct : 100;
-      const grnRecInput = document.getElementById('cfg-green-recovery-ms');
-      if (grnRecInput && document.activeElement !== grnRecInput)
-        grnRecInput.value = data.green_recovery_ms != null ? data.green_recovery_ms : 0;
-      const bluRecInput = document.getElementById('cfg-blue-recovery-ms');
-      if (bluRecInput && document.activeElement !== bluRecInput)
-        bluRecInput.value = data.blue_recovery_ms != null ? data.blue_recovery_ms : 0;
-      const orgRecInput = document.getElementById('cfg-orange-recovery-ms');
-      if (orgRecInput && document.activeElement !== orgRecInput)
-        orgRecInput.value = data.orange_recovery_ms != null ? data.orange_recovery_ms : 0;
-      const redRecInput = document.getElementById('cfg-red-recovery-ms');
-      if (redRecInput && document.activeElement !== redRecInput)
-        redRecInput.value = data.red_recovery_ms != null ? data.red_recovery_ms : 0;
-      // Temp threshold inputs
-      const t1Input = document.getElementById('cfg-temp-thresh1');
-      if (t1Input && document.activeElement !== t1Input)
-        t1Input.value = data.temp_thresh1_f != null ? data.temp_thresh1_f : 50;
-      const m1Input = document.getElementById('cfg-temp-mult1');
-      if (m1Input && document.activeElement !== m1Input)
-        m1Input.value = data.temp_mult1 != null ? data.temp_mult1 : 1;
-      const t2Input = document.getElementById('cfg-temp-thresh2');
-      if (t2Input && document.activeElement !== t2Input)
-        t2Input.value = data.temp_thresh2_f != null ? data.temp_thresh2_f : 32;
-      const m2Input = document.getElementById('cfg-temp-mult2');
-      if (m2Input && document.activeElement !== m2Input)
-        m2Input.value = data.temp_mult2 != null ? data.temp_mult2 : 1;
-      // Effective recovery display (base × multiplier)
-      const mult = data.temp_multiplier != null ? data.temp_multiplier : 1;
-      function effStr(base) {
-        if (!base) return '';
-        if (mult <= 1.0) return '';
-        return '\u2192 ' + Math.round(base * mult) + ' ms effective';
-      }
-      const grnEff = document.getElementById('rec-green-eff');
-      if (grnEff) grnEff.textContent = effStr(data.green_recovery_ms);
-      const bluEff = document.getElementById('rec-blue-eff');
-      if (bluEff) bluEff.textContent = effStr(data.blue_recovery_ms);
-      const orgEff = document.getElementById('rec-orange-eff');
-      if (orgEff) orgEff.textContent = effStr(data.orange_recovery_ms);
-      const redEff = document.getElementById('rec-red-eff');
-      if (redEff) redEff.textContent = effStr(data.red_recovery_ms);
-      // Temp status line
-      const tempStat = document.getElementById('rec-temp-status');
-      if (tempStat) {
-        const avgT = data.avg_pylon_temp_f;
-        if (avgT == null) {
-          tempStat.textContent = 'Avg pylon temp: — (no data yet; polls every 2 min)';
-        } else {
-          tempStat.textContent = 'Avg pylon temp: ' + avgT.toFixed(1) + '\u00b0F \u2014 Active multiplier: ' + mult.toFixed(2) + '\u00d7';
-        }
-      }
+      syncConfigField('cfg-seq-max-s',         data.seq_max_ms        != null ? Math.round(data.seq_max_ms / 1000) : 30);
+      syncConfigField('cfg-seq-dec-ms',        data.seq_dec_ms        != null ? data.seq_dec_ms        : 50);
+      syncConfigField('cfg-seq-exp-pct',       data.seq_exp_pct       != null ? data.seq_exp_pct       : 100);
+      syncConfigField('cfg-green-recovery-ms', data.green_recovery_ms != null ? data.green_recovery_ms : 0);
+      syncConfigField('cfg-blue-recovery-ms',  data.blue_recovery_ms  != null ? data.blue_recovery_ms  : 0);
+      syncConfigField('cfg-orange-recovery-ms',data.orange_recovery_ms!= null ? data.orange_recovery_ms: 0);
+      syncConfigField('cfg-red-recovery-ms',   data.red_recovery_ms   != null ? data.red_recovery_ms   : 0);
+      syncConfigField('cfg-temp-thresh1', data.temp_thresh1_f != null ? data.temp_thresh1_f : 50);
+      syncConfigField('cfg-temp-mult1',   data.temp_mult1     != null ? data.temp_mult1     : 1);
+      syncConfigField('cfg-temp-thresh2', data.temp_thresh2_f != null ? data.temp_thresh2_f : 32);
+      syncConfigField('cfg-temp-mult2',   data.temp_mult2     != null ? data.temp_mult2     : 1);
       const apBox = document.getElementById('cfg-ap');
       if (apBox && document.activeElement !== apBox) apBox.checked = !!data.ap_enabled;
       const disWrap = document.getElementById('cfg-btn-disable-wrap');
@@ -2370,6 +2292,22 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         }
       }
       } // end if (!formDirty)
+      // Display-only updates run every refresh regardless of formDirty
+      {
+        const mult = data.temp_multiplier != null ? data.temp_multiplier : 1;
+        const effStr = (base) => (!base || mult <= 1.0) ? '' : ('\u2192 ' + Math.round(base * mult) + ' ms effective');
+        const grnEff = document.getElementById('rec-green-eff');   if (grnEff) grnEff.textContent = effStr(data.green_recovery_ms);
+        const bluEff = document.getElementById('rec-blue-eff');    if (bluEff) bluEff.textContent = effStr(data.blue_recovery_ms);
+        const orgEff = document.getElementById('rec-orange-eff');  if (orgEff) orgEff.textContent = effStr(data.orange_recovery_ms);
+        const redEff = document.getElementById('rec-red-eff');     if (redEff) redEff.textContent = effStr(data.red_recovery_ms);
+        const tempStat = document.getElementById('rec-temp-status');
+        if (tempStat) {
+          const avgT = data.avg_pylon_temp_f;
+          tempStat.textContent = avgT == null
+            ? 'Avg pylon temp: \u2014 (no data yet; polls every 2 min)'
+            : 'Avg pylon temp: ' + avgT.toFixed(1) + '\u00b0F \u2014 Active multiplier: ' + mult.toFixed(2) + '\u00d7';
+        }
+      }
     }
     async function refreshTelemetry() {
       renderMeta(await fetchJson('/api/telemetry'));
@@ -2383,7 +2321,19 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     }
     const triggerButton = document.getElementById('trigger');
     const configForm = document.getElementById('config-form');
-    const configInputs = ['cfg-id', 'cfg-host', 'cfg-description', 'cfg-node', 'cfg-wifi-ssid', 'cfg-wifi-pass', 'cfg-failsafe-s', 'cfg-index', 'cfg-green-timeout-ms', 'cfg-all4-valve-ms', 'cfg-all4-lockout-s', 'cfg-seq-max-s', 'cfg-seq-dec-ms', 'cfg-seq-exp-pct']
+    // INVARIANT: every <input> in the config form that is synced from telemetry MUST appear here.
+    // This ensures both 'input' and 'change' events set formDirty (spinners, paste, autofill
+    // only fire 'change', not 'input'). The form-level listener alone is insufficient.
+    // ALL syncs must use syncConfigField(), never the bare activeElement pattern.
+    // Violating this causes the "typed value gets overwritten" bug.
+    const configInputs = ['cfg-id', 'cfg-host', 'cfg-description', 'cfg-node', 'cfg-wifi-ssid',
+      'cfg-wifi-pass', 'cfg-failsafe-s', 'cfg-index', 'cfg-green-timeout-ms', 'cfg-all4-valve-ms',
+      'cfg-all4-lockout-s', 'cfg-seq-max-s', 'cfg-seq-dec-ms', 'cfg-seq-exp-pct',
+      'cfg-red-seq-max-s', 'cfg-red-seq-valve-ms', 'cfg-red-seq-step-ms',
+      'cfg-pulse1-dur', 'cfg-pt-dur', 'cfg-pt-off', 'cfg-pt-count',
+      'cfg-steam-ramp', 'cfg-steam-open',
+      'cfg-green-recovery-ms', 'cfg-blue-recovery-ms', 'cfg-orange-recovery-ms', 'cfg-red-recovery-ms',
+      'cfg-temp-thresh1', 'cfg-temp-mult1', 'cfg-temp-thresh2', 'cfg-temp-mult2']
       .map((id) => document.getElementById(id))
       .filter(Boolean);
     let holdActive = false;
@@ -5176,7 +5126,7 @@ void PingTask(void *) {
                 const String valStr = body.substring(idx + 16);
                 if (!valStr.startsWith("null")) {
                   const float t = valStr.toFloat();
-                  if (t > -40.0f) { sum += t; valid++; }
+                  if (t > -30.0f) { sum += t; valid++; }  // ignore <= -30F (disconnected thermistor/ADC noise)
                 }
               }
             }

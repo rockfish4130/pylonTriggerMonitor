@@ -31,6 +31,26 @@ ESP32-S2 (Wemos S2 Pico) firmware for fire-effect pylons. PlatformIO/Arduino fra
 - **testnodex.local** — stress-test board; now safe to include in normal OTA deployments
 - **barbar.local** — Bar Mode development board
 
+## Web UI Config Inputs — formDirty Anti-Pattern (DO NOT VIOLATE)
+
+The web UI uses a 1-second `setInterval` telemetry refresh that re-syncs all config inputs from
+the ESP. Without protection, this overwrites values the user is actively typing. The fix is a
+`formDirty` flag. **Every time a config input is added, both rules below must be followed or the
+"typed value gets overwritten" bug returns. This has already regressed three times.**
+
+**Rule 1:** Every `<input>` in the config form that is synced from telemetry **must appear in the
+`configInputs` array** in the JS. This array attaches both `'input'` and `'change'` event listeners
+to each element. The form-level `'input'` listener alone is insufficient because spinners, paste,
+and autofill only fire `'change'`, not `'input'`.
+
+**Rule 2:** All telemetry→input sync calls **must use `syncConfigField(id, value)`**, never the
+bare `if (document.activeElement !== input)` pattern. `syncConfigField` checks `formDirty` and
+bails out completely when the user has unsaved edits. The activeElement check alone fails when
+focus moves to the Save button between keystroke and submit.
+
+Checkboxes (no text entry) are exempt from Rule 2 but still need to be inside the `if (!formDirty)`
+block. Display-only `<span>` elements go OUTSIDE the formDirty block so they always update.
+
 ## OSC Addresses
 - `/pylon/BooshMain` — raw solenoid open/close (1.0/0.0)
 - `/pylon/BooshPulseSingle` — single 50ms pulse (1.0)
