@@ -149,6 +149,13 @@ unsigned long green_recovery_until  = 0;  // runtime deadline; 0 = not in recove
 unsigned long blue_recovery_until   = 0;
 unsigned long orange_recovery_until = 0;
 unsigned long red_recovery_until    = 0;
+// Temperature-based recovery multipliers
+float barmode_temp_thresh1_f = 50.0f;   // recovery × mult1 when avg pylon temp drops below this; BARMODE NVS
+float barmode_temp_mult1     = 1.0f;    // multiplier 1; default 1.0 (no effect)
+float barmode_temp_thresh2_f = 32.0f;   // recovery × mult2 when avg pylon temp drops below this; BARMODE NVS
+float barmode_temp_mult2     = 1.0f;    // multiplier 2; default 1.0 (no effect)
+volatile float barmode_avg_temp_f      = NAN;  // average pylon temperature from 2-min poll; NAN = no data
+volatile float barmode_temp_multiplier = 1.0f; // current effective multiplier (recomputed after each poll)
 // Manually-pinned pylons (supplement the rpiboosh registry, NVS-persisted)
 constexpr int kManualPylonMax = 8;
 struct ManualPylon {
@@ -284,6 +291,10 @@ constexpr const char *kPrefsKeyGreenRecovMs  = "grn_rec_ms";  // uint32 ms; gree
 constexpr const char *kPrefsKeyBlueRecovMs   = "blu_rec_ms";  // uint32 ms; blue tap recovery period
 constexpr const char *kPrefsKeyOrangeRecovMs = "org_rec_ms";  // uint32 ms; orange tap recovery period
 constexpr const char *kPrefsKeyRedRecovMs    = "red_rec_ms";  // uint32 ms; red steam recovery period
+constexpr const char *kPrefsKeyTempThresh1   = "tmp_thresh1"; // float °F; temperature threshold 1
+constexpr const char *kPrefsKeyTempMult1     = "tmp_mult1";   // float; multiplier 1
+constexpr const char *kPrefsKeyTempThresh2   = "tmp_thresh2"; // float °F; temperature threshold 2
+constexpr const char *kPrefsKeyTempMult2     = "tmp_mult2";   // float; multiplier 2
 constexpr uint32_t kBooshFailsafeMinMs  = 1000;
 constexpr uint32_t kBooshFailsafeMaxMs  = 60000;
 
@@ -527,6 +538,10 @@ bool SavePylonConfig() {
   prefs.putUInt(kPrefsKeyBlueRecovMs,   static_cast<uint32_t>(barmode_blue_recovery_ms));
   prefs.putUInt(kPrefsKeyOrangeRecovMs, static_cast<uint32_t>(barmode_orange_recovery_ms));
   prefs.putUInt(kPrefsKeyRedRecovMs,    static_cast<uint32_t>(barmode_red_recovery_ms));
+  prefs.putFloat(kPrefsKeyTempThresh1,  barmode_temp_thresh1_f);
+  prefs.putFloat(kPrefsKeyTempMult1,    barmode_temp_mult1);
+  prefs.putFloat(kPrefsKeyTempThresh2,  barmode_temp_thresh2_f);
+  prefs.putFloat(kPrefsKeyTempMult2,    barmode_temp_mult2);
   {
     uint8_t mask = 0;
     for (int i = 0; i < 4; i++) if (barmode_btn_disabled[i]) mask |= (1 << i);
@@ -612,6 +627,10 @@ void LoadPylonConfig() {
   barmode_blue_recovery_ms   = prefs.getUInt(kPrefsKeyBlueRecovMs,   0);
   barmode_orange_recovery_ms = prefs.getUInt(kPrefsKeyOrangeRecovMs, 0);
   barmode_red_recovery_ms    = prefs.getUInt(kPrefsKeyRedRecovMs,    0);
+  barmode_temp_thresh1_f     = prefs.getFloat(kPrefsKeyTempThresh1,  50.0f);
+  barmode_temp_mult1         = prefs.getFloat(kPrefsKeyTempMult1,    1.0f);
+  barmode_temp_thresh2_f     = prefs.getFloat(kPrefsKeyTempThresh2,  32.0f);
+  barmode_temp_mult2         = prefs.getFloat(kPrefsKeyTempMult2,    1.0f);
   {
     const uint8_t mask = prefs.getUChar(kPrefsKeyBtnDisable, 0);
     for (int i = 0; i < 4; i++) barmode_btn_disabled[i] = (mask >> i) & 1;
@@ -934,6 +953,26 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
     barmode_red_recovery_ms = (unsigned long)ms;
     changed = true;
     if (log_output) Console.printf("[CFG] red_recovery_ms set: %lu\n", barmode_red_recovery_ms);
+  } else if (field == "temp_thresh1_f") {
+    barmode_temp_thresh1_f = value.toFloat();
+    changed = true;
+    if (log_output) Console.printf("[CFG] temp_thresh1_f set: %.1f\n", barmode_temp_thresh1_f);
+  } else if (field == "temp_mult1") {
+    const float m = value.toFloat();
+    if (m < 0.1f || m > 100.0f) { if (log_output) Console.println("[CFG] temp_mult1 out of range (0.1-100)"); return false; }
+    barmode_temp_mult1 = m;
+    changed = true;
+    if (log_output) Console.printf("[CFG] temp_mult1 set: %.2f\n", barmode_temp_mult1);
+  } else if (field == "temp_thresh2_f") {
+    barmode_temp_thresh2_f = value.toFloat();
+    changed = true;
+    if (log_output) Console.printf("[CFG] temp_thresh2_f set: %.1f\n", barmode_temp_thresh2_f);
+  } else if (field == "temp_mult2") {
+    const float m = value.toFloat();
+    if (m < 0.1f || m > 100.0f) { if (log_output) Console.println("[CFG] temp_mult2 out of range (0.1-100)"); return false; }
+    barmode_temp_mult2 = m;
+    changed = true;
+    if (log_output) Console.printf("[CFG] temp_mult2 set: %.2f\n", barmode_temp_mult2);
   } else if (field == "pulse1_dur_ms") {
     const int ms = (int)value.toInt();
     if (ms < 10 || ms > 5000) { if (log_output) Console.println("[CFG] pulse1_dur_ms out of range (10-5000)"); return false; }
@@ -1710,6 +1749,15 @@ String BuildTelemetryApiJson() {
   payload += "\"blue_recovery_ms\":" + String(barmode_blue_recovery_ms) + ",";
   payload += "\"orange_recovery_ms\":" + String(barmode_orange_recovery_ms) + ",";
   payload += "\"red_recovery_ms\":" + String(barmode_red_recovery_ms) + ",";
+  payload += "\"temp_thresh1_f\":" + String(barmode_temp_thresh1_f, 1) + ",";
+  payload += "\"temp_mult1\":" + String(barmode_temp_mult1, 2) + ",";
+  payload += "\"temp_thresh2_f\":" + String(barmode_temp_thresh2_f, 1) + ",";
+  payload += "\"temp_mult2\":" + String(barmode_temp_mult2, 2) + ",";
+  {
+    const float avg = barmode_avg_temp_f;
+    payload += "\"avg_pylon_temp_f\":" + (isnan(avg) ? String("null") : String(avg, 1)) + ",";
+    payload += "\"temp_multiplier\":" + String(barmode_temp_multiplier, 2) + ",";
+  }
   payload += "\"bpm\":" + String(barmode_bpm, 1) + ",";
   payload += "\"all4_valve_ms\":" + String(barmode_all4_valve_ms) + ",";
   payload += "\"all4_lockout_s\":" + String(barmode_all4_lockout_s) + ",";
@@ -1946,14 +1994,43 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           <label>Valve open (ms) <input id="cfg-red-seq-valve-ms" name="red_seq_valve_ms" type="number" min="20" max="2000" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(each pylon valve open time; default 66ms)</span></label>
           <label>Step delay (ms) <input id="cfg-red-seq-step-ms" name="red_seq_step_ms" type="number" min="50" max="5000" step="50" style="width:70px"> <span style="color:var(--muted);font-size:12px">(interval between pylon steps; default 200ms)</span></label>
         </div>
-        <div id="cfg-grp-recovery" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
-          <span style="color:var(--muted);font-size:13px">Button Recovery (ms)</span>
-          <span style="color:var(--muted);font-size:12px">After each tap action completes, the button is locked out for this duration. Lamp goes dark. Tap during lockout shows WAIT on display. 0 = disabled.</span>
-          <div style="display:flex;gap:16px;flex-wrap:wrap">
-            <label style="color:#4caf50;font-size:13px">&#11044; Green <input id="cfg-green-recovery-ms" name="green_recovery_ms" type="number" min="0" max="300000" step="500" style="width:80px;margin-left:6px"> ms</label>
-            <label style="color:#2196f3;font-size:13px">&#11044; Blue <input id="cfg-blue-recovery-ms" name="blue_recovery_ms" type="number" min="0" max="300000" step="500" style="width:80px;margin-left:6px"> ms</label>
-            <label style="color:#ff9800;font-size:13px">&#11044; Orange <input id="cfg-orange-recovery-ms" name="orange_recovery_ms" type="number" min="0" max="300000" step="500" style="width:80px;margin-left:6px"> ms</label>
-            <label style="color:#f44336;font-size:13px">&#11044; Red <input id="cfg-red-recovery-ms" name="red_recovery_ms" type="number" min="0" max="300000" step="500" style="width:80px;margin-left:6px"> ms</label>
+        <div id="cfg-grp-recovery" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:10px">
+          <span style="color:var(--muted);font-size:13px">Button Recovery</span>
+          <span style="color:var(--muted);font-size:12px">After each tap action completes, the button is locked out for this duration. Lamp goes dark. Tap during lockout shows WAIT on display. 0 = disabled. Effective time shown when temp multiplier is active.</span>
+          <div style="display:grid;gap:6px">
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <label style="color:#4caf50;font-size:13px;min-width:80px">&#11044; Green</label>
+              <label style="font-size:12px">Base (ms) <input id="cfg-green-recovery-ms" name="green_recovery_ms" type="number" min="0" max="300000" step="1" style="width:80px"></label>
+              <span id="rec-green-eff" style="color:var(--muted);font-size:12px"></span>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <label style="color:#2196f3;font-size:13px;min-width:80px">&#11044; Blue</label>
+              <label style="font-size:12px">Base (ms) <input id="cfg-blue-recovery-ms" name="blue_recovery_ms" type="number" min="0" max="300000" step="1" style="width:80px"></label>
+              <span id="rec-blue-eff" style="color:var(--muted);font-size:12px"></span>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <label style="color:#ff9800;font-size:13px;min-width:80px">&#11044; Orange</label>
+              <label style="font-size:12px">Base (ms) <input id="cfg-orange-recovery-ms" name="orange_recovery_ms" type="number" min="0" max="300000" step="1" style="width:80px"></label>
+              <span id="rec-orange-eff" style="color:var(--muted);font-size:12px"></span>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <label style="color:#f44336;font-size:13px;min-width:80px">&#11044; Red</label>
+              <label style="font-size:12px">Base (ms) <input id="cfg-red-recovery-ms" name="red_recovery_ms" type="number" min="0" max="300000" step="1" style="width:80px"></label>
+              <span id="rec-red-eff" style="color:var(--muted);font-size:12px"></span>
+            </div>
+          </div>
+          <div style="border-top:1px solid var(--line);padding-top:8px;display:grid;gap:8px">
+            <span style="color:var(--muted);font-size:13px">Temperature Multipliers</span>
+            <span style="color:var(--muted);font-size:12px">When avg pylon temp drops below a threshold, all recovery periods are multiplied. If both thresholds are breached, only the colder one applies.</span>
+            <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">
+              <label style="font-size:12px">Threshold 1 (°F) <input id="cfg-temp-thresh1" name="temp_thresh1_f" type="number" min="-60" max="120" step="0.5" style="width:70px"></label>
+              <label style="font-size:12px">Multiplier <input id="cfg-temp-mult1" name="temp_mult1" type="number" min="0.1" max="100" step="0.1" style="width:65px">×</label>
+            </div>
+            <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">
+              <label style="font-size:12px">Threshold 2 (°F) <input id="cfg-temp-thresh2" name="temp_thresh2_f" type="number" min="-60" max="120" step="0.5" style="width:70px"></label>
+              <label style="font-size:12px">Multiplier <input id="cfg-temp-mult2" name="temp_mult2" type="number" min="0.1" max="100" step="0.1" style="width:65px">×</label>
+            </div>
+            <div id="rec-temp-status" style="color:var(--muted);font-size:12px"></div>
           </div>
         </div>
         <div style="border-top:1px solid var(--line);padding-top:10px;display:flex;align-items:center;gap:10px">
@@ -2244,6 +2321,44 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       const redRecInput = document.getElementById('cfg-red-recovery-ms');
       if (redRecInput && document.activeElement !== redRecInput)
         redRecInput.value = data.red_recovery_ms != null ? data.red_recovery_ms : 0;
+      // Temp threshold inputs
+      const t1Input = document.getElementById('cfg-temp-thresh1');
+      if (t1Input && document.activeElement !== t1Input)
+        t1Input.value = data.temp_thresh1_f != null ? data.temp_thresh1_f : 50;
+      const m1Input = document.getElementById('cfg-temp-mult1');
+      if (m1Input && document.activeElement !== m1Input)
+        m1Input.value = data.temp_mult1 != null ? data.temp_mult1 : 1;
+      const t2Input = document.getElementById('cfg-temp-thresh2');
+      if (t2Input && document.activeElement !== t2Input)
+        t2Input.value = data.temp_thresh2_f != null ? data.temp_thresh2_f : 32;
+      const m2Input = document.getElementById('cfg-temp-mult2');
+      if (m2Input && document.activeElement !== m2Input)
+        m2Input.value = data.temp_mult2 != null ? data.temp_mult2 : 1;
+      // Effective recovery display (base × multiplier)
+      const mult = data.temp_multiplier != null ? data.temp_multiplier : 1;
+      function effStr(base) {
+        if (!base) return '';
+        if (mult <= 1.0) return '';
+        return '\u2192 ' + Math.round(base * mult) + ' ms effective';
+      }
+      const grnEff = document.getElementById('rec-green-eff');
+      if (grnEff) grnEff.textContent = effStr(data.green_recovery_ms);
+      const bluEff = document.getElementById('rec-blue-eff');
+      if (bluEff) bluEff.textContent = effStr(data.blue_recovery_ms);
+      const orgEff = document.getElementById('rec-orange-eff');
+      if (orgEff) orgEff.textContent = effStr(data.orange_recovery_ms);
+      const redEff = document.getElementById('rec-red-eff');
+      if (redEff) redEff.textContent = effStr(data.red_recovery_ms);
+      // Temp status line
+      const tempStat = document.getElementById('rec-temp-status');
+      if (tempStat) {
+        const avgT = data.avg_pylon_temp_f;
+        if (avgT == null) {
+          tempStat.textContent = 'Avg pylon temp: — (no data yet; polls every 2 min)';
+        } else {
+          tempStat.textContent = 'Avg pylon temp: ' + avgT.toFixed(1) + '\u00b0F \u2014 Active multiplier: ' + mult.toFixed(2) + '\u00d7';
+        }
+      }
       const apBox = document.getElementById('cfg-ap');
       if (apBox && document.activeElement !== apBox) apBox.checked = !!data.ap_enabled;
       const disWrap = document.getElementById('cfg-btn-disable-wrap');
@@ -2370,6 +2485,14 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       if (seqDecVal !== '') body.set('seq_dec_ms', seqDecVal);
       const seqExpVal = document.getElementById('cfg-seq-exp-pct').value.trim();
       if (seqExpVal !== '') body.set('seq_exp_pct', seqExpVal);
+      const t1Val = document.getElementById('cfg-temp-thresh1').value.trim();
+      if (t1Val !== '') body.set('temp_thresh1_f', t1Val);
+      const m1Val = document.getElementById('cfg-temp-mult1').value.trim();
+      if (m1Val !== '') body.set('temp_mult1', m1Val);
+      const t2Val = document.getElementById('cfg-temp-thresh2').value.trim();
+      if (t2Val !== '') body.set('temp_thresh2_f', t2Val);
+      const m2Val = document.getElementById('cfg-temp-mult2').value.trim();
+      if (m2Val !== '') body.set('temp_mult2', m2Val);
       const grnRecVal = document.getElementById('cfg-green-recovery-ms').value.trim();
       if (grnRecVal !== '') body.set('green_recovery_ms', grnRecVal);
       const bluRecVal = document.getElementById('cfg-blue-recovery-ms').value.trim();
@@ -4076,6 +4199,14 @@ void SendOscFloatToIP(const char *addr, float value, IPAddress dest) {
 
 // Extracts (IP, pylon_index) pairs from registry JSON, sorted ascending by pylon_index.
 // Ties (same index) stay grouped together. Returns count (max maxCount).
+// Returns base_ms × current temp multiplier (rounded). Returns 0 if base_ms is 0.
+unsigned long ApplyTempMult(unsigned long base_ms) {
+  if (base_ms == 0) return 0;
+  const float mult = barmode_temp_multiplier;
+  if (mult <= 1.0f) return base_ms;
+  return (unsigned long)(base_ms * mult + 0.5f);
+}
+
 int ExtractRegistryTargets(PylonTarget *dest, int maxCount) {
   String json;
   if (xSemaphoreTake(barmode_registry_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
@@ -4374,7 +4505,7 @@ void PollBarModeButtons() {
       if (!btn_stable[0] && btn_prev_stable[0] && barmode_btn0_held) {
         barmode_btn0_held = false;
         display.invertDisplay(false);
-        if (barmode_green_recovery_ms > 0) green_recovery_until = now + barmode_green_recovery_ms;
+        if (barmode_green_recovery_ms > 0) green_recovery_until = now + ApplyTempMult(barmode_green_recovery_ms);
       }
       // Timer-based close
       if (btn0_pulse_active && now - btn0_pulse_ms >= barmode_green_timeout_ms) {
@@ -4455,7 +4586,7 @@ void PollBarModeButtons() {
           btn1_seq_active = false;
           Console.println("[BarMode] Btn1 seq stopped");
         } else if (btn1_single_fired && barmode_blue_recovery_ms > 0) {
-          blue_recovery_until = now + barmode_blue_recovery_ms;
+          blue_recovery_until = now + ApplyTempMult(barmode_blue_recovery_ms);
         }
         btn1_single_fired = false;
       }
@@ -4532,7 +4663,7 @@ void PollBarModeButtons() {
       }
 
       if (o_falling && btn2_pending_release) {
-        if (barmode_orange_recovery_ms > 0) orange_recovery_until = now + barmode_orange_recovery_ms;
+        if (barmode_orange_recovery_ms > 0) orange_recovery_until = now + ApplyTempMult(barmode_orange_recovery_ms);
         btn2_pending_release = false;
       }
 
@@ -4656,7 +4787,7 @@ void PollBarModeButtons() {
           } else if (red_state == 3) {
             SendOscFloatToAllPylons(kOscAddrSteam, 0.0f);
             red_state = 0;
-            if (barmode_red_recovery_ms > 0) red_recovery_until = now + barmode_red_recovery_ms;
+            if (barmode_red_recovery_ms > 0) red_recovery_until = now + ApplyTempMult(barmode_red_recovery_ms);
             Console.println("[BarMode] Red: steam released");
           }
         }
@@ -5021,6 +5152,56 @@ void PingTask(void *) {
         } else if (WiFi.hostByName(mp.host, addr)) {
           mp.ip = addr; mp.resolved = true;
           Console.printf("[Manual] Resolved %s → %s\n", mp.host, addr.toString().c_str());
+        }
+      }
+
+      // Poll pylon temperatures every 2 minutes for recovery multiplier calculation
+      static unsigned long lastTempPollMs = 0;
+      const unsigned long now_t = millis();
+      if (now_t - lastTempPollMs >= 120000) {
+        lastTempPollMs = now_t;
+        PylonTarget targets[16];
+        const int tcount = ExtractRegistryTargets(targets, 16);
+        if (tcount > 0) {
+          float sum = 0.0f;
+          int valid = 0;
+          for (int i = 0; i < tcount; i++) {
+            HTTPClient http;
+            http.begin("http://" + targets[i].ip.toString() + "/api/telemetry");
+            http.setTimeout(2000);
+            if (http.GET() == 200) {
+              const String body = http.getString();
+              const int idx = body.indexOf("\"temperature_f\":");
+              if (idx >= 0) {
+                const String valStr = body.substring(idx + 16);
+                if (!valStr.startsWith("null")) {
+                  const float t = valStr.toFloat();
+                  if (t > -40.0f) { sum += t; valid++; }
+                }
+              }
+            }
+            http.end();
+          }
+          if (valid > 0) {
+            const float avg = sum / valid;
+            barmode_avg_temp_f = avg;
+            // Recompute multiplier: if below both thresholds, use the colder one's multiplier
+            const bool b1 = avg < barmode_temp_thresh1_f;
+            const bool b2 = avg < barmode_temp_thresh2_f;
+            float mult = 1.0f;
+            if (b1 && b2) {
+              mult = (barmode_temp_thresh1_f <= barmode_temp_thresh2_f)
+                     ? barmode_temp_mult1 : barmode_temp_mult2;
+            } else if (b1) {
+              mult = barmode_temp_mult1;
+            } else if (b2) {
+              mult = barmode_temp_mult2;
+            }
+            barmode_temp_multiplier = mult;
+            Console.printf("[TempPoll] avg=%.1f°F mult=%.2fx (%d pylons)\n", avg, mult, valid);
+          } else {
+            Console.println("[TempPoll] no valid readings");
+          }
         }
       }
 
