@@ -1757,8 +1757,12 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
               <td style="padding:5px 0">Pulse train — sends 5&times; 50 ms pulses to all pylons simultaneously.</td>
             </tr>
             <tr>
-              <td style="padding:5px 10px 5px 0;color:#f44336;white-space:nowrap">&#11044; Red hold</td>
-              <td style="padding:5px 0">Steam — opens all pylon steam valves while held (ramping frequency); closes on release.</td>
+              <td style="padding:5px 10px 5px 0;color:#f44336;white-space:nowrap">&#11044; Red tap</td>
+              <td style="padding:5px 0">Steam pulse — opens all pylon steam valves for 100 ms, then closes automatically.</td>
+            </tr>
+            <tr>
+              <td style="padding:5px 10px 5px 0;color:#f44336;white-space:nowrap">&#11044; Red triple-tap + hold</td>
+              <td style="padding:5px 0">Steam hold — tap, tap (suppressed), tap &amp; hold: opens all steam valves while held (ramping frequency); closes on release. Each tap must be within 300 ms of the previous.</td>
             </tr>
           </table>
         </div>
@@ -1768,7 +1772,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           <ol style="margin:0;padding:0 0 0 18px;display:grid;gap:8px">
             <li><span style="color:#2196f3;font-weight:600">Hold Blue 3 s</span> &rarr; Blue strobes 25% at 2 Hz; <span style="color:#4caf50">Green lamp ON</span>; Orange &amp; Red lamps off.</li>
             <li><span style="color:#4caf50;font-weight:600">Keep Blue + hold Green 3 s</span> &rarr; Blue &amp; Green strobe 50% at 4 Hz; <span style="color:#ff9800">Orange lamp ON</span>; Red lamp off.</li>
-            <li><span style="color:#ff9800;font-weight:600">Keep Blue+Green + hold Orange 2 s</span> &rarr; Blue, Green &amp; Orange strobe 75% at 6 Hz; Red lamp off.</li>
+            <li><span style="color:#ff9800;font-weight:600">Keep Blue+Green + hold Orange 2 s</span> &rarr; Blue, Green &amp; Orange strobe 75% at 6 Hz; <span style="color:#f44336">Red lamp ON solid.</span></li>
             <li><span style="color:#f44336;font-weight:600">Keep all three + hold Red 2 s</span> &rarr; All four lamps strobe 80% at 8 Hz; <b>all pylon valves open.</b></li>
           </ol>
           <div style="margin-top:8px;color:var(--muted);font-size:12px">Valves close and all lamps extinguish when any button is released <em>or</em> after the configured <b>All-4 valve open</b> timeout. All buttons must then be released before another sequence can start.</div>
@@ -3905,38 +3909,92 @@ void PollBarModeButtons() {
       }
     }
 
-    // Button 3 — Red button: BooshSteam hold; red lamp mirrors steam ramp while held, Morse LAVA idle
-    if (btn_stable[3] && !btn_prev_stable[3] && !barmode_btn_disabled[3]) {
-      barmode_btn_counts[3]++;
-      barmode_btn_event_ms[barmode_btn_event_head]  = now;
-      barmode_btn_event_btn[barmode_btn_event_head] = 3;
-      barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
-      if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
-      SendOscFloatToAllPylons(kOscAddrSteam, 1.0f);
-    } else if (!btn_stable[3] && btn_prev_stable[3] && !barmode_btn_disabled[3]) {
-      SendOscFloatToAllPylons(kOscAddrSteam, 0.0f);
-    }
+    // Button 3 — Red button: tap=100ms steam pulse; triple-tap+hold=steam hold mode
+    // State 0: idle
+    // State 1: first press fired (100ms close pending); ≤300ms window for 2nd press
+    // State 2: second press suppressed; ≤300ms window for 3rd press+hold
+    // State 3: steam hold active (hold open until released)
     {
+      static int           red_state        = 0;
+      static unsigned long red_press1_ms    = 0;   // time of 1st press
+      static unsigned long red_press2_ms    = 0;   // time of 2nd press
+      static bool          red_close_pending= false;
+      static unsigned long red_close_ms     = 0;   // when 100ms close should fire
       static unsigned long lamp_red_press_ms = 0;
-      static bool          lamp_red_on       = false;
-      static unsigned long lamp_red_step_ms  = 0;
+      static bool          lamp_red_on      = false;
+      static unsigned long lamp_red_step_ms = 0;
 
-      if (btn_stable[3] && !btn_prev_stable[3]) {
-        lamp_red_press_ms = now;
-        lamp_red_on       = false;
-        lamp_red_step_ms  = now - 10000;  // expire immediately so first pulse fires without delay
+      const bool r_rising  = btn_stable[3] && !btn_prev_stable[3];
+      const bool r_falling = !btn_stable[3] && btn_prev_stable[3];
+
+      if (!barmode_btn_disabled[3]) {
+        if (r_rising) {
+          if (red_state == 0) {
+            // First press: fire 100ms pulse
+            barmode_btn_counts[3]++;
+            barmode_btn_event_ms[barmode_btn_event_head]  = now;
+            barmode_btn_event_btn[barmode_btn_event_head] = 3;
+            barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
+            if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
+            SendOscFloatToAllPylons(kOscAddrSteam, 1.0f);
+            red_close_pending = true;
+            red_close_ms      = now;
+            red_press1_ms     = now;
+            red_state         = 1;
+            Console.println("[BarMode] Red: pulse open");
+          } else if (red_state == 1 && now - red_press1_ms <= 300) {
+            // Second press within 300ms: suppress
+            red_press2_ms = now;
+            red_state     = 2;
+            Console.println("[BarMode] Red: 2nd press suppressed");
+          } else if (red_state == 2 && now - red_press2_ms <= 300) {
+            // Third press within 300ms of second + hold: activate steam
+            SendOscFloatToAllPylons(kOscAddrSteam, 1.0f);
+            lamp_red_press_ms = now;
+            lamp_red_on       = false;
+            lamp_red_step_ms  = now - 10000;  // expire so first pulse fires immediately
+            red_state         = 3;
+            Console.println("[BarMode] Red: steam hold active");
+          } else {
+            // Out-of-window press: treat as a fresh first press
+            red_close_pending = false;  // cancel any pending close (was already sent if fired)
+            SendOscFloatToAllPylons(kOscAddrSteam, 1.0f);
+            red_close_pending = true;
+            red_close_ms      = now;
+            red_press1_ms     = now;
+            red_state         = 1;
+          }
+        }
+
+        if (r_falling && red_state == 3) {
+          SendOscFloatToAllPylons(kOscAddrSteam, 0.0f);
+          red_state = 0;
+          Console.println("[BarMode] Red: steam hold released");
+        }
+
+        // 100ms close timer
+        if (red_close_pending && now - red_close_ms >= 100) {
+          SendOscFloatToAllPylons(kOscAddrSteam, 0.0f);
+          red_close_pending = false;
+          Console.println("[BarMode] Red: pulse close");
+        }
+
+        // State timeout: reset to idle if window expires without next press
+        if (red_state == 1 && now - red_press1_ms > 300) { red_state = 0; }
+        if (red_state == 2 && now - red_press2_ms > 300) { red_state = 0; }
       }
 
+      // Red lamp: disabled=30%, steam hold ramp, idle=Morse LAVA
       if (barmode_btn_disabled[3]) {
-        ledcWrite(6, 77);  // 30% dim when disabled
-      } else if (btn_stable[3]) {
-        // Steam ramp: freq 1→10 Hz over 4s (same timing as solenoid sequence), full on after 4s
+        ledcWrite(6, 77);
+      } else if (red_state == 3) {
+        // Steam ramp: freq 1→10 Hz over 4s, full on after 4s
         const unsigned long elapsed = now - lamp_red_press_ms;
         if (elapsed >= 4000) {
           ledcWrite(6, 255);
         } else {
-          const float   t_sec      = elapsed / 1000.0f;
-          const float   freq_hz    = powf(10.0f, t_sec / 4.0f);
+          const float    t_sec     = elapsed / 1000.0f;
+          const float    freq_hz   = powf(10.0f, t_sec / 4.0f);
           const uint32_t period_ms = (uint32_t)(1000.0f / freq_hz);
           const uint32_t off_ms    = period_ms > 50 ? period_ms - 50 : 0;
           if (lamp_red_on) {
@@ -3980,6 +4038,7 @@ void PollBarModeButtons() {
       } else if (seq_phase == 3) {
         const uint8_t s = (now % 167 < 125) ? 192 : 0;  // 6Hz 75%
         b = g = o = s;
+        r = 255;  // red: solid ON
       } else if (seq_phase == 4) {
         const uint8_t s = (now % 125 < 100) ? 204 : 0;  // 8Hz 80%
         b = g = o = r = s;
