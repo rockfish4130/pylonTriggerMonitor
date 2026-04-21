@@ -3615,7 +3615,7 @@ void PollBarModeButtons() {
     }
 
     // Blue lamp: 50ms pulse per second idle
-    ledcWrite(5, (now % 1000 < 50) ? 255 : 0);
+    ledcWrite(5, (now % 1000 < 200) ? 255 : 0);
 
     // Button 2 — Orange button: BooshPulseTrain; IO35 strobes 5x pulse pattern once then returns to idle sawtooth
     {
