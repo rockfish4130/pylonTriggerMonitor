@@ -2988,12 +2988,22 @@ void HandleConfigPostApi() {
   const bool has_steam_ramp_ms   = webServer.hasArg("steam_ramp_ms");
   const bool has_steam_open_ms   = webServer.hasArg("steam_open_ms");
   const bool has_steam_dis       = webServer.hasArg("steam_dis");
+  const bool has_green_rec_ms    = webServer.hasArg("green_recovery_ms");
+  const bool has_blue_rec_ms     = webServer.hasArg("blue_recovery_ms");
+  const bool has_orange_rec_ms   = webServer.hasArg("orange_recovery_ms");
+  const bool has_red_rec_ms      = webServer.hasArg("red_recovery_ms");
+  const bool has_temp_thresh1    = webServer.hasArg("temp_thresh1_f");
+  const bool has_temp_mult1      = webServer.hasArg("temp_mult1");
+  const bool has_temp_thresh2    = webServer.hasArg("temp_thresh2_f");
+  const bool has_temp_mult2      = webServer.hasArg("temp_mult2");
 
   if (!has_node && !has_id && !has_host && !has_desc &&
       !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index && !has_seq_max_s && !has_seq_dec_ms && !has_seq_exp_pct && !has_btn_disabled && !has_green_timeout && !has_all4_valve_ms && !has_all4_lockout_s &&
       !has_red_seq_max_s && !has_red_seq_valve_ms && !has_red_seq_step_ms &&
       !has_pulse1_dur_ms && !has_pulse1_dis && !has_pt_dur_ms && !has_pt_off_ms && !has_pt_count && !has_pt_dis &&
-      !has_steam_ramp_ms && !has_steam_open_ms && !has_steam_dis) {
+      !has_steam_ramp_ms && !has_steam_open_ms && !has_steam_dis &&
+      !has_green_rec_ms && !has_blue_rec_ms && !has_orange_rec_ms && !has_red_rec_ms &&
+      !has_temp_thresh1 && !has_temp_mult1 && !has_temp_thresh2 && !has_temp_mult2) {
     SendApiError(400, "no recognized config field");
     return;
   }
@@ -3036,6 +3046,14 @@ void HandleConfigPostApi() {
   if (has_steam_ramp_ms) ok = ok && SetConfigFieldValue("steam_ramp_ms", webServer.arg("steam_ramp_ms"));
   if (has_steam_open_ms) ok = ok && SetConfigFieldValue("steam_open_ms", webServer.arg("steam_open_ms"));
   if (has_steam_dis)     ok = ok && SetConfigFieldValue("steam_dis",     webServer.arg("steam_dis"));
+  if (has_green_rec_ms)  ok = ok && SetConfigFieldValue("green_recovery_ms",  webServer.arg("green_recovery_ms"));
+  if (has_blue_rec_ms)   ok = ok && SetConfigFieldValue("blue_recovery_ms",   webServer.arg("blue_recovery_ms"));
+  if (has_orange_rec_ms) ok = ok && SetConfigFieldValue("orange_recovery_ms", webServer.arg("orange_recovery_ms"));
+  if (has_red_rec_ms)    ok = ok && SetConfigFieldValue("red_recovery_ms",    webServer.arg("red_recovery_ms"));
+  if (has_temp_thresh1)  ok = ok && SetConfigFieldValue("temp_thresh1_f",     webServer.arg("temp_thresh1_f"));
+  if (has_temp_mult1)    ok = ok && SetConfigFieldValue("temp_mult1",         webServer.arg("temp_mult1"));
+  if (has_temp_thresh2)  ok = ok && SetConfigFieldValue("temp_thresh2_f",     webServer.arg("temp_thresh2_f"));
+  if (has_temp_mult2)    ok = ok && SetConfigFieldValue("temp_mult2",         webServer.arg("temp_mult2"));
   if (has_btn_disabled) {
     // Accepts "0101" bitmask string: index 0=green,1=blue,2=orange,3=red; '1'=disabled
     const String v = webServer.arg("btn_disabled");
