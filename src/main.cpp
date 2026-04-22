@@ -156,6 +156,8 @@ float barmode_temp_thresh2_f = 32.0f;   // recovery × mult2 when avg pylon temp
 float barmode_temp_mult2     = 1.0f;    // multiplier 2; default 1.0 (no effect)
 volatile float barmode_avg_temp_f      = NAN;  // average pylon temperature from 2-min poll; NAN = no data
 volatile float barmode_temp_multiplier = 1.0f; // current effective multiplier (recomputed after each poll)
+bool cfg_no_thermistor = false;  // when true, temperature is always reported as null/N/A
+bool cfg_no_batt_mon   = false;  // when true, battery V/SOC are always reported as null/N/A
 // Manually-pinned pylons (supplement the rpiboosh registry, NVS-persisted)
 constexpr int kManualPylonMax = 8;
 struct ManualPylon {
@@ -295,6 +297,8 @@ constexpr const char *kPrefsKeyTempThresh1   = "tmp_thresh1"; // float °F; temp
 constexpr const char *kPrefsKeyTempMult1     = "tmp_mult1";   // float; multiplier 1
 constexpr const char *kPrefsKeyTempThresh2   = "tmp_thresh2"; // float °F; temperature threshold 2
 constexpr const char *kPrefsKeyTempMult2     = "tmp_mult2";   // float; multiplier 2
+constexpr const char *kPrefsKeyNoThermistor  = "no_thermistor"; // bool; suppress temp readings
+constexpr const char *kPrefsKeyNoBattMon     = "no_batt_mon";   // bool; suppress battery readings
 constexpr uint32_t kBooshFailsafeMinMs  = 1000;
 constexpr uint32_t kBooshFailsafeMaxMs  = 60000;
 
@@ -542,6 +546,8 @@ bool SavePylonConfig() {
   prefs.putFloat(kPrefsKeyTempMult1,    barmode_temp_mult1);
   prefs.putFloat(kPrefsKeyTempThresh2,  barmode_temp_thresh2_f);
   prefs.putFloat(kPrefsKeyTempMult2,    barmode_temp_mult2);
+  prefs.putBool(kPrefsKeyNoThermistor,  cfg_no_thermistor);
+  prefs.putBool(kPrefsKeyNoBattMon,     cfg_no_batt_mon);
   {
     uint8_t mask = 0;
     for (int i = 0; i < 4; i++) if (barmode_btn_disabled[i]) mask |= (1 << i);
@@ -631,6 +637,8 @@ void LoadPylonConfig() {
   barmode_temp_mult1         = prefs.getFloat(kPrefsKeyTempMult1,    1.0f);
   barmode_temp_thresh2_f     = prefs.getFloat(kPrefsKeyTempThresh2,  32.0f);
   barmode_temp_mult2         = prefs.getFloat(kPrefsKeyTempMult2,    1.0f);
+  cfg_no_thermistor          = prefs.getBool(kPrefsKeyNoThermistor,  false);
+  cfg_no_batt_mon            = prefs.getBool(kPrefsKeyNoBattMon,     false);
   {
     const uint8_t mask = prefs.getUChar(kPrefsKeyBtnDisable, 0);
     for (int i = 0; i < 4; i++) barmode_btn_disabled[i] = (mask >> i) & 1;
@@ -973,6 +981,14 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
     barmode_temp_mult2 = m;
     changed = true;
     if (log_output) Console.printf("[CFG] temp_mult2 set: %.2f\n", barmode_temp_mult2);
+  } else if (field == "no_thermistor") {
+    cfg_no_thermistor = (value == "1" || value == "true");
+    changed = true;
+    if (log_output) Console.printf("[CFG] no_thermistor set: %s\n", cfg_no_thermistor ? "true" : "false");
+  } else if (field == "no_batt_mon") {
+    cfg_no_batt_mon = (value == "1" || value == "true");
+    changed = true;
+    if (log_output) Console.printf("[CFG] no_batt_mon set: %s\n", cfg_no_batt_mon ? "true" : "false");
   } else if (field == "pulse1_dur_ms") {
     const int ms = (int)value.toInt();
     if (ms < 10 || ms > 5000) { if (log_output) Console.println("[CFG] pulse1_dur_ms out of range (10-5000)"); return false; }
@@ -1169,15 +1185,21 @@ String BuildRegistryPayload() {
       snprintf(sbuf, sizeof(sbuf), "%.2f", v);
       return String(sbuf);
     };
-    payload += "\"temperature\":" + fmtOrNull(sensor_temp_f) + ",";
-    payload += "\"temperature_f\":" + fmtOrNull(sensor_temp_f) + ",";
-    const float tempC = isfinite(sensor_temp_f) ? (sensor_temp_f - 32.0f) * 5.0f / 9.0f : NAN;
+    const float eff_temp_f = cfg_no_thermistor ? NAN : sensor_temp_f;
+    const float eff_batt_v = cfg_no_batt_mon   ? NAN : sensor_battery_v;
+    const float eff_batt_pct = cfg_no_batt_mon ? NAN : sensor_battery_pct;
+    const float eff_batt_h = cfg_no_batt_mon   ? NAN : sensor_battery_time_remaining_h;
+    payload += "\"temperature\":" + fmtOrNull(eff_temp_f) + ",";
+    payload += "\"temperature_f\":" + fmtOrNull(eff_temp_f) + ",";
+    const float tempC = isfinite(eff_temp_f) ? (eff_temp_f - 32.0f) * 5.0f / 9.0f : NAN;
     payload += "\"temperature_c\":" + fmtOrNull(tempC) + ",";
-    payload += "\"battery_voltage\":" + fmtOrNull(sensor_battery_v) + ",";
-    payload += "\"battery_voltage_v\":" + fmtOrNull(sensor_battery_v) + ",";
-    payload += "\"battery_charge\":" + fmtOrNull(sensor_battery_pct) + ",";
-    payload += "\"battery_charge_pct\":" + fmtOrNull(sensor_battery_pct) + ",";
-    payload += "\"battery_time_remaining_h\":" + fmtOrNull(sensor_battery_time_remaining_h) + ",";
+    payload += "\"battery_voltage\":" + fmtOrNull(eff_batt_v) + ",";
+    payload += "\"battery_voltage_v\":" + fmtOrNull(eff_batt_v) + ",";
+    payload += "\"battery_charge\":" + fmtOrNull(eff_batt_pct) + ",";
+    payload += "\"battery_charge_pct\":" + fmtOrNull(eff_batt_pct) + ",";
+    payload += "\"battery_time_remaining_h\":" + fmtOrNull(eff_batt_h) + ",";
+    payload += "\"no_thermistor\":" + String(cfg_no_thermistor ? "true" : "false") + ",";
+    payload += "\"no_batt_mon\":" + String(cfg_no_batt_mon ? "true" : "false") + ",";
   }
   payload += "\"wifi_rssi_dbm\":" + String(wifi_rssi_dbm) + ",";
   payload += "\"uptime_s\":" + String(static_cast<uint32_t>(millis() / 1000)) + ",";
@@ -1791,38 +1813,44 @@ String BuildTelemetryApiJson() {
   payload += "\"target_ip\":\"" + JsonEscape(target_ip_string) + "\",";
   {
     char buf[16];
+    const float eff_batt_v2   = cfg_no_batt_mon   ? NAN : sensor_battery_v;
+    const float eff_batt_pct2 = cfg_no_batt_mon   ? NAN : sensor_battery_pct;
+    const float eff_batt_h2   = cfg_no_batt_mon   ? NAN : sensor_battery_time_remaining_h;
+    const float eff_temp_f2   = cfg_no_thermistor  ? NAN : sensor_temp_f;
     payload += "\"battery_voltage_v\":";
-    if (isfinite(sensor_battery_v)) {
-      snprintf(buf, sizeof(buf), "%.2f", sensor_battery_v);
+    if (isfinite(eff_batt_v2)) {
+      snprintf(buf, sizeof(buf), "%.2f", eff_batt_v2);
       payload += buf;
     } else {
       payload += "null";
     }
     payload += ",";
     payload += "\"battery_charge_pct\":";
-    if (isfinite(sensor_battery_pct)) {
-      snprintf(buf, sizeof(buf), "%.1f", sensor_battery_pct);
+    if (isfinite(eff_batt_pct2)) {
+      snprintf(buf, sizeof(buf), "%.1f", eff_batt_pct2);
       payload += buf;
     } else {
       payload += "null";
     }
     payload += ",";
     payload += "\"battery_time_remaining_h\":";
-    if (isfinite(sensor_battery_time_remaining_h)) {
-      snprintf(buf, sizeof(buf), "%.1f", sensor_battery_time_remaining_h);
+    if (isfinite(eff_batt_h2)) {
+      snprintf(buf, sizeof(buf), "%.1f", eff_batt_h2);
       payload += buf;
     } else {
       payload += "null";
     }
     payload += ",";
     payload += "\"temperature_f\":";
-    if (isfinite(sensor_temp_f)) {
-      snprintf(buf, sizeof(buf), "%.1f", sensor_temp_f);
+    if (isfinite(eff_temp_f2)) {
+      snprintf(buf, sizeof(buf), "%.1f", eff_temp_f2);
       payload += buf;
     } else {
       payload += "null";
     }
     payload += ",";
+    payload += "\"no_thermistor\":" + String(cfg_no_thermistor ? "true" : "false") + ",";
+    payload += "\"no_batt_mon\":" + String(cfg_no_batt_mon ? "true" : "false") + ",";
   }
   payload += "\"telemetry\":{";
   payload += "\"ipv4\":\"" + JsonEscape(ip) + "\",";
@@ -2031,6 +2059,16 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
               <label style="font-size:12px">Multiplier <input id="cfg-temp-mult2" name="temp_mult2" type="number" min="0.1" max="100" step="0.1" style="width:65px">×</label>
             </div>
             <div id="rec-temp-status" style="color:var(--muted);font-size:12px"></div>
+          </div>
+        </div>
+        <div style="border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <input type="checkbox" id="cfg-no-thermistor" style="width:18px;height:18px;margin:0;cursor:pointer;accent-color:var(--accent)">
+            <span style="color:var(--muted);font-size:14px">No thermistor present &mdash; temperature always N/A, hide temp plots</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <input type="checkbox" id="cfg-no-batt-mon" style="width:18px;height:18px;margin:0;cursor:pointer;accent-color:var(--accent)">
+            <span style="color:var(--muted);font-size:14px">No battery monitor present &mdash; voltage/SOC always N/A, hide battery plots</span>
           </div>
         </div>
         <div style="border-top:1px solid var(--line);padding-top:10px;display:flex;align-items:center;gap:10px">
@@ -2283,6 +2321,10 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       syncConfigField('cfg-temp-mult2',   data.temp_mult2     != null ? data.temp_mult2     : 1);
       const apBox = document.getElementById('cfg-ap');
       if (apBox && document.activeElement !== apBox) apBox.checked = !!data.ap_enabled;
+      const noThermBox = document.getElementById('cfg-no-thermistor');
+      if (noThermBox && document.activeElement !== noThermBox) noThermBox.checked = !!data.no_thermistor;
+      const noBattBox = document.getElementById('cfg-no-batt-mon');
+      if (noBattBox && document.activeElement !== noBattBox) noBattBox.checked = !!data.no_batt_mon;
       const disWrap = document.getElementById('cfg-btn-disable-wrap');
       if (disWrap) disWrap.style.display = barmodeActive ? 'flex' : 'none';
       if (barmodeActive && Array.isArray(data.btn_disabled)) {
@@ -2293,6 +2335,13 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       }
       } // end if (!formDirty)
       // Display-only updates run every refresh regardless of formDirty
+      {
+        // Show/hide chart panels based on hardware presence flags
+        const battPanels = ['chart-short','chart-long'].map(id => document.getElementById(id)?.closest('.panel')).filter(Boolean);
+        const tempPanels = ['chart-temp-short','chart-temp-long'].map(id => document.getElementById(id)?.closest('.panel')).filter(Boolean);
+        battPanels.forEach(p => p.style.display = data.no_batt_mon ? 'none' : '');
+        tempPanels.forEach(p => p.style.display = data.no_thermistor ? 'none' : '');
+      }
       {
         const mult = data.temp_multiplier != null ? data.temp_multiplier : 1;
         const effStr = (base) => (!base || mult <= 1.0) ? '' : ('\u2192 ' + Math.round(base * mult) + ' ms effective');
@@ -2429,6 +2478,8 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       const stmOpenVal = document.getElementById('cfg-steam-open').value.trim();
       if (stmOpenVal !== '') body.set('steam_open_ms', stmOpenVal);
       body.set('steam_dis', document.getElementById('cfg-steam-dis').checked ? '1' : '0');
+      body.set('no_thermistor', document.getElementById('cfg-no-thermistor').checked ? '1' : '0');
+      body.set('no_batt_mon',   document.getElementById('cfg-no-batt-mon').checked   ? '1' : '0');
       const seqMaxVal = document.getElementById('cfg-seq-max-s').value.trim();
       if (seqMaxVal !== '') body.set('seq_max_s', seqMaxVal);
       const seqDecVal = document.getElementById('cfg-seq-dec-ms').value.trim();
@@ -2996,6 +3047,8 @@ void HandleConfigPostApi() {
   const bool has_temp_mult1      = webServer.hasArg("temp_mult1");
   const bool has_temp_thresh2    = webServer.hasArg("temp_thresh2_f");
   const bool has_temp_mult2      = webServer.hasArg("temp_mult2");
+  const bool has_no_thermistor   = webServer.hasArg("no_thermistor");
+  const bool has_no_batt_mon     = webServer.hasArg("no_batt_mon");
 
   if (!has_node && !has_id && !has_host && !has_desc &&
       !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index && !has_seq_max_s && !has_seq_dec_ms && !has_seq_exp_pct && !has_btn_disabled && !has_green_timeout && !has_all4_valve_ms && !has_all4_lockout_s &&
@@ -3003,7 +3056,8 @@ void HandleConfigPostApi() {
       !has_pulse1_dur_ms && !has_pulse1_dis && !has_pt_dur_ms && !has_pt_off_ms && !has_pt_count && !has_pt_dis &&
       !has_steam_ramp_ms && !has_steam_open_ms && !has_steam_dis &&
       !has_green_rec_ms && !has_blue_rec_ms && !has_orange_rec_ms && !has_red_rec_ms &&
-      !has_temp_thresh1 && !has_temp_mult1 && !has_temp_thresh2 && !has_temp_mult2) {
+      !has_temp_thresh1 && !has_temp_mult1 && !has_temp_thresh2 && !has_temp_mult2 &&
+      !has_no_thermistor && !has_no_batt_mon) {
     SendApiError(400, "no recognized config field");
     return;
   }
@@ -3054,6 +3108,8 @@ void HandleConfigPostApi() {
   if (has_temp_mult1)    ok = ok && SetConfigFieldValue("temp_mult1",         webServer.arg("temp_mult1"));
   if (has_temp_thresh2)  ok = ok && SetConfigFieldValue("temp_thresh2_f",     webServer.arg("temp_thresh2_f"));
   if (has_temp_mult2)    ok = ok && SetConfigFieldValue("temp_mult2",         webServer.arg("temp_mult2"));
+  if (has_no_thermistor) ok = ok && SetConfigFieldValue("no_thermistor",      webServer.arg("no_thermistor"));
+  if (has_no_batt_mon)   ok = ok && SetConfigFieldValue("no_batt_mon",        webServer.arg("no_batt_mon"));
   if (has_btn_disabled) {
     // Accepts "0101" bitmask string: index 0=green,1=blue,2=orange,3=red; '1'=disabled
     const String v = webServer.arg("btn_disabled");
