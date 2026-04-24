@@ -776,6 +776,7 @@ void PrintCliHelp() {
   Console.println("  set seq_max_s <value>  (barmode btn1 seq max hold, 1-120s, default 30)");
   Console.println("  set seq_dec_ms <value> (barmode btn1 delay decrement per step, 0-2000ms, default 50)");
   Console.println("  clear nvs          (erase saved id/host/desc)");
+  Console.println("  reboot             (restart the device)");
   Console.println("  set use_dhcp true|false      (true=DHCP (default), false=static IP)");
   Console.println("  set static_ip <x.x.x.x>     (static IPv4 address)");
   Console.println("  set static_gw <x.x.x.x>     (default gateway)");
@@ -1137,6 +1138,12 @@ void HandleCliCommand(const String &input_line) {
   }
   if (line.equalsIgnoreCase("show")) {
     PrintPylonConfig();
+    return;
+  }
+  if (line.equalsIgnoreCase("reboot")) {
+    Console.println("[CLI] rebooting...");
+    delay(100);
+    ESP.restart();
     return;
   }
   if (line.equalsIgnoreCase("clear nvs")) {
