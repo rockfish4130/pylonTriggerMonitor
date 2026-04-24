@@ -5,3 +5,4 @@
 .vscode/ipch
 src/wifi_credentials.h
 spending/
+fw_cache/
