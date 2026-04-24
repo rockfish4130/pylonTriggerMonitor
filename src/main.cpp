@@ -158,6 +158,11 @@ volatile float barmode_avg_temp_f      = NAN;  // average pylon temperature from
 volatile float barmode_temp_multiplier = 1.0f; // current effective multiplier (recomputed after each poll)
 bool cfg_no_thermistor = false;  // when true, temperature is always reported as null/N/A
 bool cfg_no_batt_mon   = false;  // when true, battery V/SOC are always reported as null/N/A
+bool   cfg_use_dhcp    = true;   // false = use static IP config below
+String cfg_static_ip   = "";     // static IPv4 address (e.g. "192.168.4.100")
+String cfg_static_gw   = "";     // default gateway
+String cfg_static_dns1 = "";     // primary DNS (defaults to gateway if empty)
+String cfg_static_dns2 = "";     // secondary DNS (defaults to 8.8.8.8 if empty)
 // Manually-pinned pylons (supplement the rpiboosh registry, NVS-persisted)
 constexpr int kManualPylonMax = 8;
 struct ManualPylon {
@@ -299,6 +304,11 @@ constexpr const char *kPrefsKeyTempThresh2   = "tmp_thresh2"; // float °F; temp
 constexpr const char *kPrefsKeyTempMult2     = "tmp_mult2";   // float; multiplier 2
 constexpr const char *kPrefsKeyNoThermistor  = "no_thermistor"; // bool; suppress temp readings
 constexpr const char *kPrefsKeyNoBattMon     = "no_batt_mon";   // bool; suppress battery readings
+constexpr const char *kPrefsKeyUseDhcp       = "use_dhcp";      // bool; true=DHCP (default), false=static
+constexpr const char *kPrefsKeyStaticIp      = "static_ip";     // string; static IPv4 address
+constexpr const char *kPrefsKeyStaticGw      = "static_gw";     // string; static default gateway
+constexpr const char *kPrefsKeyStaticDns1    = "static_dns1";   // string; primary DNS
+constexpr const char *kPrefsKeyStaticDns2    = "static_dns2";   // string; secondary DNS
 constexpr uint32_t kBooshFailsafeMinMs  = 1000;
 constexpr uint32_t kBooshFailsafeMaxMs  = 60000;
 
@@ -548,6 +558,11 @@ bool SavePylonConfig() {
   prefs.putFloat(kPrefsKeyTempMult2,    barmode_temp_mult2);
   prefs.putBool(kPrefsKeyNoThermistor,  cfg_no_thermistor);
   prefs.putBool(kPrefsKeyNoBattMon,     cfg_no_batt_mon);
+  prefs.putBool(kPrefsKeyUseDhcp,       cfg_use_dhcp);
+  prefs.putString(kPrefsKeyStaticIp,    cfg_static_ip);
+  prefs.putString(kPrefsKeyStaticGw,    cfg_static_gw);
+  prefs.putString(kPrefsKeyStaticDns1,  cfg_static_dns1);
+  prefs.putString(kPrefsKeyStaticDns2,  cfg_static_dns2);
   {
     uint8_t mask = 0;
     for (int i = 0; i < 4; i++) if (barmode_btn_disabled[i]) mask |= (1 << i);
@@ -591,6 +606,16 @@ void PrintPylonConfig() {
   Console.println(user_wifi_pass.length() > 0 ? "***" : "(not set)");
   Console.print("  failsafe_ms: ");
   Console.println(boosh_failsafe_timeout_ms);
+  Console.print("  use_dhcp: ");
+  Console.println(cfg_use_dhcp ? "true" : "false");
+  if (!cfg_use_dhcp) {
+    Console.print("  static_ip:   "); Console.println(cfg_static_ip.length()   > 0 ? cfg_static_ip   : "(not set)");
+    Console.print("  static_gw:   "); Console.println(cfg_static_gw.length()   > 0 ? cfg_static_gw   : "(not set)");
+    Console.print("  static_dns1: "); Console.println(cfg_static_dns1.length() > 0 ? cfg_static_dns1 : "(default: gw)");
+    Console.print("  static_dns2: "); Console.println(cfg_static_dns2.length() > 0 ? cfg_static_dns2 : "(default: 8.8.8.8)");
+  }
+  Console.print("  effective IP: ");
+  Console.println(WiFi.localIP().toString());
 }
 
 void LoadPylonConfig() {
@@ -639,6 +664,11 @@ void LoadPylonConfig() {
   barmode_temp_mult2         = prefs.getFloat(kPrefsKeyTempMult2,    1.0f);
   cfg_no_thermistor          = prefs.getBool(kPrefsKeyNoThermistor,  false);
   cfg_no_batt_mon            = prefs.getBool(kPrefsKeyNoBattMon,     false);
+  cfg_use_dhcp               = prefs.getBool(kPrefsKeyUseDhcp,       true);
+  cfg_static_ip              = prefs.getString(kPrefsKeyStaticIp,    "");
+  cfg_static_gw              = prefs.getString(kPrefsKeyStaticGw,    "");
+  cfg_static_dns1            = prefs.getString(kPrefsKeyStaticDns1,  "");
+  cfg_static_dns2            = prefs.getString(kPrefsKeyStaticDns2,  "");
   {
     const uint8_t mask = prefs.getUChar(kPrefsKeyBtnDisable, 0);
     for (int i = 0; i < 4; i++) barmode_btn_disabled[i] = (mask >> i) & 1;
@@ -746,6 +776,12 @@ void PrintCliHelp() {
   Console.println("  set seq_max_s <value>  (barmode btn1 seq max hold, 1-120s, default 30)");
   Console.println("  set seq_dec_ms <value> (barmode btn1 delay decrement per step, 0-2000ms, default 50)");
   Console.println("  clear nvs          (erase saved id/host/desc)");
+  Console.println("  set use_dhcp true|false      (true=DHCP (default), false=static IP)");
+  Console.println("  set static_ip <x.x.x.x>     (static IPv4 address)");
+  Console.println("  set static_gw <x.x.x.x>     (default gateway)");
+  Console.println("  set static_dns1 <x.x.x.x>   (primary DNS; default: gateway)");
+  Console.println("  set static_dns2 <x.x.x.x>   (secondary DNS; default: 8.8.8.8)");
+  Console.println("  (IP settings take effect on next reboot)");
 }
 
 bool SetConfigFieldValue(const String &field_in, const String &value_in, bool log_output = true) {
@@ -981,6 +1017,22 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
     barmode_temp_mult2 = m;
     changed = true;
     if (log_output) Console.printf("[CFG] temp_mult2 set: %.2f\n", barmode_temp_mult2);
+  } else if (field == "use_dhcp") {
+    const String v = ToLowerAscii(value);
+    cfg_use_dhcp = (v == "true" || v == "1" || v == "yes" || v == "on");
+    changed = true;
+    if (log_output) Console.printf("[CFG] use_dhcp set: %s (takes effect on next reboot)\n", cfg_use_dhcp ? "true" : "false");
+  } else if (field == "static_ip" || field == "static_gw" || field == "static_dns1" || field == "static_dns2") {
+    IPAddress addr;
+    if (!addr.fromString(value)) {
+      if (log_output) Console.printf("[CFG] %s: invalid IPv4 address\n", field.c_str());
+      return false;
+    }
+    if (field == "static_ip")   { cfg_static_ip   = value; changed = true; }
+    else if (field == "static_gw")   { cfg_static_gw   = value; changed = true; }
+    else if (field == "static_dns1") { cfg_static_dns1 = value; changed = true; }
+    else if (field == "static_dns2") { cfg_static_dns2 = value; changed = true; }
+    if (log_output) Console.printf("[CFG] %s set: %s (takes effect on next reboot)\n", field.c_str(), value.c_str());
   } else if (field == "no_thermistor") {
     cfg_no_thermistor = (value == "1" || value == "true");
     changed = true;
@@ -3661,6 +3713,21 @@ void setup() {
     if (ssid == BOOSH_WIFI_SSID_LL) {
       hasLowLatency = true;
       break;
+    }
+  }
+
+  // Apply static IP if configured (must be done before WiFi.begin)
+  if (!cfg_use_dhcp && cfg_static_ip.length() > 0 && cfg_static_gw.length() > 0) {
+    IPAddress ip, gw, subnet(255, 255, 255, 0), dns1, dns2;
+    if (ip.fromString(cfg_static_ip) && gw.fromString(cfg_static_gw)) {
+      if (cfg_static_dns1.length() > 0) dns1.fromString(cfg_static_dns1); else dns1 = gw;
+      if (cfg_static_dns2.length() > 0) dns2.fromString(cfg_static_dns2); else dns2.fromString("8.8.8.8");
+      WiFi.config(ip, gw, subnet, dns1, dns2);
+      Console.printf("[WiFi] Static IP: %s  GW: %s  DNS: %s / %s\n",
+                     ip.toString().c_str(), gw.toString().c_str(),
+                     dns1.toString().c_str(), dns2.toString().c_str());
+    } else {
+      Console.println("[WiFi] Static IP config invalid — falling back to DHCP");
     }
   }
 
