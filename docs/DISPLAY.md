@@ -22,7 +22,7 @@ During setup the OLED shows progress messages: OLED ready, Wi-Fi scan, connectin
 
 ## Runtime Pages
 
-Pages cycle every ~3 seconds (`kDisplayCycleMs`). The pylon rotates through 5 pages:
+Pages cycle every ~3 seconds (`kDisplayCycleMs`). The pylon rotates through up to 6 pages (slot 6 only shown in BARMODE):
 
 ### Page 1 — Ping
 
@@ -71,6 +71,19 @@ v0.0.1
 Apr 13 2026
 12:00:00
 ```
+
+### Page 6 — Pylon Ping *(BARMODE only)*
+
+```
+PYLON PING
+avg 5ms N=8 ok
+!TIKI3 timeout
+```
+
+- Line 1: `PYLON PING` header
+- Line 2: overall average RTT across all known pylons, node count, and `ok` or `Nx!` (N timeouts)
+- Lines 3–4: names of any pylons with a timeout on their last ping attempt
+- Populated by the per-pylon ping loop in `PingTask` (Core 0); one pylon pinged per second in rotation
 
 ## Boosh Indicator
 
