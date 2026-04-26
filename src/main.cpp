@@ -232,6 +232,25 @@ struct OscProxyMsg {
 };
 constexpr int kOscProxyQueueDepth = 32;
 QueueHandle_t osc_proxy_queue = nullptr;
+
+// Per-pylon ping stats (BARMODE only): PingTask pings one known pylon IP per second in rotation.
+// Protected by barmode_ping_stats_mutex; read by telemetry handler and OLED renderer.
+struct PylonPingStat {
+  uint32_t ip_u32;    // target IP as uint32
+  uint32_t last_ms;   // last RTT in ms (0 if not yet successful)
+  uint32_t min_ms;    // session min RTT
+  uint32_t max_ms;    // session max RTT
+  uint64_t sum_ms;    // sum for average
+  uint32_t count;     // successful pings
+  uint32_t lost;      // timed-out pings
+  bool     last_ok;   // true if last ping succeeded
+  char     id[24];    // pylon_id from registry (truncated)
+};
+constexpr int kPylonPingStatMax = 16;
+PylonPingStat     barmode_pylon_ping_stats[kPylonPingStatMax];
+int               barmode_pylon_ping_count = 0;
+SemaphoreHandle_t barmode_ping_stats_mutex = nullptr;
+
 String llled_ip_string;             // cached IP for llled.local; resolved once, used as mDNS fallback
 
 // ---- Sequence state ---------------------------------------------------------
@@ -1575,6 +1594,46 @@ void ShowFirmwarePage() {
   RenderDisplayPage(BuildFirmwarePageLines());
 }
 
+// BARMODE only: "PYLON PING" page — header + overall avg + up to 2 lines of issues.
+void ShowPylonPingPage() {
+  DisplayPageLines page;
+  page.line1 = "PYLON PING";
+  if (!barmode_ping_stats_mutex) {
+    page.line2 = "no data";
+    RenderDisplayPage(page);
+    return;
+  }
+  // Snapshot stats under mutex
+  uint64_t total_sum = 0;
+  uint32_t total_count = 0;
+  int      lost_count  = 0;
+  char     issue_ids[2][24] = {{0},{0}};
+  int      issue_n = 0;
+  if (xSemaphoreTake(barmode_ping_stats_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+    for (int i = 0; i < barmode_pylon_ping_count; i++) {
+      const PylonPingStat &s = barmode_pylon_ping_stats[i];
+      total_sum   += s.sum_ms;
+      total_count += s.count;
+      if (!s.last_ok || s.lost > 0) {
+        lost_count++;
+        if (issue_n < 2) strncpy(issue_ids[issue_n++], s.id, 23);
+      }
+    }
+    xSemaphoreGive(barmode_ping_stats_mutex);
+  }
+  if (total_count == 0 && barmode_pylon_ping_count == 0) {
+    page.line2 = "waiting...";
+  } else {
+    const uint32_t overall_avg = total_count ? static_cast<uint32_t>(total_sum / total_count) : 0;
+    const int n = barmode_pylon_ping_count;
+    page.line2 = "avg " + String(overall_avg) + "ms N=" + String(n) +
+                 (lost_count ? " " + String(lost_count) + "x!" : " ok");
+  }
+  page.line3 = (issue_n > 0) ? (String("!") + issue_ids[0] + " timeout") : "";
+  page.line4 = (issue_n > 1) ? (String("!") + issue_ids[1] + " timeout") : "";
+  RenderDisplayPage(page);
+}
+
 DisplayPageLines BuildSensorStatusPageLines() {
   DisplayPageLines page;
   page.line1 = TrimForDisplay(pylon_id, 21);
@@ -1986,6 +2045,30 @@ String BuildTelemetryApiJson() {
                               : String("--:--:--"))
              + "\"";
   payload += "}";
+  // Append per-pylon ping stats when running in BARMODE
+  if (barmode_active && barmode_ping_stats_mutex) {
+    payload += ",\"barmode_pylon_pings\":[";
+    if (xSemaphoreTake(barmode_ping_stats_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+      for (int i = 0; i < barmode_pylon_ping_count; i++) {
+        const PylonPingStat &s = barmode_pylon_ping_stats[i];
+        if (i > 0) payload += ",";
+        IPAddress paddr;
+        paddr = s.ip_u32;
+        const uint32_t avg = s.count ? static_cast<uint32_t>(s.sum_ms / s.count) : 0;
+        payload += "{\"id\":\"" + JsonEscape(String(s.id)) + "\",";
+        payload += "\"ip\":\"" + paddr.toString() + "\",";
+        payload += "\"last_ok\":" + String(s.last_ok ? "true" : "false") + ",";
+        payload += "\"last_ms\":" + String(s.last_ms) + ",";
+        payload += "\"avg_ms\":" + String(avg) + ",";
+        payload += "\"min_ms\":" + String(s.count ? s.min_ms : 0) + ",";
+        payload += "\"max_ms\":" + String(s.max_ms) + ",";
+        payload += "\"count\":" + String(s.count) + ",";
+        payload += "\"lost\":" + String(s.lost) + "}";
+      }
+      xSemaphoreGive(barmode_ping_stats_mutex);
+    }
+    payload += "]";
+  }
   payload += "},";
   payload += BuildDisplayPagesJson(now);
   payload += "}";
@@ -2331,8 +2414,11 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       input.value = nextValue ?? '';
     }
     let barmodeActive = false;
+    let barmodePylonPings = [];  // cached from last telemetry; keyed by IP
     function renderMeta(data) {
       barmodeActive = !!data.barmode_active;
+      barmodePylonPings = (data.telemetry && Array.isArray(data.telemetry.barmode_pylon_pings))
+        ? data.telemetry.barmode_pylon_pings : [];
       const rows = [
         ['Pylon ID', data.pylon_id],
         ['Description', data.description],
@@ -2783,6 +2869,17 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         ? '<span style="background:#1a3a1a;color:#4caf50;border-radius:6px;padding:1px 7px;font-size:11px">Online</span>'
         : '<span style="background:#2a1a1a;color:#e57373;border-radius:6px;padding:1px 7px;font-size:11px">Offline</span>';
       const fmt = (v, unit, dec=0) => (v == null || v === '') ? '-' : (+v).toFixed(dec) + unit;
+      // Build local-ping lookup by IP for the extra column
+      const localPingByIp = {};
+      barmodePylonPings.forEach(s => { localPingByIp[s.ip] = s; });
+      const fmtLocalPing = ip => {
+        const s = localPingByIp[ip];
+        if (!s) return '<span style="color:var(--muted)">-</span>';
+        const color = s.last_ok ? '#4caf50' : '#e57373';
+        const avg = s.avg_ms != null ? s.avg_ms + 'ms' : '-';
+        const lost = s.lost > 0 ? ` <span style="color:#e57373;font-size:11px">${s.lost}x!</span>` : '';
+        return `<span style="color:${color}">${avg}</span>${lost}`;
+      };
       const rows = all.map(p => `<tr style="border-top:1px solid var(--line)">
         ${td('<b>'+esc(p.pylon_id||'?')+'</b>')}
         ${td(p.pylon_index != null ? p.pylon_index : '-','color:var(--muted);text-align:center')}
@@ -2795,10 +2892,11 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         ${td(fmt(p.temperature_f,'\u00b0F',1))}
         ${td(fmt(p.wifi_rssi_dbm,' dBm',0))}
         ${td(p.ping_avg_ms != null ? p.ping_avg_ms+'ms' : '-')}
+        <td style="padding:4px 10px;font-size:13px;white-space:nowrap">${fmtLocalPing(p.ip||'')}</td>
         ${td(esc(p.fw_version||'-'),'color:var(--muted);font-size:11px')}
       </tr>`).join('');
       el.innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr>
-        ${th('ID')}${th('Idx')}${th('Host')}${th('IP')}${th('Status')}${th('Seen')}${th('Bat%')}${th('BatV')}${th('Temp')}${th('RSSI')}${th('Ping')}${th('FW')}
+        ${th('ID')}${th('Idx')}${th('Host')}${th('IP')}${th('Status')}${th('Seen')}${th('Bat%')}${th('BatV')}${th('Temp')}${th('RSSI')}${th('RPI Ping')}${th('Local Ping')}${th('FW')}
       </tr></thead><tbody>${rows}</tbody></table>
       <div style="color:var(--muted);font-size:11px;margin-top:6px">${entries.length} online, ${offline.length} recently offline \u2014 ${esc((data.data&&data.data.server_time)||'')}</div>`;
     }
@@ -3666,6 +3764,7 @@ void setup() {
   LoadPylonConfig();
   LoadManualPylons();
   barmode_registry_mutex = xSemaphoreCreateMutex();
+  barmode_ping_stats_mutex = xSemaphoreCreateMutex();
   osc_proxy_queue = xQueueCreate(kOscProxyQueueDepth, sizeof(OscProxyMsg));
   barmode_active = pylon_description.indexOf(kBarModeToken) >= 0;
   if (barmode_active) {
@@ -5426,6 +5525,112 @@ void PingTask(void *) {
       }
     }
 
+    // BARMODE: per-pylon ping — one pylon per second, rotating through the fleet.
+    // Runs on Core 0 only; 250ms timeout per ping so it never starves other Core-0 work.
+    if (barmode_active && barmode_ping_stats_mutex) {
+      static unsigned long lastPylonPingMs = 0;
+      static int           pylonPingIdx    = 0;
+      const unsigned long  now_p           = millis();
+      if (now_p - lastPylonPingMs >= 1000) {
+        lastPylonPingMs = now_p;
+        // Snapshot IPs + IDs from registry JSON
+        struct LPTarget { uint32_t ip_u32; char id[24]; };
+        LPTarget targets[kPylonPingStatMax];
+        int tgtCount = 0;
+        {
+          String json;
+          if (xSemaphoreTake(barmode_registry_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+            json = barmode_registry_json;
+            xSemaphoreGive(barmode_registry_mutex);
+          }
+          int search = 0;
+          while (tgtCount < kPylonPingStatMax) {
+            int ipPos = json.indexOf("\"ip\":\"", search);
+            if (ipPos < 0) break;
+            ipPos += 6;
+            int ipEnd = json.indexOf('"', ipPos);
+            if (ipEnd < 0) break;
+            const String ipStr = json.substring(ipPos, ipEnd);
+            search = ipEnd + 1;
+            if (ipStr.length() < 7 || ipStr.indexOf('.') < 0) continue;
+            IPAddress addr;
+            if (!addr.fromString(ipStr)) continue;
+            const uint32_t ip32 = (uint32_t)addr;
+            bool dup = false;
+            for (int j = 0; j < tgtCount; j++) { if (targets[j].ip_u32 == ip32) { dup = true; break; } }
+            if (dup) continue;
+            targets[tgtCount].ip_u32 = ip32;
+            // Extract pylon_id from nearby JSON window
+            const int ws = max(0, ipPos - 400);
+            const int we = min((int)json.length(), ipEnd + 400);
+            const String win = json.substring(ws, we);
+            const int pi = win.indexOf("\"pylon_id\":\"");
+            if (pi >= 0) {
+              const int ps = pi + 12;
+              const int pe = win.indexOf('"', ps);
+              const String pid = (pe > 0) ? win.substring(ps, pe) : ipStr;
+              pid.toCharArray(targets[tgtCount].id, sizeof(targets[tgtCount].id));
+            } else {
+              strncpy(targets[tgtCount].id, ipStr.c_str(), sizeof(targets[tgtCount].id) - 1);
+            }
+            targets[tgtCount].id[sizeof(targets[tgtCount].id) - 1] = '\0';
+            tgtCount++;
+          }
+        }
+        // Append resolved manual pylons (skip duplicates by IP)
+        for (int i = 0; i < barmode_manual_pylon_count && tgtCount < kPylonPingStatMax; i++) {
+          if (!barmode_manual_pylons[i].resolved) continue;
+          const uint32_t mip = (uint32_t)barmode_manual_pylons[i].ip;
+          bool dup = false;
+          for (int j = 0; j < tgtCount; j++) { if (targets[j].ip_u32 == mip) { dup = true; break; } }
+          if (!dup) {
+            targets[tgtCount].ip_u32 = mip;
+            strncpy(targets[tgtCount].id, barmode_manual_pylons[i].host, sizeof(targets[tgtCount].id) - 1);
+            targets[tgtCount].id[sizeof(targets[tgtCount].id) - 1] = '\0';
+            tgtCount++;
+          }
+        }
+        if (tgtCount > 0) {
+          pylonPingIdx = pylonPingIdx % tgtCount;
+          IPAddress tgtAddr;
+          tgtAddr = targets[pylonPingIdx].ip_u32;
+          const char *tgtId = targets[pylonPingIdx].id;
+          const bool ok  = Ping.ping(tgtAddr, 1);
+          const uint32_t rtt = ok ? static_cast<uint32_t>(Ping.averageTime()) : 0;
+          Console.printf("[PylonPing] %s %s %ums\n", tgtId, ok ? "ok" : "lost", rtt);
+          if (xSemaphoreTake(barmode_ping_stats_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            int slot = -1;
+            for (int i = 0; i < barmode_pylon_ping_count; i++) {
+              if (barmode_pylon_ping_stats[i].ip_u32 == targets[pylonPingIdx].ip_u32) { slot = i; break; }
+            }
+            if (slot < 0 && barmode_pylon_ping_count < kPylonPingStatMax) {
+              slot = barmode_pylon_ping_count++;
+              barmode_pylon_ping_stats[slot] = {};
+              barmode_pylon_ping_stats[slot].ip_u32 = targets[pylonPingIdx].ip_u32;
+              barmode_pylon_ping_stats[slot].min_ms = UINT32_MAX;
+            }
+            if (slot >= 0) {
+              strncpy(barmode_pylon_ping_stats[slot].id, tgtId,
+                      sizeof(barmode_pylon_ping_stats[slot].id) - 1);
+              barmode_pylon_ping_stats[slot].id[sizeof(barmode_pylon_ping_stats[slot].id) - 1] = '\0';
+              barmode_pylon_ping_stats[slot].last_ok = ok;
+              if (ok) {
+                barmode_pylon_ping_stats[slot].last_ms  = rtt;
+                barmode_pylon_ping_stats[slot].count++;
+                barmode_pylon_ping_stats[slot].sum_ms  += rtt;
+                if (rtt < barmode_pylon_ping_stats[slot].min_ms) barmode_pylon_ping_stats[slot].min_ms = rtt;
+                if (rtt > barmode_pylon_ping_stats[slot].max_ms) barmode_pylon_ping_stats[slot].max_ms = rtt;
+              } else {
+                barmode_pylon_ping_stats[slot].lost++;
+              }
+            }
+            xSemaphoreGive(barmode_ping_stats_mutex);
+          }
+          pylonPingIdx = (pylonPingIdx + 1) % tgtCount;
+        }
+      }
+    }
+
     // OSC proxy: drain queue and forward messages via rpiboosh POST /api/osc/send.
     // Active when cfg_route_via_rpi is true; queue is populated by SendOscFloatToIP on Core 1.
     if (osc_proxy_queue) {
@@ -5661,11 +5866,11 @@ void loop() {
       if (barmode_active) {
         // Barmode: no battery/temp hardware — skip those pages, only cycle info sub-pages
         displayPage     = 3;
-        displayOtherIdx = static_cast<uint8_t>((displayOtherIdx + 1) % 5);
+        displayOtherIdx = static_cast<uint8_t>((displayOtherIdx + 1) % 6);
       } else {
         displayPage = static_cast<uint8_t>((displayPage + 1) % 4);
         if (displayPage == 3) {
-          displayOtherIdx = static_cast<uint8_t>((displayOtherIdx + 1) % 5);
+          displayOtherIdx = static_cast<uint8_t>((displayOtherIdx + 1) % 6);
         }
       }
     }
@@ -5680,7 +5885,7 @@ void loop() {
     } else if (!barmode_active && displayPage == 2) {
       ShowTimeVoltagePage();
     } else {
-      // displayOtherIdx: 0=ping, 1=wifi, 2=wifi detail, 3=node, 4=firmware
+      // displayOtherIdx: 0=ping, 1=wifi, 2=wifi detail, 3=node, 4=firmware, 5=pylon-ping(barmode)
       if (displayOtherIdx == 0) {
         PingStats disp_stats;
         disp_stats.count = telemetry_ping_count;
@@ -5695,6 +5900,8 @@ void loop() {
         ShowWifiMetricsPage(1, wifi_connected_since_ms, last_disconnect_reason);
       } else if (displayOtherIdx == 3) {
         ShowNodeConfigPage();
+      } else if (displayOtherIdx == 5 && barmode_active) {
+        ShowPylonPingPage();
       } else {
         ShowFirmwarePage();
       }
