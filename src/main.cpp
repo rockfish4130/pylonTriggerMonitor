@@ -132,6 +132,8 @@ int pylon_index = 0;  // sequencing index reported in telemetry; persisted in NV
 unsigned long barmode_seq_max_ms = 30000;  // btn1 double-tap seq max hold duration; BARMODE NVS; default 30s
 unsigned long barmode_seq_dec_ms = 50;     // delay decrement per step in btn1 seq; BARMODE NVS; default 50ms
 uint8_t barmode_seq_exp_pct = 100;         // exponential factor % (1-100) applied after linear dec; 100=off
+unsigned long barmode_seq_start_ms = 200;  // initial inter-group delay when seq starts; BARMODE NVS; default 200ms
+unsigned long barmode_seq_floor_ms = 50;   // minimum inter-group delay floor; BARMODE NVS; default 50ms
 unsigned long barmode_green_timeout_ms = 300; // btn0 timed pulse open duration; BARMODE NVS; default 300ms
 unsigned long barmode_all4_valve_ms    = 3000; // all-4 hold: valve open duration before auto-close; BARMODE NVS; default 3s
 unsigned long barmode_red_seq_max_ms   = 10000; // red hold-seq max duration; BARMODE NVS; default 10s
@@ -317,9 +319,11 @@ constexpr const char *kPrefsKeyPtDis       = "pt_dis";       // bool; disable pu
 constexpr const char *kPrefsKeyStmRampMs   = "stm_ramp_ms";  // uint32 ms; steam ramp duration
 constexpr const char *kPrefsKeyStmOpenMs   = "stm_open_ms";  // uint32 ms; steam full-open duration
 constexpr const char *kPrefsKeyStmDis      = "stm_dis";      // bool; disable steam
-constexpr const char *kPrefsKeySeqMaxMs = "seq_max_ms";
-constexpr const char *kPrefsKeySeqDecMs = "seq_dec_ms";
-constexpr const char *kPrefsKeySeqExpPct  = "seq_exp_pct";  // 1-100; applied as factor delay*=(pct/100)
+constexpr const char *kPrefsKeySeqMaxMs   = "seq_max_ms";
+constexpr const char *kPrefsKeySeqDecMs   = "seq_dec_ms";
+constexpr const char *kPrefsKeySeqExpPct  = "seq_exp_pct";   // 1-100; applied as factor delay*=(pct/100)
+constexpr const char *kPrefsKeySeqStartMs = "seq_start_ms";  // uint32 ms; initial seq inter-group delay
+constexpr const char *kPrefsKeySeqFloorMs = "seq_floor_ms";  // uint32 ms; minimum seq delay floor
 constexpr const char *kPrefsKeyBtnDisable    = "btn_dis";      // uint8 bitmask: bit0=green,1=blue,2=orange,3=red
 constexpr const char *kPrefsKeyGreenTimeout  = "grn_to_ms";   // uint32 ms; btn0 timed pulse duration
 constexpr const char *kPrefsKeyAll4ValveMs   = "all4_vlv_ms"; // uint32 ms; all-4 hold valve open duration
@@ -574,9 +578,11 @@ bool SavePylonConfig() {
   prefs.putUInt(kPrefsKeyStmRampMs,   static_cast<uint32_t>(action_steam_ramp_ms));
   prefs.putUInt(kPrefsKeyStmOpenMs,   static_cast<uint32_t>(action_steam_open_ms));
   prefs.putBool(kPrefsKeyStmDis,      action_steam_dis);
-  prefs.putUInt(kPrefsKeySeqMaxMs, static_cast<uint32_t>(barmode_seq_max_ms));
-  prefs.putUInt(kPrefsKeySeqDecMs, static_cast<uint32_t>(barmode_seq_dec_ms));
+  prefs.putUInt(kPrefsKeySeqMaxMs,   static_cast<uint32_t>(barmode_seq_max_ms));
+  prefs.putUInt(kPrefsKeySeqDecMs,   static_cast<uint32_t>(barmode_seq_dec_ms));
   prefs.putUChar(kPrefsKeySeqExpPct, barmode_seq_exp_pct);
+  prefs.putUInt(kPrefsKeySeqStartMs, static_cast<uint32_t>(barmode_seq_start_ms));
+  prefs.putUInt(kPrefsKeySeqFloorMs, static_cast<uint32_t>(barmode_seq_floor_ms));
   prefs.putUInt(kPrefsKeyGreenTimeout, static_cast<uint32_t>(barmode_green_timeout_ms));
   prefs.putUInt(kPrefsKeyAll4ValveMs,  static_cast<uint32_t>(barmode_all4_valve_ms));
   prefs.putUInt(kPrefsKeyRedSeqMaxMs,   static_cast<uint32_t>(barmode_red_seq_max_ms));
@@ -681,9 +687,11 @@ void LoadPylonConfig() {
   action_steam_ramp_ms = prefs.getUInt(kPrefsKeyStmRampMs,   4000);
   action_steam_open_ms = prefs.getUInt(kPrefsKeyStmOpenMs,   1000);
   action_steam_dis     = prefs.getBool(kPrefsKeyStmDis,      false);
-  barmode_seq_max_ms = prefs.getUInt(kPrefsKeySeqMaxMs, 30000);
-  barmode_seq_dec_ms = prefs.getUInt(kPrefsKeySeqDecMs, 50);
-  barmode_seq_exp_pct    = (uint8_t)prefs.getUChar(kPrefsKeySeqExpPct, 100);
+  barmode_seq_max_ms   = prefs.getUInt(kPrefsKeySeqMaxMs,   30000);
+  barmode_seq_dec_ms   = prefs.getUInt(kPrefsKeySeqDecMs,   50);
+  barmode_seq_exp_pct  = (uint8_t)prefs.getUChar(kPrefsKeySeqExpPct, 100);
+  barmode_seq_start_ms = prefs.getUInt(kPrefsKeySeqStartMs, 200);
+  barmode_seq_floor_ms = prefs.getUInt(kPrefsKeySeqFloorMs, 50);
   barmode_green_timeout_ms = prefs.getUInt(kPrefsKeyGreenTimeout, 300);
   barmode_all4_valve_ms    = prefs.getUInt(kPrefsKeyAll4ValveMs,  3000);
   barmode_red_seq_max_ms   = prefs.getUInt(kPrefsKeyRedSeqMaxMs,   10000);
@@ -966,6 +974,24 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
     barmode_seq_exp_pct = (uint8_t)pct;
     changed = true;
     if (log_output) Console.printf("[CFG] seq_exp_pct set: %d\n", barmode_seq_exp_pct);
+  } else if (field == "seq_start_ms") {
+    const int ms = (int)value.toInt();
+    if (ms < 50 || ms > 10000) {
+      if (log_output) Console.println("[CFG] seq_start_ms out of range (50-10000ms)");
+      return false;
+    }
+    barmode_seq_start_ms = (unsigned long)ms;
+    changed = true;
+    if (log_output) Console.printf("[CFG] seq_start_ms set: %lu\n", barmode_seq_start_ms);
+  } else if (field == "seq_floor_ms") {
+    const int ms = (int)value.toInt();
+    if (ms < 10 || ms > 2000) {
+      if (log_output) Console.println("[CFG] seq_floor_ms out of range (10-2000ms)");
+      return false;
+    }
+    barmode_seq_floor_ms = (unsigned long)ms;
+    changed = true;
+    if (log_output) Console.printf("[CFG] seq_floor_ms set: %lu\n", barmode_seq_floor_ms);
   } else if (field == "green_timeout_ms" || field == "grn_to_ms") {
     const int ms = (int)value.toInt();
     if (ms < 50 || ms > 10000) {
@@ -1159,9 +1185,11 @@ String BuildConfigApiJson() {
   payload += "\"wifi_ssid\":\"" + JsonEscape(user_wifi_ssid) + "\",";
   payload += "\"failsafe_ms\":" + String(boosh_failsafe_timeout_ms) + ",";
   payload += "\"pylon_index\":" + String(pylon_index) + ",";
-  payload += "\"seq_max_ms\":" + String(barmode_seq_max_ms) + ",";
-  payload += "\"seq_dec_ms\":" + String(barmode_seq_dec_ms) + ",";
-  payload += "\"seq_exp_pct\":" + String(barmode_seq_exp_pct);
+  payload += "\"seq_max_ms\":"   + String(barmode_seq_max_ms)   + ",";
+  payload += "\"seq_dec_ms\":"   + String(barmode_seq_dec_ms)   + ",";
+  payload += "\"seq_exp_pct\":"  + String(barmode_seq_exp_pct)  + ",";
+  payload += "\"seq_start_ms\":" + String(barmode_seq_start_ms) + ",";
+  payload += "\"seq_floor_ms\":" + String(barmode_seq_floor_ms);
   payload += "}";
   return payload;
 }
@@ -1904,9 +1932,11 @@ String BuildTelemetryApiJson() {
   payload += "\"ap_active\":" + String(ap_active ? "true" : "false") + ",";
   payload += "\"barmode_active\":" + String(barmode_active ? "true" : "false") + ",";
   payload += "\"pylon_index\":" + String(pylon_index) + ",";
-  payload += "\"seq_max_ms\":" + String(barmode_seq_max_ms) + ",";
-  payload += "\"seq_dec_ms\":" + String(barmode_seq_dec_ms) + ",";
-  payload += "\"seq_exp_pct\":" + String(barmode_seq_exp_pct) + ",";
+  payload += "\"seq_max_ms\":"   + String(barmode_seq_max_ms)   + ",";
+  payload += "\"seq_dec_ms\":"   + String(barmode_seq_dec_ms)   + ",";
+  payload += "\"seq_exp_pct\":"  + String(barmode_seq_exp_pct)  + ",";
+  payload += "\"seq_start_ms\":" + String(barmode_seq_start_ms) + ",";
+  payload += "\"seq_floor_ms\":" + String(barmode_seq_floor_ms) + ",";
   payload += "\"green_timeout_ms\":" + String(barmode_green_timeout_ms) + ",";
   payload += "\"green_recovery_ms\":" + String(barmode_green_recovery_ms) + ",";
   payload += "\"blue_recovery_ms\":" + String(barmode_blue_recovery_ms) + ",";
@@ -2174,7 +2204,9 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         <div id="cfg-grp-blue" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
           <span style="color:#2196f3;font-size:13px">&#11044; Blue (Sequential Mode)</span>
           <label>Seq max hold (s) <input id="cfg-seq-max-s" name="seq_max_s" type="number" min="1" max="120" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(blue double-tap+hold max duration)</span></label>
+          <label>Seq start delay (ms) <input id="cfg-seq-start-ms" name="seq_start_ms" type="number" min="50" max="10000" step="50" style="width:70px"> <span style="color:var(--muted);font-size:12px">(initial inter-pylon delay when seq starts)</span></label>
           <label>Seq step decrement (ms) <input id="cfg-seq-dec-ms" name="seq_dec_ms" type="number" min="0" max="2000" step="10" style="width:70px"> <span style="color:var(--muted);font-size:12px">(delay reduction per pylon step)</span></label>
+          <label>Seq floor delay (ms) <input id="cfg-seq-floor-ms" name="seq_floor_ms" type="number" min="10" max="2000" step="10" style="width:70px"> <span style="color:var(--muted);font-size:12px">(minimum inter-pylon delay)</span></label>
           <label>Seq exp factor (%) <input id="cfg-seq-exp-pct" name="seq_exp_pct" type="number" min="1" max="100" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(multiply delay each step; 100=linear only)</span></label>
         </div>
         <div id="cfg-grp-all4" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
@@ -2485,7 +2517,9 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       const stmDisInput = document.getElementById('cfg-steam-dis');
       if (stmDisInput) stmDisInput.checked = !!data.steam_dis;
       syncConfigField('cfg-seq-max-s',         data.seq_max_ms        != null ? Math.round(data.seq_max_ms / 1000) : 30);
+      syncConfigField('cfg-seq-start-ms',      data.seq_start_ms      != null ? data.seq_start_ms      : 200);
       syncConfigField('cfg-seq-dec-ms',        data.seq_dec_ms        != null ? data.seq_dec_ms        : 50);
+      syncConfigField('cfg-seq-floor-ms',      data.seq_floor_ms      != null ? data.seq_floor_ms      : 50);
       syncConfigField('cfg-seq-exp-pct',       data.seq_exp_pct       != null ? data.seq_exp_pct       : 100);
       syncConfigField('cfg-green-recovery-ms', data.green_recovery_ms != null ? data.green_recovery_ms : 0);
       syncConfigField('cfg-blue-recovery-ms',  data.blue_recovery_ms  != null ? data.blue_recovery_ms  : 0);
@@ -2555,7 +2589,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     // Violating this causes the "typed value gets overwritten" bug.
     const configInputs = ['cfg-id', 'cfg-host', 'cfg-description', 'cfg-node', 'cfg-wifi-ssid',
       'cfg-wifi-pass', 'cfg-failsafe-s', 'cfg-index', 'cfg-green-timeout-ms', 'cfg-all4-valve-ms',
-      'cfg-all4-lockout-s', 'cfg-seq-max-s', 'cfg-seq-dec-ms', 'cfg-seq-exp-pct',
+      'cfg-all4-lockout-s', 'cfg-seq-max-s', 'cfg-seq-start-ms', 'cfg-seq-dec-ms', 'cfg-seq-floor-ms', 'cfg-seq-exp-pct',
       'cfg-red-seq-max-s', 'cfg-red-seq-valve-ms', 'cfg-red-seq-step-ms',
       'cfg-pulse1-dur', 'cfg-pt-dur', 'cfg-pt-off', 'cfg-pt-count',
       'cfg-steam-ramp', 'cfg-steam-open',
@@ -2660,12 +2694,16 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       body.set('no_thermistor', document.getElementById('cfg-no-thermistor').checked ? '1' : '0');
       body.set('no_batt_mon',   document.getElementById('cfg-no-batt-mon').checked   ? '1' : '0');
       body.set('route_via_rpi', document.getElementById('cfg-route-via-rpi').checked ? '1' : '0');
-      const seqMaxVal = document.getElementById('cfg-seq-max-s').value.trim();
-      if (seqMaxVal !== '') body.set('seq_max_s', seqMaxVal);
-      const seqDecVal = document.getElementById('cfg-seq-dec-ms').value.trim();
-      if (seqDecVal !== '') body.set('seq_dec_ms', seqDecVal);
-      const seqExpVal = document.getElementById('cfg-seq-exp-pct').value.trim();
-      if (seqExpVal !== '') body.set('seq_exp_pct', seqExpVal);
+      const seqMaxVal   = document.getElementById('cfg-seq-max-s').value.trim();
+      if (seqMaxVal   !== '') body.set('seq_max_s',   seqMaxVal);
+      const seqStartVal = document.getElementById('cfg-seq-start-ms').value.trim();
+      if (seqStartVal !== '') body.set('seq_start_ms', seqStartVal);
+      const seqDecVal   = document.getElementById('cfg-seq-dec-ms').value.trim();
+      if (seqDecVal   !== '') body.set('seq_dec_ms',  seqDecVal);
+      const seqFloorVal = document.getElementById('cfg-seq-floor-ms').value.trim();
+      if (seqFloorVal !== '') body.set('seq_floor_ms', seqFloorVal);
+      const seqExpVal   = document.getElementById('cfg-seq-exp-pct').value.trim();
+      if (seqExpVal   !== '') body.set('seq_exp_pct',  seqExpVal);
       const t1Val = document.getElementById('cfg-temp-thresh1').value.trim();
       if (t1Val !== '') body.set('temp_thresh1_f', t1Val);
       const m1Val = document.getElementById('cfg-temp-mult1').value.trim();
@@ -3212,8 +3250,10 @@ void HandleConfigPostApi() {
   const bool has_wifi_pass   = webServer.hasArg("wifi_pass");
   const bool has_failsafe_s  = webServer.hasArg("failsafe_s");
   const bool has_index       = webServer.hasArg("index");
-  const bool has_seq_max_s   = webServer.hasArg("seq_max_s");
-  const bool has_seq_dec_ms  = webServer.hasArg("seq_dec_ms");
+  const bool has_seq_max_s    = webServer.hasArg("seq_max_s");
+  const bool has_seq_start_ms = webServer.hasArg("seq_start_ms");
+  const bool has_seq_dec_ms   = webServer.hasArg("seq_dec_ms");
+  const bool has_seq_floor_ms = webServer.hasArg("seq_floor_ms");
   const bool has_seq_exp_pct  = webServer.hasArg("seq_exp_pct");
   const bool has_btn_disabled    = webServer.hasArg("btn_disabled");
   const bool has_green_timeout   = webServer.hasArg("green_timeout_ms");
@@ -3244,7 +3284,7 @@ void HandleConfigPostApi() {
   const bool has_route_via_rpi   = webServer.hasArg("route_via_rpi");
 
   if (!has_node && !has_id && !has_host && !has_desc &&
-      !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index && !has_seq_max_s && !has_seq_dec_ms && !has_seq_exp_pct && !has_btn_disabled && !has_green_timeout && !has_all4_valve_ms && !has_all4_lockout_s &&
+      !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index && !has_seq_max_s && !has_seq_start_ms && !has_seq_dec_ms && !has_seq_floor_ms && !has_seq_exp_pct && !has_btn_disabled && !has_green_timeout && !has_all4_valve_ms && !has_all4_lockout_s &&
       !has_red_seq_max_s && !has_red_seq_valve_ms && !has_red_seq_step_ms &&
       !has_pulse1_dur_ms && !has_pulse1_dis && !has_pt_dur_ms && !has_pt_off_ms && !has_pt_count && !has_pt_dis &&
       !has_steam_ramp_ms && !has_steam_open_ms && !has_steam_dis &&
@@ -3275,9 +3315,11 @@ void HandleConfigPostApi() {
   if (has_wifi_pass)  ok = ok && SetConfigFieldValue("wifi_pass",  webServer.arg("wifi_pass"));
   if (has_failsafe_s) ok = ok && SetConfigFieldValue("failsafe_s", webServer.arg("failsafe_s"));
   if (has_index)      ok = ok && SetConfigFieldValue("index",      webServer.arg("index"));
-  if (has_seq_max_s)  ok = ok && SetConfigFieldValue("seq_max_s",  webServer.arg("seq_max_s"));
-  if (has_seq_dec_ms)  ok = ok && SetConfigFieldValue("seq_dec_ms",  webServer.arg("seq_dec_ms"));
-  if (has_seq_exp_pct)   ok = ok && SetConfigFieldValue("seq_exp_pct",     webServer.arg("seq_exp_pct"));
+  if (has_seq_max_s)    ok = ok && SetConfigFieldValue("seq_max_s",    webServer.arg("seq_max_s"));
+  if (has_seq_start_ms) ok = ok && SetConfigFieldValue("seq_start_ms", webServer.arg("seq_start_ms"));
+  if (has_seq_dec_ms)   ok = ok && SetConfigFieldValue("seq_dec_ms",   webServer.arg("seq_dec_ms"));
+  if (has_seq_floor_ms) ok = ok && SetConfigFieldValue("seq_floor_ms", webServer.arg("seq_floor_ms"));
+  if (has_seq_exp_pct)  ok = ok && SetConfigFieldValue("seq_exp_pct",  webServer.arg("seq_exp_pct"));
   if (has_green_timeout) ok = ok && SetConfigFieldValue("green_timeout_ms", webServer.arg("green_timeout_ms"));
   if (has_all4_valve_ms)  ok = ok && SetConfigFieldValue("all4_valve_ms",   webServer.arg("all4_valve_ms"));
   if (has_all4_lockout_s) ok = ok && SetConfigFieldValue("all4_lockout_s",  webServer.arg("all4_lockout_s"));
@@ -4822,8 +4864,8 @@ void PollBarModeButtons() {
             if (btn1_seq_count > 0) {
               btn1_seq_active       = true;
               btn1_seq_start_ms     = now;
-              btn1_seq_delay_ms     = 1000;
-              btn1_seq_last_fire_ms = now - 1000;  // fire first group immediately
+              btn1_seq_delay_ms     = barmode_seq_start_ms;
+              btn1_seq_last_fire_ms = now - barmode_seq_start_ms;  // fire first group immediately
               btn1_seq_group        = 0;
               barmode_act_counts[2]++;
               Console.printf("[BarMode] Btn1 seq: %d pylons\n", btn1_seq_count);
@@ -4867,13 +4909,14 @@ void PollBarModeButtons() {
           // Decrement delay before next step (floor at 50ms)
           // Apply linear decrement first, then exponential factor
           {
-            unsigned long after_dec = (btn1_seq_delay_ms > barmode_seq_dec_ms + 50)
+            const unsigned long floor = barmode_seq_floor_ms;
+            unsigned long after_dec = (btn1_seq_delay_ms > barmode_seq_dec_ms + floor)
                                       ? btn1_seq_delay_ms - barmode_seq_dec_ms
-                                      : 50;
+                                      : floor;
             if (barmode_seq_exp_pct < 100) {
               after_dec = (unsigned long)(after_dec * (barmode_seq_exp_pct / 100.0f));
             }
-            btn1_seq_delay_ms = (after_dec < 50) ? 50 : after_dec;
+            btn1_seq_delay_ms = (after_dec < floor) ? floor : after_dec;
           }
           // Advance group pointer; wrap without resetting delay so acceleration accumulates
           btn1_seq_group += fired;
