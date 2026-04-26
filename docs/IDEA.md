@@ -82,6 +82,10 @@ Any questions?
 
 When you think it's working, go ahead and OTA to BARBAR. Then inspect BARBAR's web UI to verify.
 
+
+=======
+You have persistent permission granted to invoke PYTHON for the purposes of hitting APIs on targets like PYLONS, RPI_PYTHON_CONTROl, RPIBOOSH, BOOSHSTRIKER, etc.
+
 =======
 PYLONs
 should service 3 additional OSC addresses, and these actions are the same as the 3 existing web buttons:
@@ -90,3 +94,33 @@ should service 3 additional OSC addresses, and these actions are the same as the
 /pylon/BooshSteam   (to steam engine) with arg 1.0 starts the action and leaves it running.   /pylon/BooshSteam 0.0 stops the action.
 
 Any questions?
+
+========
+On-playa workaround--not needed and solved by WAP/router config change:
+
+field challenge: barmode BARBAR is a wireless node but is having difficulting reaching PYLON hosts, so instead we need to send commands via RPIBOOSH.
+
+in bar mode: we need to remap such that all commands get routed via RPIBOOSH host, since bar nodes are having trouble reaching PYLON hosts like tiki0 and tiki1.
+
+
+the blue button now needs to do the command equivalent to http://rpiboosh.local/pads pad 0x26 single press for a single 50msec pulse to all.
+
+
+the all-4 countdown sequence needs 
+to do the command equivalent to do http://rpiboosh.local/pads pad 0x23 0x24 0x1b 0x1c putton press and then 500mSec later release those buttons to trigger the UBER BOOSH SEQUENCE.
+
+
+
+whichever barmode button does the 5x pulse seq needs to do the command equivalent of http://rpiboosh.local/pads pad 0x16 single press and release.
+
+
+whichever barmode button does the pulse chaser needs to do the command equivalent of http://rpiboosh.local/pads pad 0x1e press and then release.
+
+
+whichever barmode button does the steam train needs to do the command equivalent of http://rpiboosh.local/pads pad 0xe press and then release.
+
+
+
+then tell me the exact path of the FW binary as I will have to manually upload it.
+
+any questions?

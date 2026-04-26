@@ -158,6 +158,7 @@ volatile float barmode_avg_temp_f      = NAN;  // average pylon temperature from
 volatile float barmode_temp_multiplier = 1.0f; // current effective multiplier (recomputed after each poll)
 bool cfg_no_thermistor = false;  // when true, temperature is always reported as null/N/A
 bool cfg_no_batt_mon   = false;  // when true, battery V/SOC are always reported as null/N/A
+bool cfg_route_via_rpi = false;  // BARMODE: when true, all pylon commands route via rpiboosh APIs
 bool   cfg_use_dhcp    = true;   // false = use static IP config below
 String cfg_static_ip   = "";     // static IPv4 address (e.g. "192.168.4.100")
 String cfg_static_gw   = "";     // default gateway
@@ -217,6 +218,20 @@ String barmode_registry_json;           // cached GET /api/pylons response; prot
 unsigned long barmode_registry_last_fetch_ms = 0;
 volatile bool  barmode_registry_fetch_now = false;  // set to trigger immediate PingTask fetch
 volatile float barmode_bpm = 0.0f;  // 0 = no BPM lock; updated by PingTask from llled.local/v0/bpm
+// all-4 virtual MIDI hold flag: true while phase-4 valve is open.
+// Set by main loop (PollBarModeButtons), read by PingTask which sends press/keepalive/release.
+volatile bool barmode_all4_midi_held = false;
+
+// OSC proxy queue: when cfg_route_via_rpi is true, SendOscFloatToIP enqueues messages here
+// instead of sending UDP directly. PingTask (Core 0) drains the queue via HTTP POST to rpiboosh.
+struct OscProxyMsg {
+  char     address[64];
+  float    value;
+  uint32_t ip_u32;   // IPAddress stored as uint32 for safe cross-core passing
+  uint16_t port;
+};
+constexpr int kOscProxyQueueDepth = 32;
+QueueHandle_t osc_proxy_queue = nullptr;
 String llled_ip_string;             // cached IP for llled.local; resolved once, used as mDNS fallback
 
 // ---- Sequence state ---------------------------------------------------------
@@ -304,6 +319,7 @@ constexpr const char *kPrefsKeyTempThresh2   = "tmp_thresh2"; // float °F; temp
 constexpr const char *kPrefsKeyTempMult2     = "tmp_mult2";   // float; multiplier 2
 constexpr const char *kPrefsKeyNoThermistor  = "no_thermistor"; // bool; suppress temp readings
 constexpr const char *kPrefsKeyNoBattMon     = "no_batt_mon";   // bool; suppress battery readings
+constexpr const char *kPrefsKeyRouteViaRpi   = "route_via_rpi"; // bool; BARMODE: route all pylon cmds via rpiboosh
 constexpr const char *kPrefsKeyUseDhcp       = "use_dhcp";      // bool; true=DHCP (default), false=static
 constexpr const char *kPrefsKeyStaticIp      = "static_ip";     // string; static IPv4 address
 constexpr const char *kPrefsKeyStaticGw      = "static_gw";     // string; static default gateway
@@ -558,6 +574,7 @@ bool SavePylonConfig() {
   prefs.putFloat(kPrefsKeyTempMult2,    barmode_temp_mult2);
   prefs.putBool(kPrefsKeyNoThermistor,  cfg_no_thermistor);
   prefs.putBool(kPrefsKeyNoBattMon,     cfg_no_batt_mon);
+  prefs.putBool(kPrefsKeyRouteViaRpi,  cfg_route_via_rpi);
   prefs.putBool(kPrefsKeyUseDhcp,       cfg_use_dhcp);
   prefs.putString(kPrefsKeyStaticIp,    cfg_static_ip);
   prefs.putString(kPrefsKeyStaticGw,    cfg_static_gw);
@@ -664,6 +681,7 @@ void LoadPylonConfig() {
   barmode_temp_mult2         = prefs.getFloat(kPrefsKeyTempMult2,    1.0f);
   cfg_no_thermistor          = prefs.getBool(kPrefsKeyNoThermistor,  false);
   cfg_no_batt_mon            = prefs.getBool(kPrefsKeyNoBattMon,     false);
+  cfg_route_via_rpi          = prefs.getBool(kPrefsKeyRouteViaRpi,  false);
   cfg_use_dhcp               = prefs.getBool(kPrefsKeyUseDhcp,       true);
   cfg_static_ip              = prefs.getString(kPrefsKeyStaticIp,    "");
   cfg_static_gw              = prefs.getString(kPrefsKeyStaticGw,    "");
@@ -1042,6 +1060,10 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
     cfg_no_batt_mon = (value == "1" || value == "true");
     changed = true;
     if (log_output) Console.printf("[CFG] no_batt_mon set: %s\n", cfg_no_batt_mon ? "true" : "false");
+  } else if (field == "route_via_rpi") {
+    cfg_route_via_rpi = (value == "1" || value == "true");
+    changed = true;
+    if (log_output) Console.printf("[CFG] route_via_rpi set: %s\n", cfg_route_via_rpi ? "true" : "false");
   } else if (field == "pulse1_dur_ms") {
     const int ms = (int)value.toInt();
     if (ms < 10 || ms > 5000) { if (log_output) Console.println("[CFG] pulse1_dur_ms out of range (10-5000)"); return false; }
@@ -1259,6 +1281,7 @@ String BuildRegistryPayload() {
     payload += "\"battery_time_remaining_h\":" + fmtOrNull(eff_batt_h) + ",";
     payload += "\"no_thermistor\":" + String(cfg_no_thermistor ? "true" : "false") + ",";
     payload += "\"no_batt_mon\":" + String(cfg_no_batt_mon ? "true" : "false") + ",";
+    payload += "\"route_via_rpi\":" + String(cfg_route_via_rpi ? "true" : "false") + ",";
   }
   payload += "\"wifi_rssi_dbm\":" + String(wifi_rssi_dbm) + ",";
   payload += "\"uptime_s\":" + String(static_cast<uint32_t>(millis() / 1000)) + ",";
@@ -1910,6 +1933,7 @@ String BuildTelemetryApiJson() {
     payload += ",";
     payload += "\"no_thermistor\":" + String(cfg_no_thermistor ? "true" : "false") + ",";
     payload += "\"no_batt_mon\":" + String(cfg_no_batt_mon ? "true" : "false") + ",";
+    payload += "\"route_via_rpi\":" + String(cfg_route_via_rpi ? "true" : "false") + ",";
   }
   payload += "\"telemetry\":{";
   payload += "\"ipv4\":\"" + JsonEscape(ip) + "\",";
@@ -2074,6 +2098,13 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           <span style="color:var(--muted);font-size:13px">All-4 Sequence</span>
           <label>Valve open duration (ms) <input id="cfg-all4-valve-ms" name="all4_valve_ms" type="number" min="500" max="30000" step="500" style="width:80px"> <span style="color:var(--muted);font-size:12px">(how long all valves stay open)</span></label>
           <label>Lockout after sequence (s) <input id="cfg-all4-lockout-s" name="all4_lockout_s" type="number" min="0" max="3600" step="30" style="width:80px"> <span style="color:var(--muted);font-size:12px">(cooldown before another sequence can start; 0=disabled)</span></label>
+        </div>
+        <div id="cfg-grp-routing" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
+          <span style="color:var(--muted);font-size:13px">Network Routing</span>
+          <div style="display:flex;align-items:center;gap:10px">
+            <input type="checkbox" id="cfg-route-via-rpi" style="width:18px;height:18px;margin:0;cursor:pointer;accent-color:var(--accent)">
+            <span style="color:var(--muted);font-size:14px">Route all wireless PYLON commands via RPIBOOSH wired controller</span>
+          </div>
         </div>
         <div id="cfg-grp-red" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
           <span style="color:var(--muted);font-size:13px">Red Sequential</span>
@@ -2345,7 +2376,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       syncConfigField('cfg-wifi-ssid', data.wifi_ssid || '');
       syncConfigField('cfg-failsafe-s',       data.failsafe_ms != null ? (data.failsafe_ms / 1000).toFixed(1) : '5.0');
       syncConfigField('cfg-index',             data.pylon_index != null ? data.pylon_index : 0);
-      ['cfg-grp-green','cfg-grp-blue','cfg-grp-all4','cfg-grp-red','cfg-grp-recovery','cfg-btn-disable-wrap'].forEach(id => {
+      ['cfg-grp-green','cfg-grp-blue','cfg-grp-all4','cfg-grp-routing','cfg-grp-red','cfg-grp-recovery','cfg-btn-disable-wrap'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = data.barmode_active ? 'grid' : 'none';
       });
@@ -2384,6 +2415,8 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       if (noThermBox && document.activeElement !== noThermBox) noThermBox.checked = !!data.no_thermistor;
       const noBattBox = document.getElementById('cfg-no-batt-mon');
       if (noBattBox && document.activeElement !== noBattBox) noBattBox.checked = !!data.no_batt_mon;
+      const routeViaRpiBox = document.getElementById('cfg-route-via-rpi');
+      if (routeViaRpiBox && document.activeElement !== routeViaRpiBox) routeViaRpiBox.checked = !!data.route_via_rpi;
       const disWrap = document.getElementById('cfg-btn-disable-wrap');
       if (disWrap) disWrap.style.display = barmodeActive ? 'flex' : 'none';
       if (barmodeActive && Array.isArray(data.btn_disabled)) {
@@ -2441,7 +2474,8 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       'cfg-pulse1-dur', 'cfg-pt-dur', 'cfg-pt-off', 'cfg-pt-count',
       'cfg-steam-ramp', 'cfg-steam-open',
       'cfg-green-recovery-ms', 'cfg-blue-recovery-ms', 'cfg-orange-recovery-ms', 'cfg-red-recovery-ms',
-      'cfg-temp-thresh1', 'cfg-temp-mult1', 'cfg-temp-thresh2', 'cfg-temp-mult2']
+      'cfg-temp-thresh1', 'cfg-temp-mult1', 'cfg-temp-thresh2', 'cfg-temp-mult2',
+      'cfg-route-via-rpi']
       .map((id) => document.getElementById(id))
       .filter(Boolean);
     let holdActive = false;
@@ -2539,6 +2573,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       body.set('steam_dis', document.getElementById('cfg-steam-dis').checked ? '1' : '0');
       body.set('no_thermistor', document.getElementById('cfg-no-thermistor').checked ? '1' : '0');
       body.set('no_batt_mon',   document.getElementById('cfg-no-batt-mon').checked   ? '1' : '0');
+      body.set('route_via_rpi', document.getElementById('cfg-route-via-rpi').checked ? '1' : '0');
       const seqMaxVal = document.getElementById('cfg-seq-max-s').value.trim();
       if (seqMaxVal !== '') body.set('seq_max_s', seqMaxVal);
       const seqDecVal = document.getElementById('cfg-seq-dec-ms').value.trim();
@@ -3108,6 +3143,7 @@ void HandleConfigPostApi() {
   const bool has_temp_mult2      = webServer.hasArg("temp_mult2");
   const bool has_no_thermistor   = webServer.hasArg("no_thermistor");
   const bool has_no_batt_mon     = webServer.hasArg("no_batt_mon");
+  const bool has_route_via_rpi   = webServer.hasArg("route_via_rpi");
 
   if (!has_node && !has_id && !has_host && !has_desc &&
       !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index && !has_seq_max_s && !has_seq_dec_ms && !has_seq_exp_pct && !has_btn_disabled && !has_green_timeout && !has_all4_valve_ms && !has_all4_lockout_s &&
@@ -3116,7 +3152,7 @@ void HandleConfigPostApi() {
       !has_steam_ramp_ms && !has_steam_open_ms && !has_steam_dis &&
       !has_green_rec_ms && !has_blue_rec_ms && !has_orange_rec_ms && !has_red_rec_ms &&
       !has_temp_thresh1 && !has_temp_mult1 && !has_temp_thresh2 && !has_temp_mult2 &&
-      !has_no_thermistor && !has_no_batt_mon) {
+      !has_no_thermistor && !has_no_batt_mon && !has_route_via_rpi) {
     SendApiError(400, "no recognized config field");
     return;
   }
@@ -3169,6 +3205,7 @@ void HandleConfigPostApi() {
   if (has_temp_mult2)    ok = ok && SetConfigFieldValue("temp_mult2",         webServer.arg("temp_mult2"));
   if (has_no_thermistor) ok = ok && SetConfigFieldValue("no_thermistor",      webServer.arg("no_thermistor"));
   if (has_no_batt_mon)   ok = ok && SetConfigFieldValue("no_batt_mon",        webServer.arg("no_batt_mon"));
+  if (has_route_via_rpi) ok = ok && SetConfigFieldValue("route_via_rpi",      webServer.arg("route_via_rpi"));
   if (has_btn_disabled) {
     // Accepts "0101" bitmask string: index 0=green,1=blue,2=orange,3=red; '1'=disabled
     const String v = webServer.arg("btn_disabled");
@@ -3629,6 +3666,7 @@ void setup() {
   LoadPylonConfig();
   LoadManualPylons();
   barmode_registry_mutex = xSemaphoreCreateMutex();
+  osc_proxy_queue = xQueueCreate(kOscProxyQueueDepth, sizeof(OscProxyMsg));
   barmode_active = pylon_description.indexOf(kBarModeToken) >= 0;
   if (barmode_active) {
     for (int i = 0; i < 4; i++) pinMode(kBarModeButtonPins[i], INPUT_PULLDOWN);
@@ -4277,7 +4315,21 @@ struct PylonTarget {
 };
 
 // Low-level: build and send one OSC float packet to a single IP.
+// When cfg_route_via_rpi is true, enqueues to osc_proxy_queue instead of sending UDP;
+// PingTask (Core 0) drains the queue and forwards via POST /api/osc/send on rpiboosh.
 void SendOscFloatToIP(const char *addr, float value, IPAddress dest) {
+  if (cfg_route_via_rpi && osc_proxy_queue) {
+    OscProxyMsg msg;
+    strncpy(msg.address, addr, sizeof(msg.address) - 1);
+    msg.address[sizeof(msg.address) - 1] = '\0';
+    msg.value  = value;
+    msg.ip_u32 = (uint32_t)dest;
+    msg.port   = kOscPort;
+    if (xQueueSend(osc_proxy_queue, &msg, 0) != pdTRUE) {
+      Console.println("[OSCProxy] queue full, message dropped");
+    }
+    return;
+  }
   const size_t addr_len = strlen(addr);
   const size_t addr_pad = (addr_len + 4) & ~3u;
   const size_t pkt_len  = addr_pad + 8;
@@ -4508,6 +4560,7 @@ void PollBarModeButtons() {
       seq_valve_open    = true;
       seq_valve_open_ms = now;
       SendOscFloatToAllPylons(kOscAddress, 1.0f);
+      barmode_all4_midi_held = true;
       barmode_act_counts[6]++;
       Console.println("[BarMode] Seq phase 4: valve open");
     }
@@ -4518,6 +4571,7 @@ void PollBarModeButtons() {
       const int next = (seq_phase == 4) ? 5 : 0;
       if (seq_valve_open) {
         SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false;
+        barmode_all4_midi_held = false;
         if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
         Console.printf("[BarMode] Lockout started: %lu s\n", barmode_all4_lockout_s);
       }
@@ -4528,6 +4582,7 @@ void PollBarModeButtons() {
       const int next = (seq_phase == 4) ? 5 : 0;
       if (seq_valve_open) {
         SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false;
+        barmode_all4_midi_held = false;
         if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
         Console.printf("[BarMode] Lockout started: %lu s\n", barmode_all4_lockout_s);
       }
@@ -4538,6 +4593,7 @@ void PollBarModeButtons() {
       const int next = (seq_phase == 4) ? 5 : 0;
       if (seq_valve_open) {
         SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false;
+        barmode_all4_midi_held = false;
         if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
         Console.printf("[BarMode] Lockout started: %lu s\n", barmode_all4_lockout_s);
       }
@@ -4547,6 +4603,7 @@ void PollBarModeButtons() {
     } else if (seq_phase == 4 && !btn_stable[3]) {  // RED released in phase 4
       if (seq_valve_open) {
         SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false;
+        barmode_all4_midi_held = false;
         if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
         Console.printf("[BarMode] Lockout started: %lu s\n", barmode_all4_lockout_s);
       }
@@ -4558,6 +4615,7 @@ void PollBarModeButtons() {
     if (seq_phase == 4 && seq_valve_open && now - seq_valve_open_ms >= barmode_all4_valve_ms) {
       SendOscFloatToAllPylons(kOscAddress, 0.0f);
       seq_valve_open = false;
+      barmode_all4_midi_held = false;
       if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
       Console.printf("[BarMode] Lockout started: %lu s\n", barmode_all4_lockout_s);
       seq_phase = 5;
@@ -5366,6 +5424,78 @@ void PingTask(void *) {
           Console.println("[BPM] fetch failed, reverting to default patterns");
         }
       }
+    }
+
+    // OSC proxy: drain queue and forward messages via rpiboosh POST /api/osc/send.
+    // Active when cfg_route_via_rpi is true; queue is populated by SendOscFloatToIP on Core 1.
+    if (osc_proxy_queue) {
+      OscProxyMsg msg;
+      while (xQueueReceive(osc_proxy_queue, &msg, 0) == pdTRUE) {
+        IPAddress dest;
+        dest = msg.ip_u32;
+        const String host = dest.toString();
+        const String body = "{\"address\":\"" + String(msg.address) +
+                            "\",\"args\":[" + String(msg.value, 4) +
+                            "],\"host\":\"" + host +
+                            "\",\"port\":" + String(msg.port) + "}";
+        HTTPClient http;
+        http.begin(String(kRegistryBaseUrlPrimary) + "/api/osc/send");
+        http.setTimeout(500);
+        http.addHeader("Content-Type", "application/json");
+        const int code = http.POST(body);
+        http.end();
+        Console.printf("[OSCProxy] %s %.3f -> %s : %d\n", msg.address, msg.value, host.c_str(), code);
+      }
+    }
+
+    // all-4 rpiboosh solenoid API: open main + ring while phase-4 is active.
+    // POST /api/solenoid/main/open and /api/solenoid/ring/open — no body, no headers.
+    // Each /open auto-closes after 5s; re-calling /open resets the timer, so we
+    // repeat every 3s as keepalive. On release we POST /close immediately.
+    // Runs here (Core 0) so blocking HTTP never touches the main OSC loop.
+    if (barmode_active) {
+      static bool          sol_held_prev = false;
+      static unsigned long sol_ka_ms     = 0;
+      const  bool          sol_held_now  = barmode_all4_midi_held;
+
+      // Try primary URL; fall back to resolved IP on port 5000 if primary fails.
+      auto postSolenoid = [](const char *path) {
+        const String primary = String(kRegistryBaseUrlPrimary) + path;
+        HTTPClient http;
+        http.begin(primary);
+        http.setTimeout(500);
+        const int code = http.POST("");
+        http.end();
+        if (code == 200) return;
+        // Fallback to resolved IP
+        if (target_ip_string.length() > 0) {
+          const String fallback = "http://" + target_ip_string + ":5000" + path;
+          http.begin(fallback);
+          http.setTimeout(500);
+          http.POST("");
+          http.end();
+        }
+      };
+
+      if (sol_held_now && !sol_held_prev) {
+        // Rising edge: open both solenoid groups
+        Console.println("[BarMode] all4 rpiboosh solenoid open (main+ring)");
+        postSolenoid("/api/solenoid/main/open");
+        postSolenoid("/api/solenoid/ring/open");
+        sol_ka_ms = millis();
+      } else if (!sol_held_now && sol_held_prev) {
+        // Falling edge: close both solenoid groups immediately
+        Console.println("[BarMode] all4 rpiboosh solenoid close (main+ring)");
+        postSolenoid("/api/solenoid/main/close");
+        postSolenoid("/api/solenoid/ring/close");
+      } else if (sol_held_now && millis() - sol_ka_ms >= 3000) {
+        // Keepalive: re-open to reset the 5s server-side auto-close timer
+        sol_ka_ms = millis();
+        postSolenoid("/api/solenoid/main/open");
+        postSolenoid("/api/solenoid/ring/open");
+      }
+
+      sol_held_prev = sol_held_now;
     }
 
     vTaskDelay(pdMS_TO_TICKS(10));  // yield; ping timing is driven by lastPingMs
