@@ -4599,13 +4599,15 @@ void PollSensors() {
 void SeqSetSolenoid(bool active) {
   if (active && !display_inverted) {
     boosh_open_since_ms = millis();
-  } else if (!active && display_inverted) {
-    if (boosh_open_since_ms > 0) {
+    boosh_failsafe_armed    = true;          // arm failsafe so a stalled loop still closes the valve
+    boosh_failsafe_start_ms = millis();
+  } else if (!active) {
+    if (display_inverted && boosh_open_since_ms > 0) {
       total_boosh_open_ms += (uint32_t)(millis() - boosh_open_since_ms);
       boosh_open_since_ms = 0;
     }
+    boosh_failsafe_armed = false;
   }
-  boosh_failsafe_armed = false;
   SetDisplayInverted(active);
 }
 
