@@ -3683,7 +3683,8 @@ void PingTask(void *);      // forward declaration
 void TempPollTask(void *);  // forward declaration
 void StartSequence(SeqType type);  // forward declaration
 void AbortSequence();              // forward declaration
-void MeshBroadcastOsc(const char *osc_addr, float osc_arg);  // forward declaration
+void MeshBroadcastOsc(const char *osc_addr, float osc_arg);          // forward declaration
+void MeshUnicastOsc(const uint8_t *mac, const char *osc_addr, float osc_arg);  // forward declaration
 void MeshInit();  // forward declaration
 
 void HandleCaptivePortalRedirect() {
@@ -4759,7 +4760,9 @@ void PollSosBlueLed() {
 // Pylon target with its sequence index for ordered sequential firing.
 struct PylonTarget {
   IPAddress ip;
-  int seq_idx;  // pylon_index value from registry
+  int seq_idx;      // pylon_index value from registry / mesh peer
+  bool via_mesh;    // true = reach this pylon via ESP-NOW unicast (no IP)
+  uint8_t mesh_mac[6];
 };
 
 // Low-level: build and send one OSC float packet to a single IP.
@@ -4836,8 +4839,10 @@ int ExtractRegistryTargets(PylonTarget *dest, int maxCount) {
 
     if (seq_idx < 0) continue;  // negative index = excluded from sequential mode
 
-    dest[count].ip      = addr;
-    dest[count].seq_idx = seq_idx;
+    dest[count].ip       = addr;
+    dest[count].seq_idx  = seq_idx;
+    dest[count].via_mesh = false;
+    memset(dest[count].mesh_mac, 0, 6);
     count++;
   }
   // Append resolved manual pylons (skip if IP already in list)
@@ -4846,7 +4851,35 @@ int ExtractRegistryTargets(PylonTarget *dest, int maxCount) {
     const IPAddress &mp_ip = barmode_manual_pylons[i].ip;
     bool dup = false;
     for (int j = 0; j < count; j++) { if (dest[j].ip == mp_ip) { dup = true; break; } }
-    if (!dup) { dest[count].ip = mp_ip; dest[count].seq_idx = barmode_manual_pylons[i].index; count++; }
+    if (!dup) {
+      dest[count].ip       = mp_ip;
+      dest[count].seq_idx  = barmode_manual_pylons[i].index;
+      dest[count].via_mesh = false;
+      memset(dest[count].mesh_mac, 0, 6);
+      count++;
+    }
+  }
+  // Append active mesh peers not already covered by pylon_index in the IP list.
+  // Prefer the IP path when a peer is reachable both ways (rpiboosh online); fall back
+  // to ESP-NOW unicast when rpiboosh is offline and the peer is mesh-only.
+  if (cfg_mesh_en && mesh_peers_mutex &&
+      xSemaphoreTake(mesh_peers_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+    for (int i = 0; i < kMeshMaxPeers && count < maxCount; i++) {
+      if (!mesh_peers[i].active) continue;
+      const int pidx = (int)mesh_peers[i].pylon_index;
+      bool dup = false;
+      for (int j = 0; j < count; j++) {
+        if (!dest[j].via_mesh && dest[j].seq_idx == pidx) { dup = true; break; }
+      }
+      if (!dup) {
+        dest[count].ip       = IPAddress(0, 0, 0, 0);
+        dest[count].seq_idx  = pidx;
+        dest[count].via_mesh = true;
+        memcpy(dest[count].mesh_mac, mesh_peers[i].mac, 6);
+        count++;
+      }
+    }
+    xSemaphoreGive(mesh_peers_mutex);
   }
   // Insertion sort by seq_idx (N ≤ 16, stable)
   for (int i = 1; i < count; i++) {
@@ -4897,15 +4930,24 @@ int ExtractRegistryIPs(IPAddress *dest, int maxCount) {
 // Sends an OSC message with a single float arg to all pylons in the cached registry.
 // Skips silently if registry is empty (not yet fetched). Self is included via registry.
 // Called from Core 1; oscUdp send path is non-blocking.
+// Dispatch one OSC command to a single PylonTarget — IP or ESP-NOW unicast.
+void SendOscToPylonTarget(const char *addr, float value, const PylonTarget &t) {
+  if (t.via_mesh) {
+    MeshUnicastOsc(t.mesh_mac, addr, value);
+  } else {
+    SendOscFloatToIP(addr, value, t.ip);
+  }
+}
+
 void SendOscFloatToAllPylons(const char *addr, float value) {
-  IPAddress ips[16];
-  const int count = ExtractRegistryIPs(ips, 16);
+  PylonTarget targets[16];
+  const int count = ExtractRegistryTargets(targets, 16);
   if (count == 0) {
-    Console.printf("[BarMode] SendOsc %s: no targets (registry empty, no manual pylons resolved)\n", addr);
+    Console.printf("[BarMode] SendOsc %s: no targets (registry empty, no mesh peers)\n", addr);
     return;
   }
-  for (int i = 0; i < count; i++) SendOscFloatToIP(addr, value, ips[i]);
-  Console.printf("[BarMode] SendOsc %s %.1f → %d pylons\n", addr, value, count);
+  for (int i = 0; i < count; i++) SendOscToPylonTarget(addr, value, targets[i]);
+  Console.printf("[BarMode] SendOsc %s %.1f -> %d targets\n", addr, value, count);
 }
 
 // LED chase pattern while button 0 is held: blue→yellow→green, 100 ms per step.
@@ -5330,9 +5372,9 @@ void PollBarModeButtons() {
       static unsigned long red_seq_start_ms   = 0;
       static unsigned long red_seq_last_ms    = 0;   // millis() of last step fire
       // Pending close (one at a time — we fire close before next open if needed)
-      static bool          red_seq_close_pend = false;
-      static IPAddress     red_seq_close_ip;
-      static unsigned long red_seq_close_at   = 0;
+      static bool          red_seq_close_pend   = false;
+      static PylonTarget   red_seq_close_target = {};  // target to close (IP or mesh)
+      static unsigned long red_seq_close_at     = 0;
 
       const bool r_rising  = btn_stable[3] && !btn_prev_stable[3];
       const bool r_falling = !btn_stable[3] && btn_prev_stable[3];
@@ -5381,7 +5423,7 @@ void PollBarModeButtons() {
             const unsigned long held = now - red_seq_press_ms;
             // Fire pending close immediately on release
             if (red_seq_close_pend) {
-              SendOscFloatToIP(kOscAddress, 0.0f, red_seq_close_ip);
+              SendOscToPylonTarget(kOscAddress, 0.0f, red_seq_close_target);
               red_seq_close_pend = false;
             }
             if (held < 400 && now < red_recovery_until) {
@@ -5412,7 +5454,7 @@ void PollBarModeButtons() {
           if (now - red_seq_start_ms >= barmode_red_seq_max_ms) {
             // Max time elapsed: stop
             if (red_seq_close_pend) {
-              SendOscFloatToIP(kOscAddress, 0.0f, red_seq_close_ip);
+              SendOscToPylonTarget(kOscAddress, 0.0f, red_seq_close_target);
               red_seq_close_pend = false;
             }
             red_state = 0;
@@ -5420,7 +5462,7 @@ void PollBarModeButtons() {
           } else {
             // Pending close check
             if (red_seq_close_pend && now >= red_seq_close_at) {
-              SendOscFloatToIP(kOscAddress, 0.0f, red_seq_close_ip);
+              SendOscToPylonTarget(kOscAddress, 0.0f, red_seq_close_target);
               red_seq_close_pend = false;
             }
             // Step tick
@@ -5428,14 +5470,14 @@ void PollBarModeButtons() {
               red_seq_last_ms = now;
               // Flush any still-pending close before next open (safety for step_ms < valve_ms)
               if (red_seq_close_pend) {
-                SendOscFloatToIP(kOscAddress, 0.0f, red_seq_close_ip);
+                SendOscToPylonTarget(kOscAddress, 0.0f, red_seq_close_target);
                 red_seq_close_pend = false;
               }
               // Fire open to current position
-              SendOscFloatToIP(kOscAddress, 1.0f, red_seq_targets[red_seq_pos].ip);
-              red_seq_close_ip   = red_seq_targets[red_seq_pos].ip;
-              red_seq_close_at   = now + barmode_red_seq_valve_ms;
-              red_seq_close_pend = true;
+              SendOscToPylonTarget(kOscAddress, 1.0f, red_seq_targets[red_seq_pos]);
+              red_seq_close_target = red_seq_targets[red_seq_pos];
+              red_seq_close_at     = now + barmode_red_seq_valve_ms;
+              red_seq_close_pend   = true;
               red_seq_lamp_until = now + barmode_red_seq_valve_ms;
               Console.printf("[BarMode] Red seq: open idx=%d\n", red_seq_targets[red_seq_pos].seq_idx);
               // Advance ping-pong
@@ -5650,9 +5692,20 @@ static void MeshUpsertPeer(const uint8_t *mac, const MeshBeaconPkt &pkt) {
     }
   }
   if (slot < 0) { xSemaphoreGiveFromISR(mesh_peers_mutex, nullptr); return; }  // table full
+  const bool is_new = !mesh_peers[slot].active;
   MeshPeerInfo &p = mesh_peers[slot];
   p.active    = true;
   memcpy(p.mac, mac, 6);
+  // Register peer's unicast MAC with ESP-NOW on first discovery so MeshUnicastOsc can target it.
+  if (is_new && !esp_now_is_peer_exist(mac)) {
+    esp_now_peer_info_t peer_info;
+    memset(&peer_info, 0, sizeof(peer_info));
+    memcpy(peer_info.peer_addr, mac, 6);
+    peer_info.channel = 0;
+    peer_info.ifidx   = WIFI_IF_STA;
+    peer_info.encrypt = false;
+    esp_now_add_peer(&peer_info);
+  }
   strncpy(p.node_id, pkt.node_id, sizeof(p.node_id) - 1);
   p.node_id[sizeof(p.node_id) - 1] = '\0';
   p.pylon_index = pkt.pylon_index;
@@ -5746,11 +5799,8 @@ static void MeshSendBeacon() {
   mesh_beacons_sent++;
 }
 
-// Broadcasts an OSC command to all mesh peers (with retry). Safe to call from
-// Core 1 (button handlers, web handlers) — esp_now_send is thread-safe.
-void MeshBroadcastOsc(const char *osc_addr, float osc_arg) {
-  if (!mesh_initialized || !cfg_mesh_en) return;
-  MeshCommandPkt pkt;
+// Builds a MeshCommandPkt into pkt. Shared by broadcast and unicast.
+static void MeshFillCmdPkt(MeshCommandPkt &pkt, const char *osc_addr, float osc_arg) {
   memset(&pkt, 0, sizeof(pkt));
   pkt.magic   = kMeshMagic;
   pkt.version = kMeshVersion;
@@ -5758,12 +5808,35 @@ void MeshBroadcastOsc(const char *osc_addr, float osc_arg) {
   pkt.seq     = mesh_cmd_seq++;
   strncpy(pkt.osc_addr, osc_addr, sizeof(pkt.osc_addr) - 1);
   pkt.osc_arg = osc_arg;
+}
+
+// Broadcasts an OSC command to all mesh peers (with retry). Safe to call from
+// Core 1 (button handlers, web handlers) — esp_now_send is thread-safe.
+void MeshBroadcastOsc(const char *osc_addr, float osc_arg) {
+  if (!mesh_initialized || !cfg_mesh_en) return;
+  MeshCommandPkt pkt;
+  MeshFillCmdPkt(pkt, osc_addr, osc_arg);
   for (uint8_t i = 0; i < kMeshCmdRetries; i++) {
     esp_now_send(kMeshBroadcastMac, (uint8_t *)&pkt, sizeof(pkt));
     if (i < kMeshCmdRetries - 1) vTaskDelay(pdMS_TO_TICKS(kMeshCmdRetryMs));
   }
   mesh_cmds_sent++;
   Console.printf("[Mesh] broadcast %s %.1f seq=%u\n", osc_addr, osc_arg, pkt.seq);
+}
+
+// Sends an OSC command to a single mesh peer by MAC (unicast with retry).
+// The peer must have been registered via esp_now_add_peer (done in MeshUpsertPeer).
+void MeshUnicastOsc(const uint8_t *mac, const char *osc_addr, float osc_arg) {
+  if (!mesh_initialized || !cfg_mesh_en) return;
+  MeshCommandPkt pkt;
+  MeshFillCmdPkt(pkt, osc_addr, osc_arg);
+  for (uint8_t i = 0; i < kMeshCmdRetries; i++) {
+    esp_now_send(mac, (uint8_t *)&pkt, sizeof(pkt));
+    if (i < kMeshCmdRetries - 1) vTaskDelay(pdMS_TO_TICKS(kMeshCmdRetryMs));
+  }
+  mesh_cmds_sent++;
+  Console.printf("[Mesh] unicast %02X:%02X:%02X %s %.1f seq=%u\n",
+                 mac[0], mac[1], mac[2], osc_addr, osc_arg, pkt.seq);
 }
 
 // Removes peers not heard within kMeshPeerTimeoutMs. Called from PingTask.
