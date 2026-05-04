@@ -475,9 +475,11 @@ struct DisplayPageLines {
   String line4;
 };
 
-// Draw a compact mesh badge "M:N" (size-1, right-aligned to x=128) at given y.
+// Draw a compact mesh badge "M:N" right-aligned to x=128 at given y.
+// text_size=2 → 12px/char, 16px tall (default for info sub-pages)
+// text_size=1 →  6px/char,  8px tall (use where height is tight)
 // No-op if mesh is disabled. Caller must call display.display() afterward.
-static void DrawMeshBadge(int by) {
+static void DrawMeshBadge(int by, uint8_t text_size = 2) {
   if (!cfg_mesh_en) return;
   int peer_count = 0;
   if (mesh_peers_mutex && xSemaphoreTake(mesh_peers_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
@@ -486,8 +488,9 @@ static void DrawMeshBadge(int by) {
   }
   char buf[8];
   snprintf(buf, sizeof(buf), "M:%d", peer_count);
-  const int w = static_cast<int>(strlen(buf)) * 6;  // size-1: 6px/char
-  display.setTextSize(1);
+  const int charW = (text_size == 1) ? 6 : 12;
+  const int w = static_cast<int>(strlen(buf)) * charW;
+  display.setTextSize(text_size);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(128 - w, by);
   display.print(buf);
@@ -502,7 +505,7 @@ void RenderDisplayPage(const DisplayPageLines &page) {
   display.println(page.line2);
   display.println(page.line3);
   display.println(page.line4);
-  DrawMeshBadge(0);  // top-right corner; line1 labels are typically ≤17 chars (102px)
+  DrawMeshBadge(0, 2);  // size-2 top-right; line1 labels are short so no overlap
   display.display();
 }
 
@@ -1913,7 +1916,7 @@ void ShowTimeVoltagePage() {
   display.setCursor(x, yUnit);
   display.print("V");
 
-  DrawMeshBadge(24);  // bottom row (y=24-31) is unused by this page's content
+  DrawMeshBadge(24, 1);  // size-1 at bottom row; size-2 would overflow 32px screen
   display.display();
 }
 
@@ -2482,6 +2485,21 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         <tbody id="mesh-peer-tbody"></tbody>
       </table>
       <div id="mesh-no-peers" style="color:var(--muted);font-size:13px;margin-top:6px;display:none">No peers discovered yet.</div>
+      <div style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">
+        <div style="font-weight:600;margin-bottom:8px;color:var(--accent)">Relay OSC via Mesh</div>
+        <div style="font-size:13px;color:var(--muted);margin-bottom:10px">Send a command from this node to all ESP-NOW peers. Use this when a controller (e.g. rpiboosh) can reach this PYLON but not the others.</div>
+        <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+          <label style="font-size:13px">OSC address
+            <input id="relay-addr" type="text" value="/pylon/BooshPulseSingle" style="width:220px;margin-top:4px;font-family:monospace">
+          </label>
+          <label style="font-size:13px">Arg
+            <input id="relay-arg" type="number" step="any" value="1.0" style="width:72px;margin-top:4px">
+          </label>
+          <button id="relay-btn" style="margin-bottom:2px">Send via Mesh</button>
+          <span id="relay-status" style="font-size:13px;color:var(--muted)"></span>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-top:8px">API: <code>POST /api/mesh/relay</code> &nbsp; params: <code>addr=&lt;osc_addr&gt;&amp;arg=&lt;float&gt;</code></div>
+      </div>
     </div>
     <div class="panel" style="margin-top:16px">
       <h2>Battery Voltage — 30 min</h2>
@@ -3314,6 +3332,30 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       }
     }
 
+    // Mesh relay button
+    document.getElementById('relay-btn').addEventListener('click', async () => {
+      const addr = document.getElementById('relay-addr').value.trim();
+      const arg  = document.getElementById('relay-arg').value.trim();
+      const statusEl = document.getElementById('relay-status');
+      if (!addr) { statusEl.textContent = 'addr required'; statusEl.style.color = '#f44336'; return; }
+      statusEl.textContent = 'Sending\u2026'; statusEl.style.color = 'var(--muted)';
+      try {
+        const res = await fetchJson('/api/mesh/relay', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+          body: 'addr=' + encodeURIComponent(addr) + '&arg=' + encodeURIComponent(arg || '0')
+        });
+        if (res.ok) {
+          statusEl.textContent = '\u2713 sent to ' + res.peers + ' peer' + (res.peers === 1 ? '' : 's');
+          statusEl.style.color = '#4caf50';
+        } else {
+          statusEl.textContent = 'Error: ' + (res.error || 'unknown');
+          statusEl.style.color = '#f44336';
+        }
+      } catch(e) { statusEl.textContent = 'Request failed'; statusEl.style.color = '#f44336'; }
+      setTimeout(() => { statusEl.textContent = ''; }, 4000);
+    });
+
     refreshTelemetry();
     refreshLogs();
     refreshCharts();
@@ -3736,6 +3778,38 @@ void HandleSolenoidOffApi() {
                  "{\"ok\":true,\"solenoid_active\":false,\"triggered_via\":\"http\"}");
 }
 
+// POST /api/mesh/relay  params: addr=<osc_addr>&arg=<float>
+// Lets any non-ESP-NOW node (e.g. rpiboosh) relay an OSC command onto the mesh.
+// The receiving PYLON broadcasts via ESP-NOW to all active peers; does NOT apply locally.
+void HandleMeshRelayApi() {
+  if (!cfg_mesh_en || !mesh_initialized) {
+    webServer.send(503, "application/json", "{\"ok\":false,\"error\":\"mesh not active\"}");
+    return;
+  }
+  const String addr  = webServer.arg("addr");
+  const String arg_s = webServer.arg("arg");
+  if (addr.length() == 0) {
+    webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"missing addr\"}");
+    return;
+  }
+  const float arg_f = arg_s.length() ? arg_s.toFloat() : 0.0f;
+  int peer_count = 0;
+  if (mesh_peers_mutex && xSemaphoreTake(mesh_peers_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+    for (int i = 0; i < kMeshMaxPeers; i++) if (mesh_peers[i].active) peer_count++;
+    xSemaphoreGive(mesh_peers_mutex);
+  }
+  MeshBroadcastOsc(addr.c_str(), arg_f);
+  Console.printf("[Mesh/relay] %s %.3f -> %d peers\n", addr.c_str(), arg_f, peer_count);
+  String resp = "{\"ok\":true,\"addr\":\"";
+  resp += addr;
+  resp += "\",\"arg\":";
+  resp += String(arg_f, 3);
+  resp += ",\"peers\":";
+  resp += String(peer_count);
+  resp += "}";
+  webServer.send(200, "application/json", resp);
+}
+
 // ---- Chart SVG (battery and temperature) ------------------------------------
 
 // Pick a human-friendly grid step for a given data range
@@ -3989,6 +4063,7 @@ void SetupWebServer() {
   webServer.on("/api/sequence/pulse_5x", HTTP_POST, HandleSeqPulse5xApi);
   webServer.on("/api/sequence/steam", HTTP_POST, HandleSeqSteamApi);
   webServer.on("/api/sequence/abort", HTTP_POST, HandleSeqAbortApi);
+  webServer.on("/api/mesh/relay",     HTTP_POST, HandleMeshRelayApi);
   webServer.begin();
   web_server_started = true;
   Console.println("HTTP server listening on port 80");
