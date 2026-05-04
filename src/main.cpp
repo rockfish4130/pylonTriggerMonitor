@@ -1862,6 +1862,7 @@ void ShowTempPctPage() {
   display.setCursor(x, yUnit);
   display.print("%");
 
+  DrawMeshBadge(0, 2);  // size-2 top-right; consistent with other pages
   display.display();
 }
 
@@ -1916,7 +1917,7 @@ void ShowTimeVoltagePage() {
   display.setCursor(x, yUnit);
   display.print("V");
 
-  DrawMeshBadge(24, 1);  // size-1 at bottom row; size-2 would overflow 32px screen
+  DrawMeshBadge(0, 2);  // size-2 top-right; consistent with other pages
   display.display();
 }
 
@@ -5052,7 +5053,6 @@ void PollBarModeButtons() {
       seq_valve_open    = true;
       seq_valve_open_ms = now;
       SendOscFloatToAllPylons(kOscAddress, 1.0f);
-      MeshBroadcastOsc(kOscAddress, 1.0f);
       barmode_all4_midi_held = true;
       barmode_act_counts[6]++;
       Console.println("[BarMode] Seq phase 4: valve open");
@@ -5063,7 +5063,7 @@ void PollBarModeButtons() {
     if (seq_phase >= 1 && !btn_stable[1]) {   // BLUE released
       const int next = (seq_phase == 4) ? 5 : 0;
       if (seq_valve_open) {
-        SendOscFloatToAllPylons(kOscAddress, 0.0f); MeshBroadcastOsc(kOscAddress, 0.0f); seq_valve_open = false;
+        SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false;
         barmode_all4_midi_held = false;
         if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
         Console.printf("[BarMode] Lockout started: %lu s\n", barmode_all4_lockout_s);
@@ -5074,7 +5074,7 @@ void PollBarModeButtons() {
     } else if (seq_phase >= 2 && !btn_stable[0]) {  // GREEN released in phase 2+
       const int next = (seq_phase == 4) ? 5 : 0;
       if (seq_valve_open) {
-        SendOscFloatToAllPylons(kOscAddress, 0.0f); MeshBroadcastOsc(kOscAddress, 0.0f); seq_valve_open = false;
+        SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false;
         barmode_all4_midi_held = false;
         if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
         Console.printf("[BarMode] Lockout started: %lu s\n", barmode_all4_lockout_s);
@@ -5085,7 +5085,7 @@ void PollBarModeButtons() {
     } else if (seq_phase >= 3 && !btn_stable[2]) {  // ORANGE released in phase 3+
       const int next = (seq_phase == 4) ? 5 : 0;
       if (seq_valve_open) {
-        SendOscFloatToAllPylons(kOscAddress, 0.0f); MeshBroadcastOsc(kOscAddress, 0.0f); seq_valve_open = false;
+        SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false;
         barmode_all4_midi_held = false;
         if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
         Console.printf("[BarMode] Lockout started: %lu s\n", barmode_all4_lockout_s);
@@ -5095,7 +5095,7 @@ void PollBarModeButtons() {
       Console.printf("[BarMode] Seq %s: orange released\n", next == 0 ? "reset" : "closing");
     } else if (seq_phase == 4 && !btn_stable[3]) {  // RED released in phase 4
       if (seq_valve_open) {
-        SendOscFloatToAllPylons(kOscAddress, 0.0f); MeshBroadcastOsc(kOscAddress, 0.0f); seq_valve_open = false;
+        SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false;
         barmode_all4_midi_held = false;
         if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
         Console.printf("[BarMode] Lockout started: %lu s\n", barmode_all4_lockout_s);
@@ -5107,7 +5107,6 @@ void PollBarModeButtons() {
     // Phase 4: auto-close timeout
     if (seq_phase == 4 && seq_valve_open && now - seq_valve_open_ms >= barmode_all4_valve_ms) {
       SendOscFloatToAllPylons(kOscAddress, 0.0f);
-      MeshBroadcastOsc(kOscAddress, 0.0f);
       seq_valve_open = false;
       barmode_all4_midi_held = false;
       if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
@@ -5144,7 +5143,6 @@ void PollBarModeButtons() {
             if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
             if (!btn0_pulse_active) {
               SendOscFloatToAllPylons(kOscAddress, 1.0f);
-              MeshBroadcastOsc(kOscAddress, 1.0f);
               barmode_act_counts[0]++;
             }
             btn0_pulse_active = true;
@@ -5163,7 +5161,6 @@ void PollBarModeButtons() {
       // Timer-based close
       if (btn0_pulse_active && now - btn0_pulse_ms >= barmode_green_timeout_ms) {
         SendOscFloatToAllPylons(kOscAddress, 0.0f);
-        MeshBroadcastOsc(kOscAddress, 0.0f);
         btn0_pulse_active = false;
       }
     }
@@ -5228,7 +5225,6 @@ void PollBarModeButtons() {
           } else {
             // Normal single fire to all pylons simultaneously
             SendOscFloatToAllPylons(kOscAddrPulseSingle, 1.0f);
-            MeshBroadcastOsc(kOscAddrPulseSingle, 1.0f);
             barmode_act_counts[1]++;
             btn1_single_fired = true;
           }
@@ -5311,7 +5307,6 @@ void PollBarModeButtons() {
           barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
           if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
           SendOscFloatToAllPylons(kOscAddrPulseTrain, 1.0f);
-          MeshBroadcastOsc(kOscAddrPulseTrain, 1.0f);
           barmode_act_counts[3]++;
           io35_strobe        = true;
           io35_strobe_start  = now;
@@ -5409,7 +5404,6 @@ void PollBarModeButtons() {
           } else if (red_state == 2 && now - red_press2_ms <= 500) {
             // Third press + hold → steam
             SendOscFloatToAllPylons(kOscAddrSteam, 1.0f);
-            MeshBroadcastOsc(kOscAddrSteam, 1.0f);
             barmode_act_counts[5]++;
             lamp_red_press_ms = now;
             lamp_red_on       = false;
@@ -5444,7 +5438,6 @@ void PollBarModeButtons() {
             }
           } else if (red_state == 3) {
             SendOscFloatToAllPylons(kOscAddrSteam, 0.0f);
-            MeshBroadcastOsc(kOscAddrSteam, 0.0f);
             red_state = 0;
             if (barmode_red_recovery_ms > 0) red_recovery_until = now + ApplyTempMult(barmode_red_recovery_ms);
             Console.println("[BarMode] Red: steam released");
