@@ -5630,9 +5630,10 @@ static QueueHandle_t mesh_osc_queue = nullptr;
 // ESP-NOW receive callback — runs in WiFi task context (Core 0).
 static void MeshOnRecv(const uint8_t *mac, const uint8_t *data, int len) {
   if (!cfg_mesh_en) return;
-  if (len < 2) return;
+  // Need at least magic(4)+version(1)+type(1) = 6 bytes before reading pkt_type
+  if (len < 6) return;
+  if (data[0] != (uint8_t)(kMeshMagic & 0xFF)) return;  // quick magic sanity
   const uint8_t pkt_type = data[5];  // offset 4=version, 5=type in both structs
-  if (len >= 2 && data[0] != (uint8_t)(kMeshMagic & 0xFF)) return;  // quick sanity
   if (pkt_type == kMeshPktBeacon && len >= (int)sizeof(MeshBeaconPkt)) {
     MeshBeaconPkt pkt;
     memcpy(&pkt, data, sizeof(pkt));
@@ -5760,22 +5761,25 @@ void MeshInit() {
   memset(mesh_peers, 0, sizeof(mesh_peers));
   memset(mesh_dedup, 0, sizeof(mesh_dedup));
   mesh_osc_queue = xQueueCreate(kMeshOscQueueDepth, sizeof(MeshOscEvent));
-  // Set channel before init
-  esp_wifi_set_channel(cfg_mesh_ch, WIFI_SECOND_CHAN_NONE);
+  // NOTE: do NOT call esp_wifi_set_channel() here. In STA mode the channel is
+  // locked by the AP association; the call silently fails and corrupts the
+  // peer.channel expectation. Use channel=0 on the broadcast peer so ESP-NOW
+  // follows the current WiFi channel automatically.
   if (esp_now_init() != ESP_OK) {
     Console.println("[Mesh] esp_now_init FAILED");
     return;
   }
   esp_now_register_recv_cb(MeshOnRecv);
-  // Register broadcast peer
+  // Register broadcast peer — channel=0 means "use current WiFi channel"
   esp_now_peer_info_t peer;
   memset(&peer, 0, sizeof(peer));
   memcpy(peer.peer_addr, kMeshBroadcastMac, 6);
-  peer.channel = cfg_mesh_ch;
+  peer.channel = 0;        // 0 = follow WiFi STA channel; never hardcode in STA mode
+  peer.ifidx   = WIFI_IF_STA;
   peer.encrypt = false;
   esp_now_add_peer(&peer);
   mesh_initialized = true;
-  Console.printf("[Mesh] init OK ch=%u\n", cfg_mesh_ch);
+  Console.printf("[Mesh] init OK wifi_ch=%u\n", (unsigned)WiFi.channel());
 }
 
 // OLED page: shows mesh status and up to 3 peers.
