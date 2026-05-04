@@ -48,8 +48,14 @@ bare `if (document.activeElement !== input)` pattern. `syncConfigField` checks `
 bails out completely when the user has unsaved edits. The activeElement check alone fails when
 focus moves to the Save button between keystroke and submit.
 
-Checkboxes (no text entry) are exempt from Rule 2 but still need to be inside the `if (!formDirty)`
-block. Display-only `<span>` elements go OUTSIDE the formDirty block so they always update.
+Checkboxes (no text entry) are exempt from Rule 2 but **are NOT exempt from Rule 1** — they must
+still appear in `configInputs` so the `'change'` listener sets `formDirty` when clicked. A checkbox
+not in `configInputs` will be overwritten by the next telemetry tick because clicking it never sets
+`formDirty`. This exact bug has been introduced with every new checkbox added. When adding a checkbox:
+1. Add it to `configInputs` (Rule 1 — mandatory for checkboxes too)
+2. Sync it inside the `if (!formDirty)` block using `document.activeElement !== box` (Rule 2 exempt)
+
+Display-only `<span>` elements go OUTSIDE the formDirty block so they always update.
 
 ## OSC Addresses
 - `/pylon/BooshMain` — raw solenoid open/close (1.0/0.0)

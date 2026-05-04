@@ -16,6 +16,8 @@
 #include <Adafruit_SSD1306.h>
 #include <WiFiUdp.h>
 #include <OSCMessage.h>
+#include <esp_now.h>
+#include <esp_wifi.h>
 
 #include "wifi_credentials.h"
 
@@ -72,6 +74,21 @@ constexpr const char *kOscAddress        = "/pylon/BooshMain";
 constexpr const char *kOscAddrPulseSingle = "/pylon/BooshPulseSingle";
 constexpr const char *kOscAddrPulseTrain  = "/pylon/BooshPulseTrain";
 constexpr const char *kOscAddrSteam       = "/pylon/BooshSteam";
+
+// ---- Mesh (ESP-NOW) constants -----------------------------------------------
+constexpr uint32_t kMeshMagic            = 0x4D455348UL; // "MESH"
+constexpr uint8_t  kMeshVersion          = 1;
+constexpr uint8_t  kMeshPktBeacon        = 1;
+constexpr uint8_t  kMeshPktCommand       = 2;
+constexpr uint32_t kMeshBeaconIntervalMs = 2000;   // broadcast beacon every 2 s
+constexpr uint32_t kMeshPeerTimeoutMs    = 8000;   // drop peer after 8 s silence
+constexpr uint8_t  kMeshMaxPeers         = 10;
+constexpr uint8_t  kMeshQualitySlots     = 16;     // rolling 32 s window (16 × 2 s slots)
+constexpr uint8_t  kMeshCmdRetries       = 3;
+constexpr uint16_t kMeshCmdRetryMs       = 8;
+constexpr uint8_t  kMeshDedupSlots       = 16;
+constexpr uint32_t kMeshDedupWindowMs    = 500;
+
 constexpr unsigned long kBooshFailsafeTimeoutMs = 5000;
 constexpr unsigned long kBooshFailsafeNoteMs = 3000;
 constexpr unsigned long kPingTimeoutMs = 5000;
@@ -161,6 +178,8 @@ volatile float barmode_temp_multiplier = 1.0f; // current effective multiplier (
 bool cfg_no_thermistor = false;  // when true, temperature is always reported as null/N/A
 bool cfg_no_batt_mon   = false;  // when true, battery V/SOC are always reported as null/N/A
 bool cfg_route_via_rpi = false;  // BARMODE: when true, all pylon commands route via rpiboosh APIs
+bool    cfg_mesh_en = true;      // enable ESP-NOW mesh
+uint8_t cfg_mesh_ch = 1;         // ESP-NOW channel (1-13)
 bool   cfg_use_dhcp    = true;   // false = use static IP config below
 String cfg_static_ip   = "";     // static IPv4 address (e.g. "192.168.4.100")
 String cfg_static_gw   = "";     // default gateway
@@ -255,6 +274,55 @@ SemaphoreHandle_t barmode_ping_stats_mutex = nullptr;
 
 String llled_ip_string;             // cached IP for llled.local; resolved once, used as mDNS fallback
 
+// ---- Mesh (ESP-NOW) structs and globals --------------------------------------
+struct __attribute__((packed)) MeshBeaconPkt {
+  uint32_t magic;
+  uint8_t  version;
+  uint8_t  type;       // kMeshPktBeacon
+  char     node_id[16];
+  uint8_t  pylon_index;
+  uint8_t  role;       // 0=normal, 1=barmode
+  uint32_t uptime_s;
+};
+
+struct __attribute__((packed)) MeshCommandPkt {
+  uint32_t magic;
+  uint8_t  version;
+  uint8_t  type;       // kMeshPktCommand
+  uint16_t seq;
+  char     osc_addr[32];
+  float    osc_arg;
+};
+
+struct MeshPeerInfo {
+  bool     active;
+  uint8_t  mac[6];
+  char     node_id[16];
+  uint8_t  pylon_index;
+  uint8_t  role;
+  uint32_t last_seen_ms;
+  uint32_t uptime_s;
+  uint16_t qual_bits;           // rolling 16-slot bitmap; bit i set = heard beacon in slot i
+  uint8_t  qual_pct;            // popcount(qual_bits) * 100 / kMeshQualitySlots
+  uint32_t qual_last_update_ms; // millis() when last slot was advanced
+};
+
+struct MeshDedupEntry {
+  uint8_t  mac[6];
+  uint16_t seq;
+  uint32_t expires_ms;
+};
+
+MeshPeerInfo      mesh_peers[kMeshMaxPeers];
+MeshDedupEntry    mesh_dedup[kMeshDedupSlots];
+uint8_t           mesh_dedup_idx    = 0;
+SemaphoreHandle_t mesh_peers_mutex  = nullptr;
+volatile uint16_t mesh_cmd_seq      = 0;
+volatile bool     mesh_initialized  = false;
+volatile uint32_t mesh_beacons_sent = 0;
+volatile uint32_t mesh_cmds_sent    = 0;
+static const uint8_t kMeshBroadcastMac[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+
 // ---- Sequence state ---------------------------------------------------------
 enum SeqType { SEQ_NONE, SEQ_PULSE_ONCE, SEQ_PULSE_5X, SEQ_STEAM };
 SeqType active_seq = SEQ_NONE;
@@ -348,6 +416,8 @@ constexpr const char *kPrefsKeyStaticIp      = "static_ip";     // string; stati
 constexpr const char *kPrefsKeyStaticGw      = "static_gw";     // string; static default gateway
 constexpr const char *kPrefsKeyStaticDns1    = "static_dns1";   // string; primary DNS
 constexpr const char *kPrefsKeyStaticDns2    = "static_dns2";   // string; secondary DNS
+constexpr const char *kPrefsKeyMeshEn        = "mesh_en";        // bool; enable ESP-NOW mesh
+constexpr const char *kPrefsKeyMeshCh        = "mesh_ch";        // uint8; ESP-NOW channel (1-13)
 constexpr uint32_t kBooshFailsafeMinMs  = 1000;
 constexpr uint32_t kBooshFailsafeMaxMs  = 60000;
 
@@ -405,6 +475,24 @@ struct DisplayPageLines {
   String line4;
 };
 
+// Draw a compact mesh badge "M:N" (size-1, right-aligned to x=128) at given y.
+// No-op if mesh is disabled. Caller must call display.display() afterward.
+static void DrawMeshBadge(int by) {
+  if (!cfg_mesh_en) return;
+  int peer_count = 0;
+  if (mesh_peers_mutex && xSemaphoreTake(mesh_peers_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+    for (int i = 0; i < kMeshMaxPeers; i++) if (mesh_peers[i].active) peer_count++;
+    xSemaphoreGive(mesh_peers_mutex);
+  }
+  char buf[8];
+  snprintf(buf, sizeof(buf), "M:%d", peer_count);
+  const int w = static_cast<int>(strlen(buf)) * 6;  // size-1: 6px/char
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(128 - w, by);
+  display.print(buf);
+}
+
 void RenderDisplayPage(const DisplayPageLines &page) {
   display.clearDisplay();
   display.setTextSize(1);
@@ -414,6 +502,7 @@ void RenderDisplayPage(const DisplayPageLines &page) {
   display.println(page.line2);
   display.println(page.line3);
   display.println(page.line4);
+  DrawMeshBadge(0);  // top-right corner; line1 labels are typically ≤17 chars (102px)
   display.display();
 }
 
@@ -605,6 +694,8 @@ bool SavePylonConfig() {
   prefs.putString(kPrefsKeyStaticGw,    cfg_static_gw);
   prefs.putString(kPrefsKeyStaticDns1,  cfg_static_dns1);
   prefs.putString(kPrefsKeyStaticDns2,  cfg_static_dns2);
+  prefs.putBool(kPrefsKeyMeshEn,        cfg_mesh_en);
+  prefs.putUChar(kPrefsKeyMeshCh,       cfg_mesh_ch);
   {
     uint8_t mask = 0;
     for (int i = 0; i < 4; i++) if (barmode_btn_disabled[i]) mask |= (1 << i);
@@ -714,6 +805,8 @@ void LoadPylonConfig() {
   cfg_static_gw              = prefs.getString(kPrefsKeyStaticGw,    "");
   cfg_static_dns1            = prefs.getString(kPrefsKeyStaticDns1,  "");
   cfg_static_dns2            = prefs.getString(kPrefsKeyStaticDns2,  "");
+  cfg_mesh_en                = prefs.getBool(kPrefsKeyMeshEn,        true);
+  cfg_mesh_ch                = (uint8_t)prefs.getUChar(kPrefsKeyMeshCh, 1);
   {
     const uint8_t mask = prefs.getUChar(kPrefsKeyBtnDisable, 0);
     for (int i = 0; i < 4; i++) barmode_btn_disabled[i] = (mask >> i) & 1;
@@ -1148,9 +1241,19 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
   } else if (field == "steam_dis") {
     action_steam_dis = (value == "1" || value == "true");
     changed = true;
+  } else if (field == "mesh_en") {
+    cfg_mesh_en = (value == "1" || value == "true");
+    changed = true;
+    if (log_output) Console.printf("[CFG] mesh_en set: %s (reboot to apply)\n", cfg_mesh_en ? "true" : "false");
+  } else if (field == "mesh_ch") {
+    const int ch = (int)value.toInt();
+    if (ch < 1 || ch > 13) { if (log_output) Console.println("[CFG] mesh_ch out of range (1-13)"); return false; }
+    cfg_mesh_ch = (uint8_t)ch;
+    changed = true;
+    if (log_output) Console.printf("[CFG] mesh_ch set: %u (reboot to apply)\n", cfg_mesh_ch);
   } else {
     if (log_output) {
-      Console.println("[CFG] unknown set field. use id|host|desc|node|ap|failsafe_s|index|seq_max_s|seq_dec_ms|seq_exp_pct|pulse1_dur_ms|pulse1_dis|pt_dur_ms|pt_off_ms|pt_count|pt_dis|steam_ramp_s|steam_open_s|steam_dis");
+      Console.println("[CFG] unknown set field. use id|host|desc|node|ap|failsafe_s|index|seq_max_s|seq_dec_ms|seq_exp_pct|pulse1_dur_ms|pulse1_dis|pt_dur_ms|pt_off_ms|pt_count|pt_dis|steam_ramp_s|steam_open_s|steam_dis|mesh_en|mesh_ch");
     }
     return false;
   }
@@ -1810,6 +1913,7 @@ void ShowTimeVoltagePage() {
   display.setCursor(x, yUnit);
   display.print("V");
 
+  DrawMeshBadge(24);  // bottom row (y=24-31) is unused by this page's content
   display.display();
 }
 
@@ -2100,6 +2204,44 @@ String BuildTelemetryApiJson() {
     payload += "]";
   }
   payload += "},";
+  // Mesh status — top-level key, NOT inside "telemetry"
+  {
+    int mesh_peer_count = 0;
+    if (mesh_peers_mutex && xSemaphoreTake(mesh_peers_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+      for (int i = 0; i < kMeshMaxPeers; i++) if (mesh_peers[i].active) mesh_peer_count++;
+      xSemaphoreGive(mesh_peers_mutex);
+    }
+    payload += "\"mesh\":{";
+    payload += "\"enabled\":" + String(cfg_mesh_en ? "true" : "false") + ",";
+    payload += "\"active\":" + String(mesh_initialized ? "true" : "false") + ",";
+    payload += "\"channel\":" + String(cfg_mesh_ch) + ",";
+    payload += "\"peer_count\":" + String(mesh_peer_count) + ",";
+    payload += "\"beacons_sent\":" + String(mesh_beacons_sent) + ",";
+    payload += "\"cmds_sent\":" + String(mesh_cmds_sent) + ",";
+    payload += "\"peers\":[";
+    if (mesh_peers_mutex && xSemaphoreTake(mesh_peers_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+      bool first = true;
+      for (int i = 0; i < kMeshMaxPeers; i++) {
+        if (!mesh_peers[i].active) continue;
+        if (!first) payload += ",";
+        first = false;
+        char mac_str[18];
+        snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
+                 mesh_peers[i].mac[0], mesh_peers[i].mac[1], mesh_peers[i].mac[2],
+                 mesh_peers[i].mac[3], mesh_peers[i].mac[4], mesh_peers[i].mac[5]);
+        const uint32_t age_s = (now - mesh_peers[i].last_seen_ms) / 1000;
+        payload += "{\"id\":\"" + JsonEscape(String(mesh_peers[i].node_id)) + "\",";
+        payload += "\"mac\":\"" + String(mac_str) + "\",";
+        payload += "\"index\":" + String(mesh_peers[i].pylon_index) + ",";
+        payload += "\"role\":" + String(mesh_peers[i].role) + ",";
+        payload += "\"qual_pct\":" + String(mesh_peers[i].qual_pct) + ",";
+        payload += "\"age_s\":" + String(age_s) + ",";
+        payload += "\"uptime_s\":" + String(mesh_peers[i].uptime_s) + "}";
+      }
+      xSemaphoreGive(mesh_peers_mutex);
+    }
+    payload += "]},";
+  }
   payload += BuildDisplayPagesJson(now);
   payload += "}";
   return payload;
@@ -2280,6 +2422,14 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           <input type="checkbox" id="cfg-ap" style="width:18px;height:18px;margin:0;cursor:pointer;accent-color:var(--accent)">
           <span style="color:var(--muted);font-size:14px">Enable WiFi AP &mdash; SSID: <code>PYLON_<em>id</em></code>, IP <code>10.1.2.3</code></span>
         </div>
+        <div style="border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
+          <div style="font-weight:600;color:var(--accent)">MESH (ESP-NOW)</div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <input type="checkbox" id="cfg-mesh-en" style="width:18px;height:18px;margin:0;cursor:pointer;accent-color:var(--accent)">
+            <span style="color:var(--muted);font-size:14px">Enable MESH &mdash; ESP-NOW peer-to-peer, no router required. Reboot to apply.</span>
+          </div>
+          <label style="font-size:14px">Channel (1&ndash;13) <input id="cfg-mesh-ch" type="number" min="1" max="13" step="1" style="width:60px"> <span style="color:var(--muted);font-size:12px">all nodes must match; avoid overlapping your AP channel</span></label>
+        </div>
         <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
           <button type="submit">Save Config</button>
           <span id="config-status"></span>
@@ -2310,6 +2460,28 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       <section class="panel oled"><h2>OLED Wi-Fi Detail</h2><pre id="oled-wifi-detail"></pre></section>
       <section class="panel oled"><h2>OLED Node</h2><pre id="oled-node"></pre></section>
       <section class="panel oled"><h2>OLED Firmware</h2><pre id="oled-firmware"></pre></section>
+    </div>
+    <div id="mesh-panel" class="panel" style="margin-top:16px;display:none">
+      <h2>MESH <span id="mesh-status-badge" style="font-size:14px;font-weight:400;color:var(--muted)"></span></h2>
+      <div class="meta" style="margin-bottom:10px">
+        <span>Channel: <strong id="mesh-ch-display">—</strong></span>
+        <span style="margin-left:16px">Peers: <strong id="mesh-peer-count">0</strong></span>
+        <span style="margin-left:16px">Beacons sent: <span id="mesh-beacons-sent">0</span></span>
+        <span style="margin-left:16px">Cmds sent: <span id="mesh-cmds-sent">0</span></span>
+      </div>
+      <table id="mesh-peer-table" style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="color:var(--muted);text-align:left">
+          <th style="padding:4px 8px">Node ID</th>
+          <th style="padding:4px 8px">Index</th>
+          <th style="padding:4px 8px">Role</th>
+          <th style="padding:4px 8px">Quality</th>
+          <th style="padding:4px 8px">Age</th>
+          <th style="padding:4px 8px">Uptime</th>
+          <th style="padding:4px 8px">MAC</th>
+        </tr></thead>
+        <tbody id="mesh-peer-tbody"></tbody>
+      </table>
+      <div id="mesh-no-peers" style="color:var(--muted);font-size:13px;margin-top:6px;display:none">No peers discovered yet.</div>
     </div>
     <div class="panel" style="margin-top:16px">
       <h2>Battery Voltage — 30 min</h2>
@@ -2537,6 +2709,9 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       if (noBattBox && document.activeElement !== noBattBox) noBattBox.checked = !!data.no_batt_mon;
       const routeViaRpiBox = document.getElementById('cfg-route-via-rpi');
       if (routeViaRpiBox && document.activeElement !== routeViaRpiBox) routeViaRpiBox.checked = !!data.route_via_rpi;
+      const meshEnBox = document.getElementById('cfg-mesh-en');
+      if (meshEnBox && document.activeElement !== meshEnBox) meshEnBox.checked = !!(data.mesh && data.mesh.enabled);
+      syncConfigField('cfg-mesh-ch', data.mesh ? (data.mesh.channel || 1) : 1);
       const disWrap = document.getElementById('cfg-btn-disable-wrap');
       if (disWrap) disWrap.style.display = barmodeActive ? 'flex' : 'none';
       if (barmodeActive && Array.isArray(data.btn_disabled)) {
@@ -2569,6 +2744,44 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
             : 'Avg pylon temp: ' + avgT.toFixed(1) + '\u00b0F \u2014 Active multiplier: ' + mult.toFixed(2) + '\u00d7';
         }
       }
+      // Mesh panel (display-only, always updates)
+      {
+        const mesh = data.mesh;
+        const meshPanel = document.getElementById('mesh-panel');
+        if (meshPanel) meshPanel.style.display = (mesh && mesh.enabled) ? '' : 'none';
+        if (mesh) {
+          const badge = document.getElementById('mesh-status-badge');
+          if (badge) badge.textContent = mesh.active ? '\u25cf ACTIVE' : '\u25cb INACTIVE';
+          const chDisp = document.getElementById('mesh-ch-display');
+          if (chDisp) chDisp.textContent = mesh.channel;
+          const pcDisp = document.getElementById('mesh-peer-count');
+          if (pcDisp) pcDisp.textContent = mesh.peer_count;
+          const bsDisp = document.getElementById('mesh-beacons-sent');
+          if (bsDisp) bsDisp.textContent = mesh.beacons_sent;
+          const csDisp = document.getElementById('mesh-cmds-sent');
+          if (csDisp) csDisp.textContent = mesh.cmds_sent;
+          const tbody = document.getElementById('mesh-peer-tbody');
+          const noPeers = document.getElementById('mesh-no-peers');
+          if (tbody) {
+            tbody.innerHTML = '';
+            const peers = mesh.peers || [];
+            peers.forEach(p => {
+              const tr = document.createElement('tr');
+              tr.style.borderTop = '1px solid var(--line)';
+              const qualColor = p.qual_pct >= 80 ? '#4caf50' : p.qual_pct >= 50 ? '#ff9800' : '#f44336';
+              tr.innerHTML = '<td style="padding:4px 8px">' + esc(p.id) + '</td>' +
+                '<td style="padding:4px 8px">' + p.index + '</td>' +
+                '<td style="padding:4px 8px">' + (p.role === 1 ? 'BARMODE' : 'normal') + '</td>' +
+                '<td style="padding:4px 8px;color:' + qualColor + '">' + p.qual_pct + '%</td>' +
+                '<td style="padding:4px 8px">' + p.age_s + 's</td>' +
+                '<td style="padding:4px 8px">' + p.uptime_s + 's</td>' +
+                '<td style="padding:4px 8px;font-family:monospace;font-size:11px">' + esc(p.mac) + '</td>';
+              tbody.appendChild(tr);
+            });
+            if (noPeers) noPeers.style.display = peers.length === 0 ? '' : 'none';
+          }
+        }
+      }
     }
     async function refreshTelemetry() {
       renderMeta(await fetchJson('/api/telemetry'));
@@ -2595,7 +2808,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       'cfg-steam-ramp', 'cfg-steam-open',
       'cfg-green-recovery-ms', 'cfg-blue-recovery-ms', 'cfg-orange-recovery-ms', 'cfg-red-recovery-ms',
       'cfg-temp-thresh1', 'cfg-temp-mult1', 'cfg-temp-thresh2', 'cfg-temp-mult2',
-      'cfg-route-via-rpi']
+      'cfg-route-via-rpi', 'cfg-mesh-en', 'cfg-mesh-ch']
       .map((id) => document.getElementById(id))
       .filter(Boolean);
     let holdActive = false;
@@ -2694,6 +2907,9 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       body.set('no_thermistor', document.getElementById('cfg-no-thermistor').checked ? '1' : '0');
       body.set('no_batt_mon',   document.getElementById('cfg-no-batt-mon').checked   ? '1' : '0');
       body.set('route_via_rpi', document.getElementById('cfg-route-via-rpi').checked ? '1' : '0');
+      body.set('mesh_en', document.getElementById('cfg-mesh-en').checked ? '1' : '0');
+      const meshChVal = document.getElementById('cfg-mesh-ch').value.trim();
+      if (meshChVal !== '') body.set('mesh_ch', meshChVal);
       const seqMaxVal   = document.getElementById('cfg-seq-max-s').value.trim();
       if (seqMaxVal   !== '') body.set('seq_max_s',   seqMaxVal);
       const seqStartVal = document.getElementById('cfg-seq-start-ms').value.trim();
@@ -3282,6 +3498,8 @@ void HandleConfigPostApi() {
   const bool has_no_thermistor   = webServer.hasArg("no_thermistor");
   const bool has_no_batt_mon     = webServer.hasArg("no_batt_mon");
   const bool has_route_via_rpi   = webServer.hasArg("route_via_rpi");
+  const bool has_mesh_en         = webServer.hasArg("mesh_en");
+  const bool has_mesh_ch         = webServer.hasArg("mesh_ch");
 
   if (!has_node && !has_id && !has_host && !has_desc &&
       !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index && !has_seq_max_s && !has_seq_start_ms && !has_seq_dec_ms && !has_seq_floor_ms && !has_seq_exp_pct && !has_btn_disabled && !has_green_timeout && !has_all4_valve_ms && !has_all4_lockout_s &&
@@ -3290,7 +3508,8 @@ void HandleConfigPostApi() {
       !has_steam_ramp_ms && !has_steam_open_ms && !has_steam_dis &&
       !has_green_rec_ms && !has_blue_rec_ms && !has_orange_rec_ms && !has_red_rec_ms &&
       !has_temp_thresh1 && !has_temp_mult1 && !has_temp_thresh2 && !has_temp_mult2 &&
-      !has_no_thermistor && !has_no_batt_mon && !has_route_via_rpi) {
+      !has_no_thermistor && !has_no_batt_mon && !has_route_via_rpi &&
+      !has_mesh_en && !has_mesh_ch) {
     SendApiError(400, "no recognized config field");
     return;
   }
@@ -3346,6 +3565,8 @@ void HandleConfigPostApi() {
   if (has_no_thermistor) ok = ok && SetConfigFieldValue("no_thermistor",      webServer.arg("no_thermistor"));
   if (has_no_batt_mon)   ok = ok && SetConfigFieldValue("no_batt_mon",        webServer.arg("no_batt_mon"));
   if (has_route_via_rpi) ok = ok && SetConfigFieldValue("route_via_rpi",      webServer.arg("route_via_rpi"));
+  if (has_mesh_en)       ok = ok && SetConfigFieldValue("mesh_en",            webServer.arg("mesh_en"));
+  if (has_mesh_ch)       ok = ok && SetConfigFieldValue("mesh_ch",            webServer.arg("mesh_ch"));
   if (has_btn_disabled) {
     // Accepts "0101" bitmask string: index 0=green,1=blue,2=orange,3=red; '1'=disabled
     const String v = webServer.arg("btn_disabled");
@@ -3420,6 +3641,8 @@ void PingTask(void *);      // forward declaration
 void TempPollTask(void *);  // forward declaration
 void StartSequence(SeqType type);  // forward declaration
 void AbortSequence();              // forward declaration
+void MeshBroadcastOsc(const char *osc_addr, float osc_arg);  // forward declaration
+void MeshInit();  // forward declaration
 
 void HandleCaptivePortalRedirect() {
   webServer.sendHeader("Location", "http://10.1.2.3/");
@@ -3986,6 +4209,9 @@ void setup() {
     SetupApMode();
   }
 
+  // Initialise ESP-NOW mesh (no-op if cfg_mesh_en is false)
+  MeshInit();
+
   // Ping and hostname resolution run in a background task so the main loop
   // never blocks on network I/O.
   xTaskCreatePinnedToCore(PingTask,     "ping",     4096, nullptr, 1, nullptr, 0);
@@ -4002,6 +4228,8 @@ void HandleOscMessage(OSCMessage &msg) {
     const float v = msg.getFloat(0);
     Console.printf("OSC BooshMain %.3f\n", v);
     ApplyBooshState(v, "osc");
+    // Mesh relay: barmode node forwards received UDP commands to ESP-NOW peers
+    if (barmode_active) MeshBroadcastOsc(kOscAddress, v);
     return;
   }
 
@@ -4011,6 +4239,7 @@ void HandleOscMessage(OSCMessage &msg) {
     if (msg.size() == 1 && msg.isFloat(0) && msg.getFloat(0) >= 0.5f) {
       Console.println("OSC BooshPulseSingle → SEQ_PULSE_ONCE");
       StartSequence(SEQ_PULSE_ONCE);
+      if (barmode_active) MeshBroadcastOsc(kOscAddrPulseSingle, 1.0f);
     }
     return;
   }
@@ -4021,6 +4250,7 @@ void HandleOscMessage(OSCMessage &msg) {
     if (msg.size() == 1 && msg.isFloat(0) && msg.getFloat(0) >= 0.5f) {
       Console.println("OSC BooshPulseTrain → SEQ_PULSE_5X");
       StartSequence(SEQ_PULSE_5X);
+      if (barmode_active) MeshBroadcastOsc(kOscAddrPulseTrain, 1.0f);
     }
     return;
   }
@@ -4031,13 +4261,15 @@ void HandleOscMessage(OSCMessage &msg) {
       Console.println("OSC BooshSteam: disabled"); return;
     }
     if (msg.size() == 1 && msg.isFloat(0)) {
-      if (msg.getFloat(0) >= 0.5f) {
+      const float sv = msg.getFloat(0);
+      if (sv >= 0.5f) {
         Console.println("OSC BooshSteam 1.0 → SEQ_STEAM start");
         StartSequence(SEQ_STEAM);
       } else {
         Console.println("OSC BooshSteam 0.0 → abort");
         AbortSequence();
       }
+      if (barmode_active) MeshBroadcastOsc(kOscAddrSteam, sv);
     }
     return;
   }
@@ -4701,6 +4933,7 @@ void PollBarModeButtons() {
       seq_valve_open    = true;
       seq_valve_open_ms = now;
       SendOscFloatToAllPylons(kOscAddress, 1.0f);
+      MeshBroadcastOsc(kOscAddress, 1.0f);
       barmode_all4_midi_held = true;
       barmode_act_counts[6]++;
       Console.println("[BarMode] Seq phase 4: valve open");
@@ -4711,7 +4944,7 @@ void PollBarModeButtons() {
     if (seq_phase >= 1 && !btn_stable[1]) {   // BLUE released
       const int next = (seq_phase == 4) ? 5 : 0;
       if (seq_valve_open) {
-        SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false;
+        SendOscFloatToAllPylons(kOscAddress, 0.0f); MeshBroadcastOsc(kOscAddress, 0.0f); seq_valve_open = false;
         barmode_all4_midi_held = false;
         if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
         Console.printf("[BarMode] Lockout started: %lu s\n", barmode_all4_lockout_s);
@@ -4722,7 +4955,7 @@ void PollBarModeButtons() {
     } else if (seq_phase >= 2 && !btn_stable[0]) {  // GREEN released in phase 2+
       const int next = (seq_phase == 4) ? 5 : 0;
       if (seq_valve_open) {
-        SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false;
+        SendOscFloatToAllPylons(kOscAddress, 0.0f); MeshBroadcastOsc(kOscAddress, 0.0f); seq_valve_open = false;
         barmode_all4_midi_held = false;
         if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
         Console.printf("[BarMode] Lockout started: %lu s\n", barmode_all4_lockout_s);
@@ -4733,7 +4966,7 @@ void PollBarModeButtons() {
     } else if (seq_phase >= 3 && !btn_stable[2]) {  // ORANGE released in phase 3+
       const int next = (seq_phase == 4) ? 5 : 0;
       if (seq_valve_open) {
-        SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false;
+        SendOscFloatToAllPylons(kOscAddress, 0.0f); MeshBroadcastOsc(kOscAddress, 0.0f); seq_valve_open = false;
         barmode_all4_midi_held = false;
         if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
         Console.printf("[BarMode] Lockout started: %lu s\n", barmode_all4_lockout_s);
@@ -4743,7 +4976,7 @@ void PollBarModeButtons() {
       Console.printf("[BarMode] Seq %s: orange released\n", next == 0 ? "reset" : "closing");
     } else if (seq_phase == 4 && !btn_stable[3]) {  // RED released in phase 4
       if (seq_valve_open) {
-        SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false;
+        SendOscFloatToAllPylons(kOscAddress, 0.0f); MeshBroadcastOsc(kOscAddress, 0.0f); seq_valve_open = false;
         barmode_all4_midi_held = false;
         if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
         Console.printf("[BarMode] Lockout started: %lu s\n", barmode_all4_lockout_s);
@@ -4755,6 +4988,7 @@ void PollBarModeButtons() {
     // Phase 4: auto-close timeout
     if (seq_phase == 4 && seq_valve_open && now - seq_valve_open_ms >= barmode_all4_valve_ms) {
       SendOscFloatToAllPylons(kOscAddress, 0.0f);
+      MeshBroadcastOsc(kOscAddress, 0.0f);
       seq_valve_open = false;
       barmode_all4_midi_held = false;
       if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
@@ -4791,6 +5025,7 @@ void PollBarModeButtons() {
             if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
             if (!btn0_pulse_active) {
               SendOscFloatToAllPylons(kOscAddress, 1.0f);
+              MeshBroadcastOsc(kOscAddress, 1.0f);
               barmode_act_counts[0]++;
             }
             btn0_pulse_active = true;
@@ -4809,6 +5044,7 @@ void PollBarModeButtons() {
       // Timer-based close
       if (btn0_pulse_active && now - btn0_pulse_ms >= barmode_green_timeout_ms) {
         SendOscFloatToAllPylons(kOscAddress, 0.0f);
+        MeshBroadcastOsc(kOscAddress, 0.0f);
         btn0_pulse_active = false;
       }
     }
@@ -4873,6 +5109,7 @@ void PollBarModeButtons() {
           } else {
             // Normal single fire to all pylons simultaneously
             SendOscFloatToAllPylons(kOscAddrPulseSingle, 1.0f);
+            MeshBroadcastOsc(kOscAddrPulseSingle, 1.0f);
             barmode_act_counts[1]++;
             btn1_single_fired = true;
           }
@@ -4955,6 +5192,7 @@ void PollBarModeButtons() {
           barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
           if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
           SendOscFloatToAllPylons(kOscAddrPulseTrain, 1.0f);
+          MeshBroadcastOsc(kOscAddrPulseTrain, 1.0f);
           barmode_act_counts[3]++;
           io35_strobe        = true;
           io35_strobe_start  = now;
@@ -5052,6 +5290,7 @@ void PollBarModeButtons() {
           } else if (red_state == 2 && now - red_press2_ms <= 500) {
             // Third press + hold → steam
             SendOscFloatToAllPylons(kOscAddrSteam, 1.0f);
+            MeshBroadcastOsc(kOscAddrSteam, 1.0f);
             barmode_act_counts[5]++;
             lamp_red_press_ms = now;
             lamp_red_on       = false;
@@ -5086,6 +5325,7 @@ void PollBarModeButtons() {
             }
           } else if (red_state == 3) {
             SendOscFloatToAllPylons(kOscAddrSteam, 0.0f);
+            MeshBroadcastOsc(kOscAddrSteam, 0.0f);
             red_state = 0;
             if (barmode_red_recovery_ms > 0) red_recovery_until = now + ApplyTempMult(barmode_red_recovery_ms);
             Console.println("[BarMode] Red: steam released");
@@ -5316,6 +5556,268 @@ void PollBlinkLeds() {
   }
 }
 
+// ---- Mesh (ESP-NOW) functions -----------------------------------------------
+
+// Called from ESP-NOW recv callback (Core 0 WiFi task) — must be ISR-safe.
+// Upserts a beacon into the peer table; updates quality bitmap on the 2 s slot.
+static void MeshUpsertPeer(const uint8_t *mac, const MeshBeaconPkt &pkt) {
+  if (xSemaphoreTakeFromISR(mesh_peers_mutex, nullptr) != pdTRUE) return;
+  const uint32_t now = (uint32_t)millis();
+  int slot = -1;
+  for (int i = 0; i < kMeshMaxPeers; i++) {
+    if (mesh_peers[i].active && memcmp(mesh_peers[i].mac, mac, 6) == 0) {
+      slot = i; break;
+    }
+  }
+  if (slot < 0) {
+    for (int i = 0; i < kMeshMaxPeers; i++) {
+      if (!mesh_peers[i].active) { slot = i; break; }
+    }
+  }
+  if (slot < 0) { xSemaphoreGiveFromISR(mesh_peers_mutex, nullptr); return; }  // table full
+  MeshPeerInfo &p = mesh_peers[slot];
+  p.active    = true;
+  memcpy(p.mac, mac, 6);
+  strncpy(p.node_id, pkt.node_id, sizeof(p.node_id) - 1);
+  p.node_id[sizeof(p.node_id) - 1] = '\0';
+  p.pylon_index = pkt.pylon_index;
+  p.role        = pkt.role;
+  p.uptime_s    = pkt.uptime_s;
+  // Advance quality slot if ≥ 2 s have passed since last update
+  if (now - p.qual_last_update_ms >= kMeshBeaconIntervalMs) {
+    p.qual_bits = (uint16_t)((p.qual_bits << 1) & 0xFFFF);  // shift in a 0
+    p.qual_last_update_ms = now;
+  }
+  p.qual_bits |= 1u;  // mark this slot as heard
+  {
+    uint16_t b = p.qual_bits; uint8_t cnt = 0;
+    while (b) { cnt += (b & 1); b >>= 1; }
+    p.qual_pct = (uint8_t)(cnt * 100 / kMeshQualitySlots);
+  }
+  p.last_seen_ms = now;
+  xSemaphoreGiveFromISR(mesh_peers_mutex, nullptr);
+}
+
+// Returns true if this {src_mac, seq} pair was seen within the dedup window.
+// Records the entry if not a duplicate. NOT thread-safe; call only from Core 1 OSC context.
+static bool MeshIsDuplicate(const uint8_t *mac, uint16_t seq) {
+  const uint32_t now = (uint32_t)millis();
+  for (int i = 0; i < kMeshDedupSlots; i++) {
+    if (mesh_dedup[i].expires_ms > now &&
+        memcmp(mesh_dedup[i].mac, mac, 6) == 0 &&
+        mesh_dedup[i].seq == seq) return true;
+  }
+  // Record new entry
+  memcpy(mesh_dedup[mesh_dedup_idx].mac, mac, 6);
+  mesh_dedup[mesh_dedup_idx].seq        = seq;
+  mesh_dedup[mesh_dedup_idx].expires_ms = now + kMeshDedupWindowMs;
+  mesh_dedup_idx = (mesh_dedup_idx + 1) % kMeshDedupSlots;
+  return false;
+}
+
+// Queue for ESP-NOW → OSC command delivery to main loop (Core 1).
+// Using a small FreeRTOS queue so the recv callback (WiFi task, Core 0) never
+// calls StartSequence() or ApplyBooshState() directly on Core 1 data.
+struct MeshOscEvent {
+  char    osc_addr[32];
+  float   osc_arg;
+  uint8_t src_mac[6];
+  uint16_t seq;
+};
+constexpr int kMeshOscQueueDepth = 8;
+static QueueHandle_t mesh_osc_queue = nullptr;
+
+// ESP-NOW receive callback — runs in WiFi task context (Core 0).
+static void MeshOnRecv(const uint8_t *mac, const uint8_t *data, int len) {
+  if (!cfg_mesh_en) return;
+  if (len < 2) return;
+  const uint8_t pkt_type = data[5];  // offset 4=version, 5=type in both structs
+  if (len >= 2 && data[0] != (uint8_t)(kMeshMagic & 0xFF)) return;  // quick sanity
+  if (pkt_type == kMeshPktBeacon && len >= (int)sizeof(MeshBeaconPkt)) {
+    MeshBeaconPkt pkt;
+    memcpy(&pkt, data, sizeof(pkt));
+    if (pkt.magic != kMeshMagic || pkt.version != kMeshVersion) return;
+    MeshUpsertPeer(mac, pkt);
+  } else if (pkt_type == kMeshPktCommand && len >= (int)sizeof(MeshCommandPkt)) {
+    MeshCommandPkt pkt;
+    memcpy(&pkt, data, sizeof(pkt));
+    if (pkt.magic != kMeshMagic || pkt.version != kMeshVersion) return;
+    if (mesh_osc_queue) {
+      MeshOscEvent ev;
+      strncpy(ev.osc_addr, pkt.osc_addr, sizeof(ev.osc_addr) - 1);
+      ev.osc_addr[sizeof(ev.osc_addr) - 1] = '\0';
+      ev.osc_arg = pkt.osc_arg;
+      memcpy(ev.src_mac, mac, 6);
+      ev.seq = pkt.seq;
+      xQueueSendFromISR(mesh_osc_queue, &ev, nullptr);
+    }
+  }
+}
+
+// Broadcasts a beacon packet announcing this node. Called from PingTask (Core 0).
+static void MeshSendBeacon() {
+  if (!mesh_initialized) return;
+  MeshBeaconPkt pkt;
+  memset(&pkt, 0, sizeof(pkt));
+  pkt.magic   = kMeshMagic;
+  pkt.version = kMeshVersion;
+  pkt.type    = kMeshPktBeacon;
+  strncpy(pkt.node_id, pylon_id.c_str(), sizeof(pkt.node_id) - 1);
+  pkt.pylon_index = (uint8_t)pylon_index;
+  pkt.role        = barmode_active ? 1 : 0;
+  pkt.uptime_s    = (uint32_t)(millis() / 1000);
+  esp_now_send(kMeshBroadcastMac, (uint8_t *)&pkt, sizeof(pkt));
+  mesh_beacons_sent++;
+}
+
+// Broadcasts an OSC command to all mesh peers (with retry). Safe to call from
+// Core 1 (button handlers, web handlers) — esp_now_send is thread-safe.
+void MeshBroadcastOsc(const char *osc_addr, float osc_arg) {
+  if (!mesh_initialized || !cfg_mesh_en) return;
+  MeshCommandPkt pkt;
+  memset(&pkt, 0, sizeof(pkt));
+  pkt.magic   = kMeshMagic;
+  pkt.version = kMeshVersion;
+  pkt.type    = kMeshPktCommand;
+  pkt.seq     = mesh_cmd_seq++;
+  strncpy(pkt.osc_addr, osc_addr, sizeof(pkt.osc_addr) - 1);
+  pkt.osc_arg = osc_arg;
+  for (uint8_t i = 0; i < kMeshCmdRetries; i++) {
+    esp_now_send(kMeshBroadcastMac, (uint8_t *)&pkt, sizeof(pkt));
+    if (i < kMeshCmdRetries - 1) vTaskDelay(pdMS_TO_TICKS(kMeshCmdRetryMs));
+  }
+  mesh_cmds_sent++;
+  Console.printf("[Mesh] broadcast %s %.1f seq=%u\n", osc_addr, osc_arg, pkt.seq);
+}
+
+// Removes peers not heard within kMeshPeerTimeoutMs. Called from PingTask.
+static void MeshExpirePeers() {
+  if (!mesh_peers_mutex) return;
+  const uint32_t now = (uint32_t)millis();
+  if (xSemaphoreTake(mesh_peers_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return;
+  for (int i = 0; i < kMeshMaxPeers; i++) {
+    if (mesh_peers[i].active && now - mesh_peers[i].last_seen_ms > kMeshPeerTimeoutMs) {
+      Console.printf("[Mesh] peer expired: %s\n", mesh_peers[i].node_id);
+      mesh_peers[i].active = false;
+    }
+  }
+  xSemaphoreGive(mesh_peers_mutex);
+}
+
+// Advances quality slot for peers that haven't had a slot update this interval.
+// Called from PingTask every 2 s alongside beacon send.
+static void MeshUpdateQuality() {
+  if (!mesh_peers_mutex) return;
+  const uint32_t now = (uint32_t)millis();
+  if (xSemaphoreTake(mesh_peers_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return;
+  for (int i = 0; i < kMeshMaxPeers; i++) {
+    if (!mesh_peers[i].active) continue;
+    if (now - mesh_peers[i].qual_last_update_ms >= kMeshBeaconIntervalMs) {
+      // Slot elapsed without a heard beacon → shift in a 0
+      mesh_peers[i].qual_bits = (uint16_t)((mesh_peers[i].qual_bits << 1) & 0xFFFF);
+      mesh_peers[i].qual_last_update_ms = now;
+      uint16_t b = mesh_peers[i].qual_bits; uint8_t cnt = 0;
+      while (b) { cnt += (b & 1); b >>= 1; }
+      mesh_peers[i].qual_pct = (uint8_t)(cnt * 100 / kMeshQualitySlots);
+    }
+  }
+  xSemaphoreGive(mesh_peers_mutex);
+}
+
+// Drains mesh_osc_queue and executes commands. Called from loop() (Core 1).
+// Dedup check is here (Core 1 only) to avoid mutex contention.
+void PollMeshOscQueue() {
+  if (!mesh_osc_queue) return;
+  MeshOscEvent ev;
+  while (xQueueReceive(mesh_osc_queue, &ev, 0) == pdTRUE) {
+    if (MeshIsDuplicate(ev.src_mac, ev.seq)) {
+      Console.printf("[Mesh] dedup drop %s seq=%u\n", ev.osc_addr, ev.seq);
+      continue;
+    }
+    Console.printf("[Mesh] rx cmd %s %.1f seq=%u\n", ev.osc_addr, ev.osc_arg, ev.seq);
+    // Dispatch to the same handlers OSC UDP would use
+    const String addr(ev.osc_addr);
+    const float val = ev.osc_arg;
+    if (addr == kOscAddress) {
+      ApplyBooshState(val, "mesh");
+    } else if (addr == kOscAddrPulseSingle) {
+      if (!action_pulse1_dis && val >= 0.5f) StartSequence(SEQ_PULSE_ONCE);
+    } else if (addr == kOscAddrPulseTrain) {
+      if (!action_pt_dis && val >= 0.5f) StartSequence(SEQ_PULSE_5X);
+    } else if (addr == kOscAddrSteam) {
+      if (!action_steam_dis) {
+        if (val >= 0.5f) StartSequence(SEQ_STEAM);
+        else             AbortSequence();
+      }
+    }
+  }
+}
+
+// Initialises ESP-NOW. Called from setup() after WiFi init.
+void MeshInit() {
+  if (!cfg_mesh_en) return;
+  mesh_peers_mutex = xSemaphoreCreateMutex();
+  memset(mesh_peers, 0, sizeof(mesh_peers));
+  memset(mesh_dedup, 0, sizeof(mesh_dedup));
+  mesh_osc_queue = xQueueCreate(kMeshOscQueueDepth, sizeof(MeshOscEvent));
+  // Set channel before init
+  esp_wifi_set_channel(cfg_mesh_ch, WIFI_SECOND_CHAN_NONE);
+  if (esp_now_init() != ESP_OK) {
+    Console.println("[Mesh] esp_now_init FAILED");
+    return;
+  }
+  esp_now_register_recv_cb(MeshOnRecv);
+  // Register broadcast peer
+  esp_now_peer_info_t peer;
+  memset(&peer, 0, sizeof(peer));
+  memcpy(peer.peer_addr, kMeshBroadcastMac, 6);
+  peer.channel = cfg_mesh_ch;
+  peer.encrypt = false;
+  esp_now_add_peer(&peer);
+  mesh_initialized = true;
+  Console.printf("[Mesh] init OK ch=%u\n", cfg_mesh_ch);
+}
+
+// OLED page: shows mesh status and up to 3 peers.
+void ShowMeshPage() {
+  char line0[22], line1[22], line2[22], line3[22];
+  int peer_count = 0;
+  if (mesh_peers_mutex && xSemaphoreTake(mesh_peers_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+    for (int i = 0; i < kMeshMaxPeers; i++) if (mesh_peers[i].active) peer_count++;
+    xSemaphoreGive(mesh_peers_mutex);
+  }
+  if (!cfg_mesh_en) {
+    snprintf(line0, sizeof(line0), "MESH disabled");
+    line1[0] = line2[0] = line3[0] = '\0';
+  } else if (!mesh_initialized) {
+    snprintf(line0, sizeof(line0), "MESH init fail");
+    line1[0] = line2[0] = line3[0] = '\0';
+  } else {
+    snprintf(line0, sizeof(line0), "MESH ch:%u %dp", cfg_mesh_ch, peer_count);
+    // Fill up to 3 peer lines
+    const char *lines[3] = {line1, line2, line3};
+    int filled = 0;
+    if (xSemaphoreTake(mesh_peers_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+      const uint32_t now = (uint32_t)millis();
+      for (int i = 0; i < kMeshMaxPeers && filled < 3; i++) {
+        if (!mesh_peers[i].active) continue;
+        uint32_t age_s = (now - mesh_peers[i].last_seen_ms) / 1000;
+        snprintf((char *)lines[filled], 22, "%-8s %us q:%u%%",
+                 mesh_peers[i].node_id, age_s, mesh_peers[i].qual_pct);
+        filled++;
+      }
+      xSemaphoreGive(mesh_peers_mutex);
+    }
+    while (filled < 3) { ((char *)lines[filled])[0] = '\0'; filled++; }
+  }
+  DisplayPageLines pg;
+  pg.line1 = line0;
+  pg.line2 = line1;
+  pg.line3 = line2;
+  pg.line4 = line3;
+  RenderDisplayPage(pg);
+}
+
 // ---- Ping task (Core 0) -----------------------------------------------------
 // Runs hostname resolution and ICMP ping in a background FreeRTOS task so the
 // main loop (which handles OSC) never blocks waiting for network replies.
@@ -5391,10 +5893,21 @@ void PingTask(void *) {
   bool hasIp = false;
   unsigned long lastResolveMs = 0;
   unsigned long lastPingMs = 0;
+  unsigned long lastMeshMs = 0;
   bool pingWasDown = false;
   PingStats stats;
 
   for (;;) {
+    const unsigned long now = millis();
+
+    // ---- Mesh beacon + maintenance (every 2 s, no WiFi STA required) --------
+    if (cfg_mesh_en && now - lastMeshMs >= kMeshBeaconIntervalMs) {
+      lastMeshMs = now;
+      MeshSendBeacon();
+      MeshUpdateQuality();
+      MeshExpirePeers();
+    }
+
     if (WiFi.status() != WL_CONNECTED) {
       hasIp = false;
       pingWasDown = false;
@@ -5402,8 +5915,6 @@ void PingTask(void *) {
       vTaskDelay(pdMS_TO_TICKS(500));
       continue;
     }
-
-    const unsigned long now = millis();
 
     if (!hasIp && now - lastResolveMs > 10000) {
       lastResolveMs = now;
@@ -5760,6 +6271,7 @@ void loop() {
   static unsigned long lastIdentMs = 0;
   static uint8_t identPhase = 0;
 
+  PollMeshOscQueue();
   PollBlinkLeds();
   PollSosBlueLed();
   PollBarModeButtons();
@@ -5909,11 +6421,11 @@ void loop() {
       if (barmode_active) {
         // Barmode: no battery/temp hardware — skip those pages, only cycle info sub-pages
         displayPage     = 3;
-        displayOtherIdx = static_cast<uint8_t>((displayOtherIdx + 1) % 6);
+        displayOtherIdx = static_cast<uint8_t>((displayOtherIdx + 1) % 7);
       } else {
         displayPage = static_cast<uint8_t>((displayPage + 1) % 4);
         if (displayPage == 3) {
-          displayOtherIdx = static_cast<uint8_t>((displayOtherIdx + 1) % 6);
+          displayOtherIdx = static_cast<uint8_t>((displayOtherIdx + 1) % 7);
         }
       }
     }
@@ -5928,7 +6440,7 @@ void loop() {
     } else if (!barmode_active && displayPage == 2) {
       ShowTimeVoltagePage();
     } else {
-      // displayOtherIdx: 0=ping, 1=wifi, 2=wifi detail, 3=node, 4=firmware, 5=pylon-ping(barmode)
+      // displayOtherIdx: 0=ping, 1=wifi, 2=wifi detail, 3=node, 4=firmware, 5=pylon-ping(barmode), 6=mesh
       if (displayOtherIdx == 0) {
         PingStats disp_stats;
         disp_stats.count = telemetry_ping_count;
@@ -5945,6 +6457,8 @@ void loop() {
         ShowNodeConfigPage();
       } else if (displayOtherIdx == 5 && barmode_active) {
         ShowPylonPingPage();
+      } else if (displayOtherIdx == 6) {
+        ShowMeshPage();
       } else {
         ShowFirmwarePage();
       }
