@@ -4167,6 +4167,14 @@ void setup() {
         wifi_connected_since_ms = 0;
         wifi_has_ip = false;
         digitalWrite(kIo38Pin, LOW);
+        // Pin radio to mesh channel whenever STA is disassociated.
+        // esp_wifi_set_channel() is valid (and a no-op if already on that ch)
+        // when STA is not associated. The AP association re-asserts its channel
+        // on reconnect. This event also fires after each failed reconnect
+        // attempt, so the pin is automatically re-asserted without polling.
+        if (cfg_mesh_en) {
+          esp_wifi_set_channel((uint8_t)cfg_mesh_ch, WIFI_SECOND_CHAN_NONE);
+        }
         break;
       default:
         break;
@@ -4176,7 +4184,10 @@ void setup() {
   LogBootStep("Boot: WiFi STA mode");
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
-  WiFi.setAutoReconnect(true);
+  // Disable auto-reconnect when mesh is active: background reconnect scans
+  // change the WiFi channel asynchronously, disrupting ESP-NOW. The manual
+  // reconnect watchdog in loop() handles recovery instead.
+  WiFi.setAutoReconnect(!cfg_mesh_en);
   WiFi.setSleep(false);
   WiFi.disconnect(false, false);
   delay(100);
@@ -6459,19 +6470,9 @@ void loop() {
 
     const unsigned long offline_ms = now_dc - disconnected_since_ms;
 
-    // While disconnected and mesh active: re-assert cfg_mesh_ch every 3 s.
-    // WiFi.setAutoReconnect and manual WiFi.reconnect() both trigger background
-    // channel scans that un-pin the channel asynchronously; continuous re-assertion
-    // corrects drift within one tick so ESP-NOW stays on the expected channel.
-    if (cfg_mesh_en && mesh_initialized) {
-      static unsigned long mesh_ch_pin_ms = 0;
-      if (now_dc - mesh_ch_pin_ms >= 3000UL) {
-        mesh_ch_pin_ms = now_dc;
-        esp_wifi_set_channel((uint8_t)cfg_mesh_ch, WIFI_SECOND_CHAN_NONE);
-      }
-    }
-
     // Escalating reconnect: nudge WiFi stack every 3 min, reboot after 10 min.
+    // With setAutoReconnect(false), failed attempts fire DISCONNECTED again,
+    // which re-pins the mesh channel via the event handler above.
     if (!ap_active) {
       if (offline_ms >= 600000UL) {
         Console.println("[WiFi] Offline 10 min — rebooting.");
