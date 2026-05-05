@@ -4167,6 +4167,12 @@ void setup() {
         wifi_connected_since_ms = 0;
         wifi_has_ip = false;
         digitalWrite(kIo38Pin, LOW);
+        // Pin radio to mesh channel so ESP-NOW stays on a stable channel while
+        // the WiFi stack scans for the AP. Valid only when STA is disassociated;
+        // the AP association re-asserts the correct channel on reconnect.
+        if (cfg_mesh_en) {
+          esp_wifi_set_channel((uint8_t)cfg_mesh_ch, WIFI_SECOND_CHAN_NONE);
+        }
         break;
       default:
         break;
@@ -6468,6 +6474,10 @@ void loop() {
         last_reconnect_attempt_ms = now_dc;
         Console.println("[WiFi] Offline 3+ min — forcing reconnect.");
         WiFi.reconnect();
+        // Reconnect scan may move the channel; re-pin for ESP-NOW if it fails.
+        if (cfg_mesh_en && WiFi.status() != WL_CONNECTED) {
+          esp_wifi_set_channel((uint8_t)cfg_mesh_ch, WIFI_SECOND_CHAN_NONE);
+        }
       }
     }
 
