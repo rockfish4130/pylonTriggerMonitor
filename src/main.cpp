@@ -135,6 +135,9 @@ bool boosh_failsafe_armed = false;
 unsigned long boosh_failsafe_start_ms = 0;
 unsigned long boosh_failsafe_note_until_ms = 0;
 unsigned long boosh_failsafe_timeout_ms = kBooshFailsafeTimeoutMs;  // runtime, persisted in NVS
+float cfg_dj_timeout_s = 10.0f;    // DJ button hold timeout; persisted in NVS; default 10s
+bool  dj_btn_held      = false;     // true while DJ button is held down
+unsigned long dj_btn_press_ms = 0;  // millis() when DJ button was pressed
 // Configurable OSC action parameters (NVS-persisted, apply to all pylons)
 unsigned long action_pulse1_dur_ms  = 50;    // pulse-once on duration
 bool          action_pulse1_dis     = false; // disable pulse-once action
@@ -426,6 +429,7 @@ constexpr const char *kPrefsKeyStaticDns1    = "static_dns1";   // string; prima
 constexpr const char *kPrefsKeyStaticDns2    = "static_dns2";   // string; secondary DNS
 constexpr const char *kPrefsKeyMeshEn        = "mesh_en";        // bool; enable ESP-NOW mesh
 constexpr const char *kPrefsKeyMeshCh        = "mesh_ch";        // uint8; ESP-NOW channel (1-13)
+constexpr const char *kPrefsKeyDjTimeoutS    = "dj_to_s";        // float; DJ button timeout (s)
 constexpr uint32_t kBooshFailsafeMinMs  = 1000;
 constexpr uint32_t kBooshFailsafeMaxMs  = 60000;
 
@@ -707,6 +711,7 @@ bool SavePylonConfig() {
   prefs.putString(kPrefsKeyStaticDns2,  cfg_static_dns2);
   prefs.putBool(kPrefsKeyMeshEn,        cfg_mesh_en);
   prefs.putUChar(kPrefsKeyMeshCh,       cfg_mesh_ch);
+  prefs.putFloat(kPrefsKeyDjTimeoutS,   cfg_dj_timeout_s);
   {
     uint8_t mask = 0;
     for (int i = 0; i < 4; i++) if (barmode_btn_disabled[i]) mask |= (1 << i);
@@ -818,6 +823,7 @@ void LoadPylonConfig() {
   cfg_static_dns2            = prefs.getString(kPrefsKeyStaticDns2,  "");
   cfg_mesh_en                = prefs.getBool(kPrefsKeyMeshEn,        true);
   cfg_mesh_ch                = (uint8_t)prefs.getUChar(kPrefsKeyMeshCh, 1);
+  cfg_dj_timeout_s           = prefs.getFloat(kPrefsKeyDjTimeoutS, 10.0f);
   {
     const uint8_t mask = prefs.getUChar(kPrefsKeyBtnDisable, 0);
     for (int i = 0; i < 4; i++) barmode_btn_disabled[i] = (mask >> i) & 1;
@@ -1262,6 +1268,12 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
     cfg_mesh_ch = (uint8_t)ch;
     changed = true;
     if (log_output) Console.printf("[CFG] mesh_ch set: %u (reboot to apply)\n", cfg_mesh_ch);
+  } else if (field == "dj_timeout_s") {
+    const float s = value.toFloat();
+    if (s < 1.0f || s > 120.0f) { if (log_output) Console.println("[CFG] dj_timeout_s out of range (1-120s)"); return false; }
+    cfg_dj_timeout_s = s;
+    changed = true;
+    if (log_output) Console.printf("[CFG] dj_timeout_s set: %.1f\n", cfg_dj_timeout_s);
   } else {
     if (log_output) {
       Console.println("[CFG] unknown set field. use id|host|desc|node|ap|failsafe_s|index|seq_max_s|seq_dec_ms|seq_exp_pct|pulse1_dur_ms|pulse1_dis|pt_dur_ms|pt_off_ms|pt_count|pt_dis|steam_ramp_s|steam_open_s|steam_dis|mesh_en|mesh_ch");
@@ -1298,6 +1310,7 @@ String BuildConfigApiJson() {
   payload += "\"ap_active\":" + String(ap_active ? "true" : "false") + ",";
   payload += "\"wifi_ssid\":\"" + JsonEscape(user_wifi_ssid) + "\",";
   payload += "\"failsafe_ms\":" + String(boosh_failsafe_timeout_ms) + ",";
+  payload += "\"dj_timeout_s\":" + String(cfg_dj_timeout_s, 1) + ",";
   payload += "\"pylon_index\":" + String(pylon_index) + ",";
   payload += "\"seq_max_ms\":"   + String(barmode_seq_max_ms)   + ",";
   payload += "\"seq_dec_ms\":"   + String(barmode_seq_dec_ms)   + ",";
@@ -2121,6 +2134,7 @@ String BuildTelemetryApiJson() {
   }
   payload += "\"wifi_ssid\":\"" + JsonEscape(user_wifi_ssid) + "\",";
   payload += "\"failsafe_ms\":" + String(boosh_failsafe_timeout_ms) + ",";
+  payload += "\"dj_timeout_s\":" + String(cfg_dj_timeout_s, 1) + ",";
   payload += "\"target_ip\":\"" + JsonEscape(target_ip_string) + "\",";
   {
     char buf[16];
@@ -2339,6 +2353,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       <h1 id="page-title">Pylons Control</h1>
       <p><span id="solenoid" class="pill">Solenoid idle</span></p>
       <p id="fw-version"></p>
+      <p style="margin-top:6px"><a href="/dj" style="color:#ff4444;font-size:14px;text-decoration:none;letter-spacing:.05em">&#x1F525; DJ Access</a></p>
     </div>
     <div id="vbtn-panel" class="panel" style="margin-top:16px;display:none;position:relative">
       <button id="vbtn-toggle" onclick="toggleVbtnFull()" title="Toggle fullscreen">&#x26F6;</button>
@@ -2380,6 +2395,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         <div style="border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
           <span style="color:var(--muted);font-size:13px">All Buttons</span>
           <label>Solenoid failsafe (s) <input id="cfg-failsafe-s" name="failsafe_s" type="number" min="1" max="60" step="0.1" style="width:80px"> <span style="color:var(--muted);font-size:12px">(auto-close if valve left open)</span></label>
+          <label>DJ button timeout (s) <input id="cfg-dj-timeout-s" name="dj_timeout_s" type="number" min="1" max="120" step="1" style="width:80px"> <span style="color:var(--muted);font-size:12px">(auto-close DJ hold after this many seconds)</span></label>
           <label>Pylon index <input id="cfg-index" name="index" type="number" min="-99" max="99" step="1" style="width:60px"> <span style="color:var(--muted);font-size:12px">(sequential fire order; negative = skip)</span></label>
           <div id="cfg-btn-disable-wrap" style="display:none;gap:10px;align-items:center">
             <span style="color:var(--muted);font-size:12px">Disable buttons:</span>
@@ -2776,6 +2792,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       syncConfigField('cfg-description', data.description || '');
       syncConfigField('cfg-wifi-ssid', data.wifi_ssid || '');
       syncConfigField('cfg-failsafe-s',       data.failsafe_ms != null ? (data.failsafe_ms / 1000).toFixed(1) : '5.0');
+      syncConfigField('cfg-dj-timeout-s',     data.dj_timeout_s != null ? data.dj_timeout_s : 10);
       syncConfigField('cfg-index',             data.pylon_index != null ? data.pylon_index : 0);
       ['cfg-grp-green','cfg-grp-blue','cfg-grp-all4','cfg-grp-routing','cfg-grp-red','cfg-grp-recovery','cfg-btn-disable-wrap'].forEach(id => {
         const el = document.getElementById(id);
@@ -2919,7 +2936,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       'cfg-steam-ramp', 'cfg-steam-open',
       'cfg-green-recovery-ms', 'cfg-blue-recovery-ms', 'cfg-orange-recovery-ms', 'cfg-red-recovery-ms',
       'cfg-temp-thresh1', 'cfg-temp-mult1', 'cfg-temp-thresh2', 'cfg-temp-mult2',
-      'cfg-route-via-rpi', 'cfg-mesh-en', 'cfg-mesh-ch']
+      'cfg-route-via-rpi', 'cfg-mesh-en', 'cfg-mesh-ch', 'cfg-dj-timeout-s']
       .map((id) => document.getElementById(id))
       .filter(Boolean);
     let holdActive = false;
@@ -3609,6 +3626,79 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
 </html>
 )HTML";
 
+void HandleDjBtn() {
+  const bool down = webServer.arg("down") == "1";
+  if (down) {
+    ApplyBooshState(1.0f, "dj");
+    dj_btn_held    = true;
+    dj_btn_press_ms = millis();
+  } else {
+    ApplyBooshState(0.0f, "dj");
+    dj_btn_held = false;
+  }
+  webServer.send(200, "application/json", "{\"ok\":true}");
+}
+
+void HandleDjPage() {
+  char buf[80];
+  snprintf(buf, sizeof(buf), "%.1f", cfg_dj_timeout_s);
+  String html = F(
+    "<!DOCTYPE html><html><head>"
+    "<meta charset='utf-8'>"
+    "<meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
+    "<title>Lava DJ Access</title>"
+    "<style>"
+    "*{box-sizing:border-box;margin:0;padding:0}"
+    "body{background:#111;color:#fff;font-family:system-ui,sans-serif;height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:hidden;user-select:none;-webkit-user-select:none}"
+    "h1{font-size:clamp(18px,4vw,28px);letter-spacing:.08em;color:#ff4444;margin-bottom:8px;text-transform:uppercase}"
+    "#btn{width:min(80vw,80vh);height:min(80vw,80vh);border-radius:50%;background:radial-gradient(circle at 35% 35%,#ff6666,#cc0000 60%,#660000);display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;touch-action:none;box-shadow:0 0 40px #c0000060;transition:transform .08s,box-shadow .08s;border:4px solid #ff444430;font-size:clamp(16px,5vw,28px);font-weight:700;color:#fff;letter-spacing:.06em;gap:12px}"
+    "#btn.held{transform:scale(.93);box-shadow:0 0 80px #ff4444cc,0 0 160px #ff444460;border-color:#ff4444}"
+    "#countdown{font-size:clamp(14px,3.5vw,22px);color:#ffaaaa;margin-top:16px;height:1.4em}"
+    "</style></head><body>"
+    "<h1>Lava DJ Access</h1>"
+    "<div id='btn'><div>&#x1F525;</div><div>HOLD TO FIRE</div></div>"
+    "<div id='countdown'></div>"
+    "<script>"
+    "const TIMEOUT_S=");
+  html += buf;
+  html += F(
+    ";"
+    "const btn=document.getElementById('btn');"
+    "const cd=document.getElementById('countdown');"
+    "let held=false,timer=null,cdTimer=null,secsLeft=0;"
+    "function startHold(){"
+    "  if(held)return; held=true;"
+    "  btn.classList.add('held');"
+    "  secsLeft=TIMEOUT_S;"
+    "  cd.textContent='';"
+    "  send(1);"
+    "  timer=setTimeout(()=>{ endHold(true); },TIMEOUT_S*1000);"
+    "  cdTimer=setInterval(()=>{ secsLeft=Math.max(0,secsLeft-1); if(secsLeft<=5&&secsLeft>0)cd.textContent='Auto-close in '+secsLeft+'s'; else if(secsLeft===0)cd.textContent=''; },1000);"
+    "}"
+    "function endHold(timedOut){"
+    "  if(!held&&!timedOut)return; held=false;"
+    "  btn.classList.remove('held');"
+    "  clearTimeout(timer); clearInterval(cdTimer);"
+    "  cd.textContent=timedOut?'Auto-closed':''; "
+    "  if(timedOut)setTimeout(()=>cd.textContent='',2000);"
+    "  send(0);"
+    "}"
+    "async function send(down){"
+    "  try{"
+    "    const fd=new FormData(); fd.set('down',down);"
+    "    await fetch('/api/dj/btn',{method:'POST',body:fd});"
+    "  }catch(e){}"
+    "}"
+    "btn.addEventListener('mousedown',startHold);"
+    "btn.addEventListener('touchstart',e=>{e.preventDefault();startHold();},{passive:false});"
+    "document.addEventListener('mouseup',()=>endHold(false));"
+    "document.addEventListener('touchend',()=>endHold(false));"
+    "document.addEventListener('touchcancel',()=>endHold(false));"
+    "document.addEventListener('visibilitychange',()=>{ if(document.hidden)endHold(false); });"
+    "</script></body></html>");
+  webServer.send(200, "text/html", html);
+}
+
 void HandleWebRoot() {
   webServer.send(200, "text/html", kWebUiHtml);
 }
@@ -3777,6 +3867,7 @@ void HandleConfigPostApi() {
   const bool has_route_via_rpi   = webServer.hasArg("route_via_rpi");
   const bool has_mesh_en         = webServer.hasArg("mesh_en");
   const bool has_mesh_ch         = webServer.hasArg("mesh_ch");
+  const bool has_dj_timeout_s    = webServer.hasArg("dj_timeout_s");
 
   if (!has_node && !has_id && !has_host && !has_desc &&
       !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index && !has_seq_max_s && !has_seq_start_ms && !has_seq_dec_ms && !has_seq_floor_ms && !has_seq_exp_pct && !has_btn_disabled && !has_green_timeout && !has_all4_valve_ms && !has_all4_lockout_s &&
@@ -3786,7 +3877,7 @@ void HandleConfigPostApi() {
       !has_green_rec_ms && !has_blue_rec_ms && !has_orange_rec_ms && !has_red_rec_ms &&
       !has_temp_thresh1 && !has_temp_mult1 && !has_temp_thresh2 && !has_temp_mult2 &&
       !has_no_thermistor && !has_no_batt_mon && !has_route_via_rpi &&
-      !has_mesh_en && !has_mesh_ch) {
+      !has_mesh_en && !has_mesh_ch && !has_dj_timeout_s) {
     SendApiError(400, "no recognized config field");
     return;
   }
@@ -3844,6 +3935,7 @@ void HandleConfigPostApi() {
   if (has_route_via_rpi) ok = ok && SetConfigFieldValue("route_via_rpi",      webServer.arg("route_via_rpi"));
   if (has_mesh_en)       ok = ok && SetConfigFieldValue("mesh_en",            webServer.arg("mesh_en"));
   if (has_mesh_ch)       ok = ok && SetConfigFieldValue("mesh_ch",            webServer.arg("mesh_ch"));
+  if (has_dj_timeout_s)  ok = ok && SetConfigFieldValue("dj_timeout_s",       webServer.arg("dj_timeout_s"));
   if (has_btn_disabled) {
     // Accepts "0101" bitmask string: index 0=green,1=blue,2=orange,3=red; '1'=disabled
     const String v = webServer.arg("btn_disabled");
@@ -4327,6 +4419,8 @@ void SetupWebServer() {
   webServer.on("/api/sequence/abort", HTTP_POST, HandleSeqAbortApi);
   webServer.on("/api/mesh/relay",     HTTP_POST, HandleMeshRelayApi);
   webServer.on("/api/barmode/btn",    HTTP_POST, HandleBarmodeBtn);
+  webServer.on("/dj",                 HTTP_GET,  HandleDjPage);
+  webServer.on("/api/dj/btn",         HTTP_POST, HandleDjBtn);
   webServer.begin();
   web_server_started = true;
   Console.println("HTTP server listening on port 80");
@@ -6815,6 +6909,13 @@ void loop() {
     Console.println("Failsafe: BooshMain timeout -> forcing OFF.");
     ShowStatus("Failsafe timeout", "BooshMain OFF");
     boosh_failsafe_note_until_ms = now + kBooshFailsafeNoteMs;
+  }
+
+  // DJ button timeout: auto-release if held beyond cfg_dj_timeout_s
+  if (dj_btn_held && now - dj_btn_press_ms >= (unsigned long)(cfg_dj_timeout_s * 1000.0f)) {
+    dj_btn_held = false;
+    ApplyBooshState(0.0f, "dj-timeout");
+    Console.println("[DJ] button timeout -> forcing OFF");
   }
 
   // Identify mode: override normal display with animated checkerboard at 5 Hz
