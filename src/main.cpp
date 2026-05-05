@@ -2314,13 +2314,22 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     .vbtn.phys-pressed{border-color:rgba(255,255,255,.55)}
     .vbtn-row{display:flex;gap:24px;justify-content:center;padding:8px 0 4px;flex-wrap:wrap}
     @media(max-width:640px){
+      /* bottom-strip mode (default collapsed) */
       #vbtn-panel{position:fixed;bottom:0;left:0;right:0;margin:0 !important;border-radius:20px 20px 0 0;z-index:9000;padding:12px 12px max(12px,env(safe-area-inset-bottom))}
       .vbtn-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:4px 0}
       .vbtn{width:38vw;height:38vw;max-width:165px;max-height:165px;font-size:13px}
       .vbtn > div:first-child{font-size:min(11vw,48px)}
       .vbtn-spacer{display:block;height:max(calc(38vw + 80px),200px)}
+      /* fullscreen mode */
+      #vbtn-panel.vbtn-full{top:0;border-radius:0;display:flex !important;flex-direction:column;padding:max(16px,env(safe-area-inset-top)) 16px max(16px,env(safe-area-inset-bottom))}
+      #vbtn-panel.vbtn-full .vbtn-row{flex:1;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:16px;padding:0}
+      #vbtn-panel.vbtn-full .vbtn{width:100%;height:100%;max-width:none;max-height:none;font-size:16px}
+      #vbtn-panel.vbtn-full .vbtn > div:first-child{font-size:14vw}
+      #vbtn-panel.vbtn-full ~ .vbtn-spacer{display:none}
+      /* toggle button */
+      #vbtn-toggle{display:block;position:absolute;top:10px;right:14px;background:none;border:none;font-size:22px;line-height:1;padding:4px 6px;cursor:pointer;color:var(--muted);z-index:1}
     }
-    @media(min-width:641px){.vbtn-spacer{display:none}}
+    @media(min-width:641px){.vbtn-spacer{display:none}#vbtn-toggle{display:none}}
     .active{background:#f05a28;color:#fff}
   </style>
 </head>
@@ -2331,7 +2340,8 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       <p><span id="solenoid" class="pill">Solenoid idle</span></p>
       <p id="fw-version"></p>
     </div>
-    <div id="vbtn-panel" class="panel" style="margin-top:16px;display:none">
+    <div id="vbtn-panel" class="panel" style="margin-top:16px;display:none;position:relative">
+      <button id="vbtn-toggle" onclick="toggleVbtnFull()" title="Toggle fullscreen">&#x26F6;</button>
       <h2>Virtual Buttons</h2>
       <div class="vbtn-row">
         <div class="vbtn" id="vbtn-3" data-btn="3" style="background:#f44336;--vg:#f44336"><div style="font-size:30px;line-height:1.1">&#9632;</div><div>RED</div></div>
@@ -2735,8 +2745,19 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       vBtnBpm = data.bpm || 0;
       const vp = document.getElementById('vbtn-panel');
       const vs = document.getElementById('vbtn-spacer');
+      const wasBarmodeActive = vp && vp.style.display !== 'none';
       if (vp) vp.style.display = barmodeActive ? '' : 'none';
-      if (vs) vs.style.display = barmodeActive ? '' : 'none';
+      if (!barmodeActive) {
+        if (vs) vs.style.display = 'none';
+      } else if (!wasBarmodeActive) {
+        // First time barmode panel becomes visible: init fullscreen from localStorage or default
+        const isMobile = window.innerWidth <= 640;
+        const saved = localStorage.getItem('vbtnFull');
+        setVbtnFull(saved !== null ? saved === '1' : isMobile);
+      } else {
+        // Already visible: just keep spacer in sync with current fullscreen state
+        if (vs) vs.style.display = vbtnFullscreen ? 'none' : '';
+      }
       const title = `${data.pylon_id} Pylons Control`;
       document.getElementById('page-title').textContent = title;
       document.title = title;
@@ -3450,6 +3471,19 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       const fd = new FormData(); fd.set('btn', btn); fd.set('down', down ? '1' : '0');
       try { await fetch('/api/barmode/btn', {method:'POST', body:fd}); } catch(e) {}
     }
+
+    let vbtnFullscreen = false;
+    function setVbtnFull(full) {
+      vbtnFullscreen = full;
+      const vp = document.getElementById('vbtn-panel');
+      const vs = document.getElementById('vbtn-spacer');
+      const tb = document.getElementById('vbtn-toggle');
+      if (vp) vp.classList.toggle('vbtn-full', full);
+      if (vs) vs.style.display = (barmodeActive && !full) ? '' : 'none';
+      if (tb) tb.textContent = full ? '\u292B' : '\u26F6';  // ⤫ collapse / ⛶ expand
+      try { localStorage.setItem('vbtnFull', full ? '1' : '0'); } catch(e) {}
+    }
+    function toggleVbtnFull() { setVbtnFull(!vbtnFullscreen); }
 
     document.querySelectorAll('.vbtn').forEach(el => {
       const i = parseInt(el.dataset.btn);
