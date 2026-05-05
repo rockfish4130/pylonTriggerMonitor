@@ -77,7 +77,7 @@ constexpr const char *kOscAddrSteam       = "/pylon/BooshSteam";
 
 // ---- Mesh (ESP-NOW) constants -----------------------------------------------
 constexpr uint32_t kMeshMagic            = 0x4D455348UL; // "MESH"
-constexpr uint8_t  kMeshVersion          = 1;
+constexpr uint8_t  kMeshVersion          = 2;  // bump when beacon struct changes
 constexpr uint8_t  kMeshPktBeacon        = 1;
 constexpr uint8_t  kMeshPktCommand       = 2;
 constexpr uint32_t kMeshBeaconIntervalMs = 2000;   // broadcast beacon every 2 s
@@ -294,6 +294,10 @@ struct __attribute__((packed)) MeshBeaconPkt {
   uint8_t  pylon_index;
   uint8_t  role;       // 0=normal, 1=barmode
   uint32_t uptime_s;
+  float    batt_v;     // battery voltage V (NaN if unavailable)
+  float    batt_pct;   // battery SOC % (NaN if unavailable)
+  float    temp_f;     // thermistor temp °F (NaN if unavailable)
+  char     fw_ver[16]; // kFirmwareVersion truncated
 };
 
 struct __attribute__((packed)) MeshCommandPkt {
@@ -316,6 +320,10 @@ struct MeshPeerInfo {
   uint16_t qual_bits;           // rolling 16-slot bitmap; bit i set = heard beacon in slot i
   uint8_t  qual_pct;            // popcount(qual_bits) * 100 / kMeshQualitySlots
   uint32_t qual_last_update_ms; // millis() when last slot was advanced
+  float    batt_v;              // battery voltage V (NaN if unavailable)
+  float    batt_pct;            // battery SOC % (NaN if unavailable)
+  float    temp_f;              // thermistor temp °F (NaN if unavailable)
+  char     fw_ver[16];          // firmware version string
 };
 
 struct MeshDedupEntry {
@@ -2280,13 +2288,21 @@ String BuildTelemetryApiJson() {
                  mesh_peers[i].mac[0], mesh_peers[i].mac[1], mesh_peers[i].mac[2],
                  mesh_peers[i].mac[3], mesh_peers[i].mac[4], mesh_peers[i].mac[5]);
         const uint32_t age_s = (now - mesh_peers[i].last_seen_ms) / 1000;
+        char bv_buf[12], bp_buf[8], tf_buf[10];
+        if (isfinite(mesh_peers[i].batt_v))   snprintf(bv_buf, sizeof(bv_buf), "%.2f", mesh_peers[i].batt_v);   else strncpy(bv_buf, "null", sizeof(bv_buf));
+        if (isfinite(mesh_peers[i].batt_pct)) snprintf(bp_buf, sizeof(bp_buf), "%.0f", mesh_peers[i].batt_pct); else strncpy(bp_buf, "null", sizeof(bp_buf));
+        if (isfinite(mesh_peers[i].temp_f))   snprintf(tf_buf, sizeof(tf_buf), "%.1f", mesh_peers[i].temp_f);   else strncpy(tf_buf, "null", sizeof(tf_buf));
         payload += "{\"id\":\"" + JsonEscape(String(mesh_peers[i].node_id)) + "\",";
         payload += "\"mac\":\"" + String(mac_str) + "\",";
         payload += "\"index\":" + String(mesh_peers[i].pylon_index) + ",";
         payload += "\"role\":" + String(mesh_peers[i].role) + ",";
         payload += "\"qual_pct\":" + String(mesh_peers[i].qual_pct) + ",";
         payload += "\"age_s\":" + String(age_s) + ",";
-        payload += "\"uptime_s\":" + String(mesh_peers[i].uptime_s) + "}";
+        payload += "\"uptime_s\":" + String(mesh_peers[i].uptime_s) + ",";
+        payload += "\"batt_v\":" + String(bv_buf) + ",";
+        payload += "\"batt_pct\":" + String(bp_buf) + ",";
+        payload += "\"temp_f\":" + String(tf_buf) + ",";
+        payload += "\"fw_ver\":\"" + JsonEscape(String(mesh_peers[i].fw_ver)) + "\"}";
       }
       xSemaphoreGive(mesh_peers_mutex);
     }
@@ -6091,6 +6107,12 @@ static void MeshUpsertPeer(const uint8_t *mac, const MeshBeaconPkt &pkt) {
   if (slot < 0) { xSemaphoreGiveFromISR(mesh_peers_mutex, nullptr); return; }  // table full
   const bool is_new = !mesh_peers[slot].active;
   MeshPeerInfo &p = mesh_peers[slot];
+  if (is_new) {
+    p.batt_v   = NAN;
+    p.batt_pct = NAN;
+    p.temp_f   = NAN;
+    p.fw_ver[0] = '\0';
+  }
   p.active    = true;
   memcpy(p.mac, mac, 6);
   // Register peer's unicast MAC with ESP-NOW on first discovery so MeshUnicastOsc can target it.
@@ -6108,6 +6130,11 @@ static void MeshUpsertPeer(const uint8_t *mac, const MeshBeaconPkt &pkt) {
   p.pylon_index = pkt.pylon_index;
   p.role        = pkt.role;
   p.uptime_s    = pkt.uptime_s;
+  p.batt_v      = pkt.batt_v;
+  p.batt_pct    = pkt.batt_pct;
+  p.temp_f      = pkt.temp_f;
+  strncpy(p.fw_ver, pkt.fw_ver, sizeof(p.fw_ver) - 1);
+  p.fw_ver[sizeof(p.fw_ver) - 1] = '\0';
   // Advance quality slot if ≥ 2 s have passed since last update
   if (now - p.qual_last_update_ms >= kMeshBeaconIntervalMs) {
     p.qual_bits = (uint16_t)((p.qual_bits << 1) & 0xFFFF);  // shift in a 0
@@ -6192,6 +6219,11 @@ static void MeshSendBeacon() {
   pkt.pylon_index = (uint8_t)pylon_index;
   pkt.role        = barmode_active ? 1 : 0;
   pkt.uptime_s    = (uint32_t)(millis() / 1000);
+  pkt.batt_v      = cfg_no_batt_mon   ? NAN : sensor_battery_v;
+  pkt.batt_pct    = cfg_no_batt_mon   ? NAN : sensor_battery_pct;
+  pkt.temp_f      = cfg_no_thermistor ? NAN : sensor_temp_f;
+  strncpy(pkt.fw_ver, kFirmwareVersion, sizeof(pkt.fw_ver) - 1);
+  pkt.fw_ver[sizeof(pkt.fw_ver) - 1] = '\0';
   esp_now_send(kMeshBroadcastMac, (uint8_t *)&pkt, sizeof(pkt));
   mesh_beacons_sent++;
 }
