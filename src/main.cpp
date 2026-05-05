@@ -5782,6 +5782,9 @@ void PollBarModeButtons() {
       static bool          red_seq_close_pend   = false;
       static PylonTarget   red_seq_close_target = {};  // target to close (IP or mesh)
       static unsigned long red_seq_close_at     = 0;
+      // "Complete first pass" guarantee
+      static int           red_seq_fires         = 0;    // fires completed in current hold
+      static bool          red_seq_released_early = false; // button released before pass done
 
       const bool r_rising  = btn_stable[3] && !btn_prev_stable[3];
       const bool r_falling = !btn_stable[3] && btn_prev_stable[3];
@@ -5804,12 +5807,14 @@ void PollBarModeButtons() {
               self_t.seq_idx = -1;
               red_seq_targets[red_seq_count++] = self_t;
             }
-            red_seq_pos        = 0;
-            red_seq_ascending  = true;
-            red_seq_start_ms   = now;
-            red_seq_last_ms    = now - barmode_red_seq_step_ms;  // fire first step immediately
-            red_seq_close_pend = false;
-            red_seq_press_ms   = now;
+            red_seq_pos            = 0;
+            red_seq_ascending      = true;
+            red_seq_start_ms       = now;
+            red_seq_last_ms        = now - barmode_red_seq_step_ms;  // fire first step immediately
+            red_seq_close_pend     = false;
+            red_seq_press_ms       = now;
+            red_seq_fires          = 0;
+            red_seq_released_early = false;
             barmode_act_counts[4]++;
             red_state          = 4;
             Console.printf("[BarMode] Red: seq start, %d pylons (incl. self)\n", red_seq_count);
@@ -5836,17 +5841,20 @@ void PollBarModeButtons() {
         if (r_falling) {
           if (red_state == 4) {
             const unsigned long held = now - red_seq_press_ms;
-            // Fire pending close immediately on release
-            if (red_seq_close_pend) {
-              SendOscToPylonTarget(kOscAddress, 0.0f, red_seq_close_target);
-              red_seq_close_pend = false;
-            }
+            const bool first_pass_done = (red_seq_fires >= red_seq_count);
             if (held < 400 && now < red_recovery_until) {
-              // Recovery active: block entering triple-tap steam window
+              // Recovery active: close and stop
+              if (red_seq_close_pend) { SendOscToPylonTarget(kOscAddress, 0.0f, red_seq_close_target); red_seq_close_pend = false; }
               barmode_recovery_wait_until_ms = red_recovery_until;
               red_state = 0;
               Console.printf("[BarMode] Red: quick-tap blocked by recovery (%lums held)\n", held);
+            } else if (!first_pass_done) {
+              // First pass incomplete: let it finish before stopping (no immediate close flush)
+              red_seq_released_early = true;
+              Console.printf("[BarMode] Red: released early (%d/%d fired), completing pass\n", red_seq_fires, red_seq_count);
             } else {
+              // Pass already done (or 2nd+ pass): stop immediately
+              if (red_seq_close_pend) { SendOscToPylonTarget(kOscAddress, 0.0f, red_seq_close_target); red_seq_close_pend = false; }
               red_state = (held < 400) ? 1 : 0;
               if (red_state == 1) {
                 red_press1_ms = now;
@@ -5880,35 +5888,44 @@ void PollBarModeButtons() {
               SendOscToPylonTarget(kOscAddress, 0.0f, red_seq_close_target);
               red_seq_close_pend = false;
             }
-            // Step tick
-            if (red_seq_count > 0 && now - red_seq_last_ms >= barmode_red_seq_step_ms) {
-              red_seq_last_ms = now;
-              // Flush any still-pending close before next open (safety for step_ms < valve_ms)
-              if (red_seq_close_pend) {
-                SendOscToPylonTarget(kOscAddress, 0.0f, red_seq_close_target);
-                red_seq_close_pend = false;
+            // If early-released and first pass complete: drain then stop
+            if (red_seq_released_early && red_seq_fires >= red_seq_count) {
+              if (!red_seq_close_pend) {
+                red_state = 0;
+                Console.println("[BarMode] Red: pass complete after early release, stopped");
               }
-              // Fire open to current position
-              SendOscToPylonTarget(kOscAddress, 1.0f, red_seq_targets[red_seq_pos]);
-              red_seq_close_target = red_seq_targets[red_seq_pos];
-              red_seq_close_at     = now + barmode_red_seq_valve_ms;
-              red_seq_close_pend   = true;
-              red_seq_lamp_until = now + barmode_red_seq_valve_ms;
-              Console.printf("[BarMode] Red seq: open idx=%d\n", red_seq_targets[red_seq_pos].seq_idx);
-              // Advance ping-pong
-              if (red_seq_count == 1) {
-                red_seq_pos = 0;
-              } else if (red_seq_ascending) {
-                red_seq_pos++;
-                if (red_seq_pos >= red_seq_count) {
-                  red_seq_ascending = false;
-                  red_seq_pos = red_seq_count - 2;
+            } else {
+              // Step tick
+              if (red_seq_count > 0 && now - red_seq_last_ms >= barmode_red_seq_step_ms) {
+                red_seq_last_ms = now;
+                // Flush any still-pending close before next open (safety for step_ms < valve_ms)
+                if (red_seq_close_pend) {
+                  SendOscToPylonTarget(kOscAddress, 0.0f, red_seq_close_target);
+                  red_seq_close_pend = false;
                 }
-              } else {
-                red_seq_pos--;
-                if (red_seq_pos < 0) {
-                  red_seq_ascending = true;
-                  red_seq_pos = 1;
+                // Fire open to current position
+                SendOscToPylonTarget(kOscAddress, 1.0f, red_seq_targets[red_seq_pos]);
+                red_seq_close_target = red_seq_targets[red_seq_pos];
+                red_seq_close_at     = now + barmode_red_seq_valve_ms;
+                red_seq_close_pend   = true;
+                red_seq_lamp_until   = now + barmode_red_seq_valve_ms;
+                red_seq_fires++;
+                Console.printf("[BarMode] Red seq: open idx=%d fires=%d\n", red_seq_targets[red_seq_pos].seq_idx, red_seq_fires);
+                // Advance ping-pong
+                if (red_seq_count == 1) {
+                  red_seq_pos = 0;
+                } else if (red_seq_ascending) {
+                  red_seq_pos++;
+                  if (red_seq_pos >= red_seq_count) {
+                    red_seq_ascending = false;
+                    red_seq_pos = red_seq_count - 2;
+                  }
+                } else {
+                  red_seq_pos--;
+                  if (red_seq_pos < 0) {
+                    red_seq_ascending = true;
+                    red_seq_pos = 1;
+                  }
                 }
               }
             }
