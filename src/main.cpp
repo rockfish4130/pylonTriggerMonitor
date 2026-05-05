@@ -201,6 +201,8 @@ uint32_t barmode_btn_counts[4]   = {0,0,0,0};   // running press counts: [green,
 // Per-action counters (since boot): [green_pulse, blue_tap, blue_seq, orange_train, red_tap, red_steam, all4_seq]
 uint32_t barmode_act_counts[7]   = {0,0,0,0,0,0,0};
 bool     barmode_btn_disabled[4] = {false,false,false,false}; // NVS-persisted disable flags
+bool     web_btn_pressed[4]      = {};  // set by /api/barmode/btn; merged into btn_stable
+bool     barmode_btn_state[4]    = {};  // stable state snapshot for telemetry
 // Ring buffer: up to 1024 button press events (ms + btn index), oldest overwritten
 constexpr int kBtnEventBufSize = 1024;
 uint32_t barmode_btn_event_ms[kBtnEventBufSize];
@@ -2087,6 +2089,11 @@ String BuildTelemetryApiJson() {
              String(barmode_btn_disabled[1]?"true":"false") + "," +
              String(barmode_btn_disabled[2]?"true":"false") + "," +
              String(barmode_btn_disabled[3]?"true":"false") + "],";
+  payload += "\"btn_state\":[" +
+             String(barmode_btn_state[0]?"true":"false") + "," +
+             String(barmode_btn_state[1]?"true":"false") + "," +
+             String(barmode_btn_state[2]?"true":"false") + "," +
+             String(barmode_btn_state[3]?"true":"false") + "],";
   payload += "\"wifi_ssid\":\"" + JsonEscape(user_wifi_ssid) + "\",";
   payload += "\"failsafe_ms\":" + String(boosh_failsafe_timeout_ms) + ",";
   payload += "\"target_ip\":\"" + JsonEscape(target_ip_string) + "\",";
@@ -2277,6 +2284,9 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     #log{background:#05080d;color:#b9ffd6;min-height:260px;max-height:420px;overflow:auto;font:13px/1.35 Consolas,monospace;border-radius:12px;padding:12px;border:1px solid #193022}
     #log pre{margin:0;white-space:pre-wrap}
     .pill{display:inline-block;padding:4px 10px;border-radius:999px;background:#243244;color:#c9d7e7}
+    .vbtn{width:90px;height:90px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;user-select:none;-webkit-user-select:none;font-weight:700;font-size:11px;letter-spacing:.05em;color:rgba(255,255,255,.9);border:3px solid rgba(255,255,255,0);touch-action:none}
+    .vbtn.web-pressed{border-color:rgba(255,255,255,.9);box-shadow:0 0 24px 8px var(--vg)}
+    .vbtn.phys-pressed{border-color:rgba(255,255,255,.55)}
     .active{background:#f05a28;color:#fff}
   </style>
 </head>
@@ -2539,6 +2549,16 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         <span id="mp-status" style="font-size:13px;color:var(--muted)"></span>
       </form>
     </div>
+    <div id="vbtn-panel" class="panel" style="margin-top:16px;display:none">
+      <h2>Virtual Buttons</h2>
+      <div style="display:flex;gap:24px;justify-content:center;padding:8px 0 4px;flex-wrap:wrap">
+        <div class="vbtn" id="vbtn-0" data-btn="0" style="background:#4caf50;--vg:#4caf50"><div style="font-size:30px;line-height:1.1">&#9632;</div><div>GREEN</div></div>
+        <div class="vbtn" id="vbtn-1" data-btn="1" style="background:#2196f3;--vg:#2196f3"><div style="font-size:30px;line-height:1.1">&#9632;</div><div>BLUE</div></div>
+        <div class="vbtn" id="vbtn-2" data-btn="2" style="background:#ff9800;--vg:#ff9800"><div style="font-size:30px;line-height:1.1">&#9632;</div><div>ORANGE</div></div>
+        <div class="vbtn" id="vbtn-3" data-btn="3" style="background:#f44336;--vg:#f44336"><div style="font-size:30px;line-height:1.1">&#9632;</div><div>RED</div></div>
+      </div>
+      <div style="color:var(--muted);font-size:11px;text-align:center;margin-top:6px">Hold to activate &mdash; mirrors physical button behavior including double-tap</div>
+    </div>
     <div id="btn-activity-panel" class="panel" style="margin-top:16px;display:none">
       <h2>Button Activity</h2>
       <div style="display:flex;gap:20px;margin-bottom:10px;font-size:14px">
@@ -2666,6 +2686,10 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       document.getElementById('meta').innerHTML = rows.map(([k,v]) => `<div class="row"><strong>${k}</strong><span>${v}</span></div>`).join('');
       document.getElementById('fw-version').textContent = `FW ${data.fw_version}`;
       updateBtnActivity(data.btn_press_counts, data.btn_act_counts);
+      if (data.btn_state) { for (let i = 0; i < 4; i++) physBtnDown[i] = !!data.btn_state[i]; }
+      vBtnBpm = data.bpm || 0;
+      const vp = document.getElementById('vbtn-panel');
+      if (vp) vp.style.display = barmodeActive ? '' : 'none';
       const title = `${data.pylon_id} Pylons Control`;
       document.getElementById('page-title').textContent = title;
       document.title = title;
@@ -3263,6 +3287,61 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       }
     }
 
+    // Virtual Buttons — animation and press/release
+    let webBtnDown  = [false,false,false,false];
+    let physBtnDown = [false,false,false,false];
+    let vBtnBpm = 0;
+
+    function animateVBtns() {
+      const now = Date.now();
+      const tSec = now / 1000;
+      for (let i = 0; i < 4; i++) {
+        const btn = document.getElementById('vbtn-' + i);
+        if (!btn) continue;
+        const held = webBtnDown[i] || physBtnDown[i];
+        let br;
+        if (held) {
+          br = 1.0;
+        } else {
+          const bpm = (vBtnBpm >= 40 && vBtnBpm <= 220) ? vBtnBpm : 0;
+          if (i === 0) {
+            const freq = bpm ? bpm / 60 : 2;
+            br = Math.sin(2 * Math.PI * freq * tSec) * 0.5 + 0.5;
+          } else if (i === 1) {
+            const period = bpm ? 60000 / bpm : 1000;
+            br = (now % period < 50) ? 1.0 : 0.2;
+          } else if (i === 2) {
+            const period = bpm ? 60000 / bpm : 250;
+            br = (now % period) / period;
+          } else {
+            br = Math.sin(2 * Math.PI * 0.5 * tSec) * 0.5 + 0.5;
+          }
+        }
+        btn.style.opacity = (0.2 + br * 0.8).toFixed(3);
+        btn.classList.toggle('web-pressed', webBtnDown[i]);
+        btn.classList.toggle('phys-pressed', physBtnDown[i] && !webBtnDown[i]);
+      }
+      requestAnimationFrame(animateVBtns);
+    }
+    requestAnimationFrame(animateVBtns);
+
+    async function sendVBtn(btn, down) {
+      const fd = new FormData(); fd.set('btn', btn); fd.set('down', down ? '1' : '0');
+      try { await fetch('/api/barmode/btn', {method:'POST', body:fd}); } catch(e) {}
+    }
+
+    document.querySelectorAll('.vbtn').forEach(el => {
+      const i = parseInt(el.dataset.btn);
+      const press   = () => { if (!webBtnDown[i]) { webBtnDown[i] = true;  sendVBtn(i, true);  } };
+      const release = () => { if (webBtnDown[i])  { webBtnDown[i] = false; sendVBtn(i, false); } };
+      el.addEventListener('mousedown',  press);
+      el.addEventListener('touchstart', e => { e.preventDefault(); press(); }, {passive:false});
+      el.addEventListener('mouseup',    release);
+      el.addEventListener('mouseleave', release);
+      el.addEventListener('touchend',   release);
+      el.addEventListener('touchcancel',release);
+    });
+
     async function refreshBtnEvents() {
       if (!barmodeActive) return;
       try {
@@ -3780,6 +3859,21 @@ void HandleSolenoidOffApi() {
                  "{\"ok\":true,\"solenoid_active\":false,\"triggered_via\":\"http\"}");
 }
 
+void HandleBarmodeBtn() {
+  if (!barmode_active) {
+    webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"not in barmode\"}");
+    return;
+  }
+  const int btn  = webServer.arg("btn").toInt();
+  const bool down = webServer.arg("down") == "1";
+  if (btn < 0 || btn > 3) {
+    webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid btn 0-3\"}");
+    return;
+  }
+  web_btn_pressed[btn] = down;
+  webServer.send(200, "application/json", "{\"ok\":true}");
+}
+
 // POST /api/mesh/relay  params: addr=<osc_addr>&arg=<float>
 // Lets any non-ESP-NOW node (e.g. rpiboosh) relay an OSC command onto the mesh.
 // The receiving PYLON broadcasts via ESP-NOW to all active peers; does NOT apply locally.
@@ -4066,6 +4160,7 @@ void SetupWebServer() {
   webServer.on("/api/sequence/steam", HTTP_POST, HandleSeqSteamApi);
   webServer.on("/api/sequence/abort", HTTP_POST, HandleSeqAbortApi);
   webServer.on("/api/mesh/relay",     HTTP_POST, HandleMeshRelayApi);
+  webServer.on("/api/barmode/btn",    HTTP_POST, HandleBarmodeBtn);
   webServer.begin();
   web_server_started = true;
   Console.println("HTTP server listening on port 80");
@@ -4988,7 +5083,7 @@ void PollBarModeButtons() {
   static unsigned long btn_change_ms[4] = {};
 
   for (int i = 0; i < 4; i++) {
-    const bool raw = digitalRead(kBarModeButtonPins[i]) == HIGH;
+    const bool raw = (digitalRead(kBarModeButtonPins[i]) == HIGH) || web_btn_pressed[i];
     if (raw != btn_last_raw[i]) {
       btn_last_raw[i] = raw;
       btn_change_ms[i] = now;
@@ -4996,6 +5091,7 @@ void PollBarModeButtons() {
     if (now - btn_change_ms[i] >= 20) {
       btn_stable[i] = raw;
     }
+    barmode_btn_state[i] = btn_stable[i];  // expose for telemetry
   }
 
   // Button 0: BooshMain timed pulse; Button 1: BooshPulseSingle/seq;
@@ -5064,6 +5160,7 @@ void PollBarModeButtons() {
       seq_valve_open    = true;
       seq_valve_open_ms = now;
       SendOscFloatToAllPylons(kOscAddress, 1.0f);
+      ApplyBooshState(1.0f, "barmode");
       barmode_all4_midi_held = true;
       barmode_act_counts[6]++;
       Console.println("[BarMode] Seq phase 4: valve open");
@@ -5074,7 +5171,9 @@ void PollBarModeButtons() {
     if (seq_phase >= 1 && !btn_stable[1]) {   // BLUE released
       const int next = (seq_phase == 4) ? 5 : 0;
       if (seq_valve_open) {
-        SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false;
+        SendOscFloatToAllPylons(kOscAddress, 0.0f);
+        ApplyBooshState(0.0f, "barmode");
+        seq_valve_open = false;
         barmode_all4_midi_held = false;
         if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
         Console.printf("[BarMode] Lockout started: %lu s\n", barmode_all4_lockout_s);
@@ -5085,7 +5184,9 @@ void PollBarModeButtons() {
     } else if (seq_phase >= 2 && !btn_stable[0]) {  // GREEN released in phase 2+
       const int next = (seq_phase == 4) ? 5 : 0;
       if (seq_valve_open) {
-        SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false;
+        SendOscFloatToAllPylons(kOscAddress, 0.0f);
+        ApplyBooshState(0.0f, "barmode");
+        seq_valve_open = false;
         barmode_all4_midi_held = false;
         if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
         Console.printf("[BarMode] Lockout started: %lu s\n", barmode_all4_lockout_s);
@@ -5096,7 +5197,9 @@ void PollBarModeButtons() {
     } else if (seq_phase >= 3 && !btn_stable[2]) {  // ORANGE released in phase 3+
       const int next = (seq_phase == 4) ? 5 : 0;
       if (seq_valve_open) {
-        SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false;
+        SendOscFloatToAllPylons(kOscAddress, 0.0f);
+        ApplyBooshState(0.0f, "barmode");
+        seq_valve_open = false;
         barmode_all4_midi_held = false;
         if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
         Console.printf("[BarMode] Lockout started: %lu s\n", barmode_all4_lockout_s);
@@ -5106,7 +5209,9 @@ void PollBarModeButtons() {
       Console.printf("[BarMode] Seq %s: orange released\n", next == 0 ? "reset" : "closing");
     } else if (seq_phase == 4 && !btn_stable[3]) {  // RED released in phase 4
       if (seq_valve_open) {
-        SendOscFloatToAllPylons(kOscAddress, 0.0f); seq_valve_open = false;
+        SendOscFloatToAllPylons(kOscAddress, 0.0f);
+        ApplyBooshState(0.0f, "barmode");
+        seq_valve_open = false;
         barmode_all4_midi_held = false;
         if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
         Console.printf("[BarMode] Lockout started: %lu s\n", barmode_all4_lockout_s);
@@ -5118,6 +5223,7 @@ void PollBarModeButtons() {
     // Phase 4: auto-close timeout
     if (seq_phase == 4 && seq_valve_open && now - seq_valve_open_ms >= barmode_all4_valve_ms) {
       SendOscFloatToAllPylons(kOscAddress, 0.0f);
+      ApplyBooshState(0.0f, "barmode");
       seq_valve_open = false;
       barmode_all4_midi_held = false;
       if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
@@ -5154,6 +5260,7 @@ void PollBarModeButtons() {
             if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
             if (!btn0_pulse_active) {
               SendOscFloatToAllPylons(kOscAddress, 1.0f);
+              ApplyBooshState(1.0f, "barmode");
               barmode_act_counts[0]++;
             }
             btn0_pulse_active = true;
@@ -5172,6 +5279,7 @@ void PollBarModeButtons() {
       // Timer-based close
       if (btn0_pulse_active && now - btn0_pulse_ms >= barmode_green_timeout_ms) {
         SendOscFloatToAllPylons(kOscAddress, 0.0f);
+        ApplyBooshState(0.0f, "barmode");
         btn0_pulse_active = false;
       }
     }
@@ -5236,6 +5344,7 @@ void PollBarModeButtons() {
           } else {
             // Normal single fire to all pylons simultaneously
             SendOscFloatToAllPylons(kOscAddrPulseSingle, 1.0f);
+            if (!action_pulse1_dis) StartSequence(SEQ_PULSE_ONCE);
             barmode_act_counts[1]++;
             btn1_single_fired = true;
           }
@@ -5318,6 +5427,7 @@ void PollBarModeButtons() {
           barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
           if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
           SendOscFloatToAllPylons(kOscAddrPulseTrain, 1.0f);
+          if (!action_pt_dis) StartSequence(SEQ_PULSE_5X);
           barmode_act_counts[3]++;
           io35_strobe        = true;
           io35_strobe_start  = now;
@@ -5415,6 +5525,7 @@ void PollBarModeButtons() {
           } else if (red_state == 2 && now - red_press2_ms <= 500) {
             // Third press + hold → steam
             SendOscFloatToAllPylons(kOscAddrSteam, 1.0f);
+            if (!action_steam_dis) StartSequence(SEQ_STEAM);
             barmode_act_counts[5]++;
             lamp_red_press_ms = now;
             lamp_red_on       = false;
@@ -5449,6 +5560,7 @@ void PollBarModeButtons() {
             }
           } else if (red_state == 3) {
             SendOscFloatToAllPylons(kOscAddrSteam, 0.0f);
+            if (!action_steam_dis) AbortSequence();
             red_state = 0;
             if (barmode_red_recovery_ms > 0) red_recovery_until = now + ApplyTempMult(barmode_red_recovery_ms);
             Console.println("[BarMode] Red: steam released");
@@ -6477,9 +6589,9 @@ void loop() {
       if (offline_ms >= 600000UL) {
         Console.println("[WiFi] Offline 10 min — rebooting.");
         ESP.restart();
-      } else if (offline_ms >= 180000UL && now_dc - last_reconnect_attempt_ms >= 60000UL) {
+      } else if (now_dc - last_reconnect_attempt_ms >= 30000UL) {
         last_reconnect_attempt_ms = now_dc;
-        Console.println("[WiFi] Offline 3+ min — forcing reconnect.");
+        Console.printf("[WiFi] Offline %.0fs — reconnect attempt.\n", offline_ms / 1000.0f);
         WiFi.reconnect();
       }
     }
