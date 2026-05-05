@@ -168,6 +168,12 @@ unsigned long green_recovery_until  = 0;  // runtime deadline; 0 = not in recove
 unsigned long blue_recovery_until   = 0;
 unsigned long orange_recovery_until = 0;
 unsigned long red_recovery_until    = 0;
+// Globals mirroring static locals in PollBarModeButtons for telemetry/web UI
+int           barmode_seq_phase_g             = 0;   // ALL-4 sequence phase 0-5
+int           barmode_red_state_g             = 0;   // red button state 0-4
+bool          barmode_orange_strobe_g         = false;
+unsigned long barmode_orange_strobe_start_ms_g = 0;
+unsigned long barmode_red_steam_start_ms_g    = 0;
 // Temperature-based recovery multipliers
 float barmode_temp_thresh1_f = 50.0f;   // recovery × mult1 when avg pylon temp drops below this; BARMODE NVS
 float barmode_temp_mult1     = 1.0f;    // multiplier 1; default 1.0 (no effect)
@@ -2094,6 +2100,25 @@ String BuildTelemetryApiJson() {
              String(barmode_btn_state[1]?"true":"false") + "," +
              String(barmode_btn_state[2]?"true":"false") + "," +
              String(barmode_btn_state[3]?"true":"false") + "],";
+  {
+    const unsigned long tnow = millis();
+    payload += "\"btn_recovery\":[" +
+               String(tnow < green_recovery_until  ? "true" : "false") + "," +
+               String(tnow < blue_recovery_until   ? "true" : "false") + "," +
+               String(tnow < orange_recovery_until ? "true" : "false") + "," +
+               String(tnow < red_recovery_until    ? "true" : "false") + "],";
+    payload += "\"seq_phase\":"  + String(barmode_seq_phase_g) + ",";
+    payload += "\"red_state\":"  + String(barmode_red_state_g) + ",";
+    const unsigned long orng_ms = (barmode_orange_strobe_g &&
+                                   tnow >= barmode_orange_strobe_start_ms_g &&
+                                   (tnow - barmode_orange_strobe_start_ms_g) < 500UL)
+                                  ? 500UL - (tnow - barmode_orange_strobe_start_ms_g) : 0UL;
+    payload += "\"orange_strobe_ms\":" + String(orng_ms) + ",";
+    const unsigned long steam_ms = (barmode_red_state_g == 3 &&
+                                    tnow >= barmode_red_steam_start_ms_g)
+                                   ? (tnow - barmode_red_steam_start_ms_g) : 0UL;
+    payload += "\"red_steam_ms\":" + String(steam_ms) + ",";
+  }
   payload += "\"wifi_ssid\":\"" + JsonEscape(user_wifi_ssid) + "\",";
   payload += "\"failsafe_ms\":" + String(boosh_failsafe_timeout_ms) + ",";
   payload += "\"target_ip\":\"" + JsonEscape(target_ip_string) + "\",";
@@ -2287,6 +2312,15 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     .vbtn{width:90px;height:90px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;user-select:none;-webkit-user-select:none;font-weight:700;font-size:11px;letter-spacing:.05em;color:rgba(255,255,255,.9);border:3px solid rgba(255,255,255,0);touch-action:none}
     .vbtn.web-pressed{border-color:rgba(255,255,255,.9);box-shadow:0 0 24px 8px var(--vg)}
     .vbtn.phys-pressed{border-color:rgba(255,255,255,.55)}
+    .vbtn-row{display:flex;gap:24px;justify-content:center;padding:8px 0 4px;flex-wrap:wrap}
+    @media(max-width:640px){
+      #vbtn-panel{position:fixed;bottom:0;left:0;right:0;margin:0 !important;border-radius:20px 20px 0 0;z-index:9000;padding:12px 12px max(12px,env(safe-area-inset-bottom))}
+      .vbtn-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:4px 0}
+      .vbtn{width:38vw;height:38vw;max-width:165px;max-height:165px;font-size:13px}
+      .vbtn > div:first-child{font-size:min(11vw,48px)}
+      .vbtn-spacer{display:block;height:max(calc(38vw + 80px),200px)}
+    }
+    @media(min-width:641px){.vbtn-spacer{display:none}}
     .active{background:#f05a28;color:#fff}
   </style>
 </head>
@@ -2296,6 +2330,18 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       <h1 id="page-title">Pylons Control</h1>
       <p><span id="solenoid" class="pill">Solenoid idle</span></p>
       <p id="fw-version"></p>
+    </div>
+    <div id="vbtn-panel" class="panel" style="margin-top:16px;display:none">
+      <h2>Virtual Buttons</h2>
+      <div class="vbtn-row">
+        <div class="vbtn" id="vbtn-3" data-btn="3" style="background:#f44336;--vg:#f44336"><div style="font-size:30px;line-height:1.1">&#9632;</div><div>RED</div></div>
+        <div class="vbtn" id="vbtn-2" data-btn="2" style="background:#ff9800;--vg:#ff9800"><div style="font-size:30px;line-height:1.1">&#9632;</div><div>ORANGE</div></div>
+        <div class="vbtn" id="vbtn-0" data-btn="0" style="background:#4caf50;--vg:#4caf50"><div style="font-size:30px;line-height:1.1">&#9632;</div><div>GREEN</div></div>
+        <div class="vbtn" id="vbtn-1" data-btn="1" style="background:#2196f3;--vg:#2196f3"><div style="font-size:30px;line-height:1.1">&#9632;</div><div>BLUE</div></div>
+      </div>
+      <div style="color:var(--muted);font-size:11px;text-align:center;margin-top:6px">Hold to activate &mdash; mirrors physical button behavior</div>
+    </div>
+    <div class="panel" style="margin-top:16px">
       <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
         <button id="trigger">Press and Hold Solenoid</button>
         <button id="identify-btn" style="background:linear-gradient(180deg,#b97af0 0,#7c3abf 100%);color:#fff">Blink LEDs (identify)</button>
@@ -2308,16 +2354,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         <span id="seq-status" style="color:var(--muted);font-size:14px"></span>
       </div>
     </div>
-    <div id="vbtn-panel" class="panel" style="margin-top:16px;display:none">
-      <h2>Virtual Buttons</h2>
-      <div style="display:flex;gap:24px;justify-content:center;padding:8px 0 4px;flex-wrap:wrap">
-        <div class="vbtn" id="vbtn-3" data-btn="3" style="background:#f44336;--vg:#f44336"><div style="font-size:30px;line-height:1.1">&#9632;</div><div>RED</div></div>
-        <div class="vbtn" id="vbtn-2" data-btn="2" style="background:#ff9800;--vg:#ff9800"><div style="font-size:30px;line-height:1.1">&#9632;</div><div>ORANGE</div></div>
-        <div class="vbtn" id="vbtn-0" data-btn="0" style="background:#4caf50;--vg:#4caf50"><div style="font-size:30px;line-height:1.1">&#9632;</div><div>GREEN</div></div>
-        <div class="vbtn" id="vbtn-1" data-btn="1" style="background:#2196f3;--vg:#2196f3"><div style="font-size:30px;line-height:1.1">&#9632;</div><div>BLUE</div></div>
-      </div>
-      <div style="color:var(--muted);font-size:11px;text-align:center;margin-top:6px">Hold to activate &mdash; mirrors physical button behavior including double-tap</div>
-    </div>
+    <div class="vbtn-spacer" id="vbtn-spacer" style="display:none"></div>
     <div class="panel" style="margin-top:16px">
       <h2>Node Config</h2>
       <form id="config-form" class="meta">
@@ -2686,10 +2723,20 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       document.getElementById('meta').innerHTML = rows.map(([k,v]) => `<div class="row"><strong>${k}</strong><span>${v}</span></div>`).join('');
       document.getElementById('fw-version').textContent = `FW ${data.fw_version}`;
       updateBtnActivity(data.btn_press_counts, data.btn_act_counts);
-      if (data.btn_state) { for (let i = 0; i < 4; i++) physBtnDown[i] = !!data.btn_state[i]; }
+      if (data.btn_state)    { for (let i = 0; i < 4; i++) physBtnDown[i]   = !!data.btn_state[i]; }
+      if (data.btn_disabled) { for (let i = 0; i < 4; i++) vBtnDisabled[i]  = !!data.btn_disabled[i]; }
+      if (data.btn_recovery) { for (let i = 0; i < 4; i++) vBtnRecovery[i]  = !!data.btn_recovery[i]; }
+      vSeqPhase = data.seq_phase  || 0;
+      vRedState = data.red_state  || 0;
+      vOrangeStrobeMs     = data.orange_strobe_ms || 0;
+      vOrangeStrobeRecvMs = Date.now();
+      vRedSteamMs         = data.red_steam_ms     || 0;
+      vRedSteamRecvMs     = Date.now();
       vBtnBpm = data.bpm || 0;
       const vp = document.getElementById('vbtn-panel');
+      const vs = document.getElementById('vbtn-spacer');
       if (vp) vp.style.display = barmodeActive ? '' : 'none';
+      if (vs) vs.style.display = barmodeActive ? '' : 'none';
       const title = `${data.pylon_id} Pylons Control`;
       document.getElementById('page-title').textContent = title;
       document.title = title;
@@ -3292,32 +3339,106 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     let physBtnDown = [false,false,false,false];
     let vBtnBpm = 0;
 
+    // Lamp state synced from telemetry (1s updates); animation interpolates between
+    let vBtnDisabled   = [false,false,false,false];
+    let vBtnRecovery   = [false,false,false,false];
+    let vSeqPhase      = 0;
+    let vRedState      = 0;
+    let vOrangeStrobeMs      = 0;   // remaining ms at time of last telemetry tick
+    let vOrangeStrobeRecvMs  = 0;   // Date.now() when that tick arrived
+    let vRedSteamMs          = 0;   // elapsed ms at last tick
+    let vRedSteamRecvMs      = 0;
+
+    const LAVA_UNITS = [1,1,3,1,1,1,1,3, 1,1,3,3, 1,1,1,1,1,1,3,3, 1,1,3,7];
+
     function animateVBtns() {
       const now = Date.now();
       const tSec = now / 1000;
+      const bpm  = (vBtnBpm >= 40 && vBtnBpm <= 220) ? vBtnBpm : 0;
+      const beat_ms = bpm ? 60000 / bpm : 1000;
+
+      // Orange strobe: remaining time is vOrangeStrobeMs minus elapsed since last tick
+      const orangeRem = Math.max(0, vOrangeStrobeMs - (now - vOrangeStrobeRecvMs));
+      // Red steam: total elapsed = value at last tick + elapsed since last tick
+      const steamMs   = (vRedState === 3) ? vRedSteamMs + (now - vRedSteamRecvMs) : 0;
+
+      // ALL-4 sequence phase overrides: [g=0, b=1, o=2, r=3]
+      let seqBr = null;
+      if (vSeqPhase >= 1 && vSeqPhase <= 4) {
+        if (vSeqPhase === 1) {
+          const f = (now % 500 < 125) ? 0.25 : 0;
+          seqBr = [1.0, f, 0, 0];
+        } else if (vSeqPhase === 2) {
+          const f = (now % 250 < 125) ? 0.5 : 0;
+          seqBr = [f, f, 1.0, 0];
+        } else if (vSeqPhase === 3) {
+          const f = (now % 167 < 125) ? 0.75 : 0;
+          seqBr = [f, f, f, 1.0];
+        } else {
+          const f = (now % 125 < 100) ? 0.8 : 0;
+          seqBr = [f, f, f, f];
+        }
+      } else if (vSeqPhase === 5) {
+        seqBr = [0, 0, 0, 0];
+      }
+
       for (let i = 0; i < 4; i++) {
         const btn = document.getElementById('vbtn-' + i);
         if (!btn) continue;
-        const held = webBtnDown[i] || physBtnDown[i];
         let br;
-        if (held) {
+
+        if (seqBr) {
+          br = seqBr[i];
+        } else if (vBtnDisabled[i]) {
+          br = 0.30;
+        } else if (vBtnRecovery[i]) {
+          br = 0;
+        } else if (webBtnDown[i] || physBtnDown[i]) {
           br = 1.0;
-        } else {
-          const bpm = (vBtnBpm >= 40 && vBtnBpm <= 220) ? vBtnBpm : 0;
-          if (i === 0) {
-            const freq = bpm ? bpm / 60 : 2;
-            br = Math.sin(2 * Math.PI * freq * tSec) * 0.5 + 0.5;
-          } else if (i === 1) {
-            const period = bpm ? 60000 / bpm : 1000;
-            br = (now % period < 50) ? 1.0 : 0.2;
-          } else if (i === 2) {
-            const period = bpm ? 60000 / bpm : 250;
-            br = (now % period) / period;
+        } else if (i === 0) {
+          // Green: sine at BPM freq (or 2 Hz)
+          const freq = bpm ? bpm / 60 : 2;
+          br = Math.sin(2 * Math.PI * freq * tSec) * 0.5 + 0.5;
+        } else if (i === 1) {
+          // Blue: 50 ms flash per beat, base 20%
+          br = (now % beat_ms < 50) ? 1.0 : 0.2;
+        } else if (i === 2) {
+          // Orange: 5× strobe for 500 ms post-fire, then sawtooth per beat
+          if (orangeRem > 0) {
+            const pos = 500 - orangeRem;
+            br = (Math.floor(pos / 50) % 2 === 0) ? 1.0 : 0;
           } else {
-            br = Math.sin(2 * Math.PI * 0.5 * tSec) * 0.5 + 0.5;
+            const sawPeriod = bpm ? beat_ms : 250;
+            br = (now % sawPeriod) / sawPeriod;
+          }
+        } else {
+          // Red: state-dependent
+          if (vRedState === 3) {
+            // Steam: ramp 1→10 Hz over 4 s, solid after
+            if (steamMs >= 4000) {
+              br = 1.0;
+            } else {
+              const fhz = Math.pow(10, steamMs / 4000);
+              const pms = 1000 / fhz;
+              br = (now % pms < 50) ? 1.0 : 0;
+            }
+          } else if (vRedState === 4) {
+            br = 1.0;  // sequential hold: solid
+          } else {
+            // Idle: Morse "LAVA"
+            let mu = bpm ? beat_ms / 4 : 150;
+            mu = Math.max(50, Math.min(400, mu));
+            const totalMs = LAVA_UNITS.reduce((a, b) => a + b, 0) * mu;
+            const t = now % totalMs;
+            let accum = 0; br = 0;
+            for (let j = 0; j < LAVA_UNITS.length; j++) {
+              accum += LAVA_UNITS[j] * mu;
+              if (t < accum) { br = (j % 2 === 0) ? 1.0 : 0; break; }
+            }
           }
         }
-        btn.style.opacity = (0.2 + br * 0.8).toFixed(3);
+
+        btn.style.opacity = (0.15 + br * 0.85).toFixed(3);
         btn.classList.toggle('web-pressed', webBtnDown[i]);
         btn.classList.toggle('phys-pressed', physBtnDown[i] && !webBtnDown[i]);
       }
@@ -4872,6 +4993,7 @@ struct PylonTarget {
   int seq_idx;      // pylon_index value from registry / mesh peer
   bool via_mesh;    // true = reach this pylon via ESP-NOW unicast (no IP)
   uint8_t mesh_mac[6];
+  bool is_self;     // true = fire local solenoid (barmode self-slot in sequential)
 };
 
 // Low-level: build and send one OSC float packet to a single IP.
@@ -5041,7 +5163,9 @@ int ExtractRegistryIPs(IPAddress *dest, int maxCount) {
 // Called from Core 1; oscUdp send path is non-blocking.
 // Dispatch one OSC command to a single PylonTarget — IP or ESP-NOW unicast.
 void SendOscToPylonTarget(const char *addr, float value, const PylonTarget &t) {
-  if (t.via_mesh) {
+  if (t.is_self) {
+    ApplyBooshState(value > 0.5f ? 1 : 0, "barmode-self");
+  } else if (t.via_mesh) {
     MeshUnicastOsc(t.mesh_mac, addr, value);
   } else {
     SendOscFloatToIP(addr, value, t.ip);
@@ -5432,6 +5556,8 @@ void PollBarModeButtons() {
           io35_strobe        = true;
           io35_strobe_start  = now;
           btn2_pending_release = true;
+          barmode_orange_strobe_g = true;
+          barmode_orange_strobe_start_ms_g = now;
         }
       }
 
@@ -5448,6 +5574,7 @@ void PollBarModeButtons() {
           ledcWrite(3, (step % 2 == 0) ? 255 : 0);
         } else {
           io35_strobe = false;
+          barmode_orange_strobe_g = false;
         }
       }
       if (!io35_strobe) {
@@ -5507,7 +5634,14 @@ void PollBarModeButtons() {
             barmode_btn_event_btn[barmode_btn_event_head] = 3;
             barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
             if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
-            red_seq_count      = ExtractRegistryTargets(red_seq_targets, 16);
+            red_seq_count      = ExtractRegistryTargets(red_seq_targets, 15);
+            // Add self (BARBAR) as one slot in the ping-pong sequence
+            if (red_seq_count < 16) {
+              PylonTarget self_t = {};
+              self_t.is_self = true;
+              self_t.seq_idx = -1;
+              red_seq_targets[red_seq_count++] = self_t;
+            }
             red_seq_pos        = 0;
             red_seq_ascending  = true;
             red_seq_start_ms   = now;
@@ -5516,7 +5650,7 @@ void PollBarModeButtons() {
             red_seq_press_ms   = now;
             barmode_act_counts[4]++;
             red_state          = 4;
-            Console.printf("[BarMode] Red: seq start, %d pylons\n", red_seq_count);
+            Console.printf("[BarMode] Red: seq start, %d pylons (incl. self)\n", red_seq_count);
           } else if (red_state == 1 && now - red_press1_ms <= 500) {
             // Second tap in triple-tap sequence
             red_press2_ms = now;
@@ -5531,6 +5665,7 @@ void PollBarModeButtons() {
             lamp_red_on       = false;
             lamp_red_step_ms  = now - 10000;
             red_state         = 3;
+            barmode_red_steam_start_ms_g = now;
             Console.println("[BarMode] Red: steam hold active");
           }
         }
@@ -5672,6 +5807,7 @@ void PollBarModeButtons() {
         }
         ledcWrite(6, lamp);
       }
+      barmode_red_state_g = red_state;
     }
 
     } // end if (seq_phase == 0) — individual button actions
@@ -5701,6 +5837,7 @@ void PollBarModeButtons() {
       ledcWrite(6, r);  // red
     }
 
+    barmode_seq_phase_g = seq_phase;
     for (int i = 0; i < 4; i++) btn_prev_stable[i] = btn_stable[i];
   }
 
