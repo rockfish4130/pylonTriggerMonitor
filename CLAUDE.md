@@ -38,24 +38,48 @@ the ESP. Without protection, this overwrites values the user is actively typing.
 `formDirty` flag. **Every time a config input is added, both rules below must be followed or the
 "typed value gets overwritten" bug returns. This has already regressed three times.**
 
-**Rule 1:** Every `<input>` in the config form that is synced from telemetry **must appear in the
-`configInputs` array** in the JS. This array attaches both `'input'` and `'change'` event listeners
-to each element. The form-level `'input'` listener alone is insufficient because spinners, paste,
-and autofill only fire `'change'`, not `'input'`.
+**Rule 1:** Every `<input>`, `<select>`, or `<input type="checkbox">` that is synced from telemetry
+**must appear in the `configInputs` array** in the JS — no exceptions. This array attaches both
+`'input'` and `'change'` event listeners. The form-level listener alone is insufficient. **This bug
+has regressed 5+ times, including on a `<select>` element.** A large warning banner comment sits
+directly above the `configInputs` array in the source — heed it.
 
 **Rule 2:** All telemetry→input sync calls **must use `syncConfigField(id, value)`**, never the
-bare `if (document.activeElement !== input)` pattern. `syncConfigField` checks `formDirty` and
-bails out completely when the user has unsaved edits. The activeElement check alone fails when
-focus moves to the Save button between keystroke and submit.
+bare `.value = x` or `if (document.activeElement !== input)` patterns. Applies to text inputs and
+`<select>` elements. `syncConfigField` checks `formDirty` and bails out completely when the user
+has unsaved edits.
 
-Checkboxes (no text entry) are exempt from Rule 2 but **are NOT exempt from Rule 1** — they must
-still appear in `configInputs` so the `'change'` listener sets `formDirty` when clicked. A checkbox
-not in `configInputs` will be overwritten by the next telemetry tick because clicking it never sets
-`formDirty`. This exact bug has been introduced with every new checkbox added. When adding a checkbox:
-1. Add it to `configInputs` (Rule 1 — mandatory for checkboxes too)
-2. Sync it inside the `if (!formDirty)` block using `document.activeElement !== box` (Rule 2 exempt)
+Checkboxes are exempt from Rule 2 but **are NOT exempt from Rule 1**. Sync checkboxes inside the
+`if (!formDirty)` block using `document.activeElement !== box`. Must still be in `configInputs`.
 
 Display-only `<span>` elements go OUTSIDE the formDirty block so they always update.
+
+## ESP-NOW Mesh Protocol
+
+All nodes participate in a peer-to-peer ESP-NOW mesh on a configurable channel (default ch 1, NVS key `mesh_ch`). Key constants and structs are all in `src/main.cpp`.
+
+**Constants:**
+- `kMeshMagic = 0x4D455348UL` ("MESH") — first 4 bytes of every packet; quick sanity check
+- `kMeshVersion = 3` — bump whenever a packet struct layout changes; mismatched nodes are dropped
+- `kMeshPktBeacon = 1`, `kMeshPktCommand = 2`, `kMeshPktChanChange = 3`
+- Beacon interval: 2000 ms. Peer timeout: 8000 ms. Max peers: 10.
+- Quality metric: 16-slot rolling bitmap, one slot per beacon interval (32s window); `qual_pct = popcount(qual_bits) * 100 / 16`
+
+**Packet structs** (all `__attribute__((packed))`):
+- `MeshBeaconPkt` — node announcement: node_id, pylon_index, role, uptime_s, batt_v, batt_pct, temp_f, fw_ver[32]
+- `MeshCommandPkt` — OSC relay: seq (dedup), osc_addr[32], osc_arg (float)
+- `MeshChanChangePkt` — coordinated channel switch: new_ch (1-13), apply_ms (countdown from receipt)
+
+**Channel management:**
+- In STA mode (WiFi connected): radio channel is controlled by the AP. Use `peer.channel = 0` so ESP-NOW follows the current WiFi channel. Do NOT call `esp_wifi_set_channel()` in STA mode.
+- In disconnected mode: pin radio to `cfg_mesh_ch` via `esp_wifi_set_channel()` in the WiFi disconnect event handler.
+- Coordinated channel change: broadcast `MeshChanChangePkt` with a 5s countdown from BARBAR's web UI. All receiving nodes arm a timer; PingTask (Core 0) applies the change when it fires. Saves to NVS. If STA-connected, NVS is updated but radio applies on next disconnect.
+
+**Receive callback** `MeshOnRecv` runs in WiFi task (Core 0). OSC commands are queued via `mesh_osc_queue` (FreeRTOS queue) for processing on Core 1. Do not block in the callback.
+
+**Peer registration:** `esp_now_add_peer()` must be called before unicast. Broadcast peer uses MAC `FF:FF:FF:FF:FF:FF` with `channel=0`. Done in `MeshUpsertPeer` and mesh init.
+
+**Dedup:** `MeshDedupEntry[16]` with 500ms window prevents duplicate OSC fires from retried broadcasts.
 
 ## OSC Addresses
 - `/pylon/BooshMain` — raw solenoid open/close (1.0/0.0)

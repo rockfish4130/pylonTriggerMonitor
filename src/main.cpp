@@ -77,9 +77,10 @@ constexpr const char *kOscAddrSteam       = "/pylon/BooshSteam";
 
 // ---- Mesh (ESP-NOW) constants -----------------------------------------------
 constexpr uint32_t kMeshMagic            = 0x4D455348UL; // "MESH"
-constexpr uint8_t  kMeshVersion          = 2;  // bump when beacon struct changes
+constexpr uint8_t  kMeshVersion          = 3;  // bump when beacon struct changes
 constexpr uint8_t  kMeshPktBeacon        = 1;
 constexpr uint8_t  kMeshPktCommand       = 2;
+constexpr uint8_t  kMeshPktChanChange    = 3;
 constexpr uint32_t kMeshBeaconIntervalMs = 2000;   // broadcast beacon every 2 s
 constexpr uint32_t kMeshPeerTimeoutMs    = 8000;   // drop peer after 8 s silence
 constexpr uint8_t  kMeshMaxPeers         = 10;
@@ -297,7 +298,7 @@ struct __attribute__((packed)) MeshBeaconPkt {
   float    batt_v;     // battery voltage V (NaN if unavailable)
   float    batt_pct;   // battery SOC % (NaN if unavailable)
   float    temp_f;     // thermistor temp °F (NaN if unavailable)
-  char     fw_ver[16]; // kFirmwareVersion truncated
+  char     fw_ver[32]; // kFirmwareVersion truncated
 };
 
 struct __attribute__((packed)) MeshCommandPkt {
@@ -307,6 +308,15 @@ struct __attribute__((packed)) MeshCommandPkt {
   uint16_t seq;
   char     osc_addr[32];
   float    osc_arg;
+};
+
+struct __attribute__((packed)) MeshChanChangePkt {
+  uint32_t magic;
+  uint8_t  version;
+  uint8_t  type;      // kMeshPktChanChange
+  uint8_t  new_ch;    // target channel 1-13
+  uint8_t  _pad;
+  uint32_t apply_ms;  // ms from receipt to apply
 };
 
 struct MeshPeerInfo {
@@ -323,7 +333,7 @@ struct MeshPeerInfo {
   float    batt_v;              // battery voltage V (NaN if unavailable)
   float    batt_pct;            // battery SOC % (NaN if unavailable)
   float    temp_f;              // thermistor temp °F (NaN if unavailable)
-  char     fw_ver[16];          // firmware version string
+  char     fw_ver[32];          // firmware version string
 };
 
 struct MeshDedupEntry {
@@ -341,6 +351,8 @@ volatile bool     mesh_initialized  = false;
 volatile uint32_t mesh_beacons_sent = 0;
 volatile uint32_t mesh_cmds_sent    = 0;
 static const uint8_t kMeshBroadcastMac[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+volatile uint8_t       mesh_ch_pending  = 0;   // 0 = no pending chan change
+volatile unsigned long mesh_ch_apply_at = 0;   // millis() when to apply
 
 // ---- Sequence state ---------------------------------------------------------
 enum SeqType { SEQ_NONE, SEQ_PULSE_ONCE, SEQ_PULSE_5X, SEQ_STEAM };
@@ -1142,8 +1154,8 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
     if (log_output) Console.printf("[CFG] red_seq_valve_ms set: %lu\n", barmode_red_seq_valve_ms);
   } else if (field == "red_seq_step_ms") {
     const int ms = (int)value.toInt();
-    if (ms < 50 || ms > 5000) { if (log_output) Console.println("[CFG] red_seq_step_ms out of range (50-5000ms)"); return false; }
-    barmode_red_seq_step_ms = (unsigned long)ms;
+    if (ms < 0 || ms > 5000) { if (log_output) Console.println("[CFG] red_seq_step_ms out of range (0-5000ms)"); return false; }
+    barmode_red_seq_step_ms = (unsigned long)(ms < 10 ? 10 : ms);  // floor at 10ms to prevent runaway
     changed = true;
     if (log_output) Console.printf("[CFG] red_seq_step_ms set: %lu\n", barmode_red_seq_step_ms);
   } else if (field == "all4_lockout_s") {
@@ -2415,10 +2427,10 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           <label>Pylon index <input id="cfg-index" name="index" type="number" min="-99" max="99" step="1" style="width:60px"> <span style="color:var(--muted);font-size:12px">(sequential fire order; negative = skip)</span></label>
           <div id="cfg-btn-disable-wrap" style="display:none;gap:10px;align-items:center">
             <span style="color:var(--muted);font-size:12px">Disable buttons:</span>
+            <label style="color:#f44336"><input type="checkbox" id="cfg-btn-dis-3" style="accent-color:#f44336"> Red</label>
+            <label style="color:#ff9800"><input type="checkbox" id="cfg-btn-dis-2" style="accent-color:#ff9800"> Orange</label>
             <label style="color:#4caf50"><input type="checkbox" id="cfg-btn-dis-0" style="accent-color:#4caf50"> Green</label>
             <label style="color:#2196f3"><input type="checkbox" id="cfg-btn-dis-1" style="accent-color:#2196f3"> Blue</label>
-            <label style="color:#ff9800"><input type="checkbox" id="cfg-btn-dis-2" style="accent-color:#ff9800"> Orange</label>
-            <label style="color:#f44336"><input type="checkbox" id="cfg-btn-dis-3" style="accent-color:#f44336"> Red</label>
           </div>
         </div>
         <div style="border-top:1px solid var(--line);padding-top:10px;display:grid;gap:10px">
@@ -2442,6 +2454,17 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
             <label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--muted)"><input type="checkbox" id="cfg-steam-dis" style="accent-color:#e57373"> Disabled</label>
           </div>
         </div>
+        <div id="cfg-grp-red" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
+          <span style="color:#f44336;font-size:13px">&#11044; Red (Sequential Mode)</span>
+          <label>Seq max hold (s) <input id="cfg-red-seq-max-s" name="red_seq_max_s" type="number" min="1" max="120" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(max hold duration; default 10s)</span></label>
+          <label>Valve open (ms) <input id="cfg-red-seq-valve-ms" name="red_seq_valve_ms" type="number" min="20" max="2000" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(each pylon valve open time; default 66ms)</span></label>
+          <label>Step delay (ms) <input id="cfg-red-seq-step-ms" name="red_seq_step_ms" type="number" min="10" max="5000" step="10" style="width:70px"> <span style="color:var(--muted);font-size:12px">(step interval; &lt;valve_ms = overlap wave)</span></label>
+        </div>
+        <div id="cfg-grp-all4" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
+          <span style="color:var(--muted);font-size:13px">All-4 Sequence</span>
+          <label>Valve open duration (ms) <input id="cfg-all4-valve-ms" name="all4_valve_ms" type="number" min="500" max="30000" step="500" style="width:80px"> <span style="color:var(--muted);font-size:12px">(how long all valves stay open)</span></label>
+          <label>Lockout after sequence (s) <input id="cfg-all4-lockout-s" name="all4_lockout_s" type="number" min="0" max="3600" step="30" style="width:80px"> <span style="color:var(--muted);font-size:12px">(cooldown before another sequence can start; 0=disabled)</span></label>
+        </div>
         <div id="cfg-grp-green" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
           <span style="color:#4caf50;font-size:13px">&#11044; Green</span>
           <label>Pulse open duration (ms) <input id="cfg-green-timeout-ms" name="green_timeout_ms" type="number" min="50" max="10000" step="50" style="width:80px"> <span style="color:var(--muted);font-size:12px">(how long green holds the valve open)</span></label>
@@ -2454,11 +2477,6 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           <label>Seq floor delay (ms) <input id="cfg-seq-floor-ms" name="seq_floor_ms" type="number" min="10" max="2000" step="10" style="width:70px"> <span style="color:var(--muted);font-size:12px">(minimum inter-pylon delay)</span></label>
           <label>Seq exp factor (%) <input id="cfg-seq-exp-pct" name="seq_exp_pct" type="number" min="1" max="100" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(multiply delay each step; 100=linear only)</span></label>
         </div>
-        <div id="cfg-grp-all4" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
-          <span style="color:var(--muted);font-size:13px">All-4 Sequence</span>
-          <label>Valve open duration (ms) <input id="cfg-all4-valve-ms" name="all4_valve_ms" type="number" min="500" max="30000" step="500" style="width:80px"> <span style="color:var(--muted);font-size:12px">(how long all valves stay open)</span></label>
-          <label>Lockout after sequence (s) <input id="cfg-all4-lockout-s" name="all4_lockout_s" type="number" min="0" max="3600" step="30" style="width:80px"> <span style="color:var(--muted);font-size:12px">(cooldown before another sequence can start; 0=disabled)</span></label>
-        </div>
         <div id="cfg-grp-routing" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
           <span style="color:var(--muted);font-size:13px">Network Routing</span>
           <div style="display:flex;align-items:center;gap:10px">
@@ -2466,16 +2484,20 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
             <span style="color:var(--muted);font-size:14px">Route all wireless PYLON commands via RPIBOOSH wired controller</span>
           </div>
         </div>
-        <div id="cfg-grp-red" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
-          <span style="color:var(--muted);font-size:13px">Red Sequential</span>
-          <label>Seq max hold (s) <input id="cfg-red-seq-max-s" name="red_seq_max_s" type="number" min="1" max="120" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(max hold duration; default 10s)</span></label>
-          <label>Valve open (ms) <input id="cfg-red-seq-valve-ms" name="red_seq_valve_ms" type="number" min="20" max="2000" step="1" style="width:70px"> <span style="color:var(--muted);font-size:12px">(each pylon valve open time; default 66ms)</span></label>
-          <label>Step delay (ms) <input id="cfg-red-seq-step-ms" name="red_seq_step_ms" type="number" min="50" max="5000" step="50" style="width:70px"> <span style="color:var(--muted);font-size:12px">(interval between pylon steps; default 200ms)</span></label>
-        </div>
         <div id="cfg-grp-recovery" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:10px">
           <span style="color:var(--muted);font-size:13px">Button Recovery</span>
           <span style="color:var(--muted);font-size:12px">After each tap action completes, the button is locked out for this duration. Lamp goes dark. Tap during lockout shows WAIT on display. 0 = disabled. Effective time shown when temp multiplier is active.</span>
           <div style="display:grid;gap:6px">
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <label style="color:#f44336;font-size:13px;min-width:80px">&#11044; Red</label>
+              <label style="font-size:12px">Base (ms) <input id="cfg-red-recovery-ms" name="red_recovery_ms" type="number" min="0" max="300000" step="1" style="width:80px"></label>
+              <span id="rec-red-eff" style="color:var(--muted);font-size:12px"></span>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <label style="color:#ff9800;font-size:13px;min-width:80px">&#11044; Orange</label>
+              <label style="font-size:12px">Base (ms) <input id="cfg-orange-recovery-ms" name="orange_recovery_ms" type="number" min="0" max="300000" step="1" style="width:80px"></label>
+              <span id="rec-orange-eff" style="color:var(--muted);font-size:12px"></span>
+            </div>
             <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
               <label style="color:#4caf50;font-size:13px;min-width:80px">&#11044; Green</label>
               <label style="font-size:12px">Base (ms) <input id="cfg-green-recovery-ms" name="green_recovery_ms" type="number" min="0" max="300000" step="1" style="width:80px"></label>
@@ -2485,16 +2507,6 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
               <label style="color:#2196f3;font-size:13px;min-width:80px">&#11044; Blue</label>
               <label style="font-size:12px">Base (ms) <input id="cfg-blue-recovery-ms" name="blue_recovery_ms" type="number" min="0" max="300000" step="1" style="width:80px"></label>
               <span id="rec-blue-eff" style="color:var(--muted);font-size:12px"></span>
-            </div>
-            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-              <label style="color:#ff9800;font-size:13px;min-width:80px">&#11044; Orange</label>
-              <label style="font-size:12px">Base (ms) <input id="cfg-orange-recovery-ms" name="orange_recovery_ms" type="number" min="0" max="300000" step="1" style="width:80px"></label>
-              <span id="rec-orange-eff" style="color:var(--muted);font-size:12px"></span>
-            </div>
-            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-              <label style="color:#f44336;font-size:13px;min-width:80px">&#11044; Red</label>
-              <label style="font-size:12px">Base (ms) <input id="cfg-red-recovery-ms" name="red_recovery_ms" type="number" min="0" max="300000" step="1" style="width:80px"></label>
-              <span id="rec-red-eff" style="color:var(--muted);font-size:12px"></span>
             </div>
           </div>
           <div style="border-top:1px solid var(--line);padding-top:8px;display:grid;gap:8px">
@@ -2572,7 +2584,20 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         <span style="margin-left:16px">Beacons sent: <span id="mesh-beacons-sent">0</span></span>
         <span style="margin-left:16px">Cmds sent: <span id="mesh-cmds-sent">0</span></span>
       </div>
-      <table id="mesh-peer-table" style="width:100%;border-collapse:collapse;font-size:13px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+        <span style="font-size:13px;color:var(--muted)">Change channel:</span>
+        <select id="mesh-ch-sel" style="background:#0d131c;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:4px 8px;font-size:13px">
+          <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+          <option value="4">4</option><option value="5">5</option><option value="6">6</option>
+          <option value="7">7</option><option value="8">8</option><option value="9">9</option>
+          <option value="10">10</option><option value="11">11</option><option value="12">12</option>
+          <option value="13">13</option>
+        </select>
+        <button onclick="applyMeshChanChange()" style="padding:5px 14px;font-size:13px">Apply to All (5s countdown)</button>
+        <span id="mesh-ch-banner" style="display:none;color:#ff9800;font-size:13px;font-weight:600"></span>
+      </div>
+      <div style="overflow-x:auto">
+      <table id="mesh-peer-table" style="border-collapse:collapse;font-size:13px;white-space:nowrap">
         <thead><tr style="color:var(--muted);text-align:left">
           <th style="padding:4px 8px">Node ID</th>
           <th style="padding:4px 8px">Index</th>
@@ -2588,6 +2613,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         </tr></thead>
         <tbody id="mesh-peer-tbody"></tbody>
       </table>
+      </div>
       <div id="mesh-no-peers" style="color:var(--muted);font-size:13px;margin-top:6px;display:none">No peers discovered yet.</div>
       <div style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">
         <div style="font-weight:600;margin-bottom:8px;color:var(--accent)">Relay OSC via Mesh</div>
@@ -2724,6 +2750,37 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       const res = await fetch(url, options);
       if (!res.ok) throw new Error(await res.text());
       return res.json();
+    }
+    async function applyMeshChanChange() {
+      const ch = parseInt(document.getElementById('mesh-ch-sel').value);
+      const banner = document.getElementById('mesh-ch-banner');
+      let d;
+      try {
+        d = await fetchJson('/api/mesh/chanchange', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+          body: 'ch=' + ch
+        });
+      } catch(e) { alert('Channel change failed: ' + e.message); return; }
+      if (!d.ok) { alert('Error: ' + d.error); return; }
+      if (!d.broadcast) {
+        banner.style.display = '';
+        banner.textContent = 'Channel set to ' + ch + ' (local only — mesh not active)';
+        return;
+      }
+      let secs = Math.ceil(d.delay_ms / 1000);
+      banner.style.display = '';
+      banner.textContent = 'Switching all nodes to ch ' + ch + ' in ' + secs + 's\u2026';
+      const iv = setInterval(() => {
+        secs--;
+        if (secs <= 0) {
+          clearInterval(iv);
+          banner.textContent = 'Channel ' + ch + ' applied \u2014 verify below';
+          setTimeout(() => { banner.style.display = 'none'; }, 4000);
+        } else {
+          banner.textContent = 'Switching all nodes to ch ' + ch + ' in ' + secs + 's\u2026';
+        }
+      }, 1000);
     }
     function esc(value) {
       return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
@@ -2902,6 +2959,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           if (badge) badge.textContent = mesh.active ? '\u25cf ACTIVE' : '\u25cb INACTIVE';
           const chDisp = document.getElementById('mesh-ch-display');
           if (chDisp) chDisp.textContent = mesh.channel;
+          if (mesh.channel) syncConfigField('mesh-ch-sel', mesh.channel);
           const pcDisp = document.getElementById('mesh-peer-count');
           if (pcDisp) pcDisp.textContent = mesh.peer_count;
           const bsDisp = document.getElementById('mesh-beacons-sent');
@@ -2921,7 +2979,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
               const battPct = p.batt_pct != null ? p.batt_pct.toFixed(0) + '%' : 'N/A';
               const tempStr = p.temp_f   != null ? p.temp_f.toFixed(1) + '°F' : 'N/A';
               const fwStr   = p.fw_ver   || 'N/A';
-              tr.innerHTML = '<td style="padding:4px 8px">' + esc(p.id) + '</td>' +
+              tr.innerHTML = '<td style="padding:4px 8px"><a href="http://' + esc(p.id) + '.local/" target="_blank" style="color:var(--accent);text-decoration:none">' + esc(p.id) + '</a></td>' +
                 '<td style="padding:4px 8px">' + p.index + '</td>' +
                 '<td style="padding:4px 8px">' + (p.role === 1 ? 'BARMODE' : 'normal') + '</td>' +
                 '<td style="padding:4px 8px;color:' + qualColor + '">' + p.qual_pct + '%</td>' +
@@ -2930,7 +2988,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
                 '<td style="padding:4px 8px">' + battV + '</td>' +
                 '<td style="padding:4px 8px">' + battPct + '</td>' +
                 '<td style="padding:4px 8px">' + tempStr + '</td>' +
-                '<td style="padding:4px 8px;font-size:11px;color:var(--muted)">' + esc(fwStr) + '</td>' +
+                '<td style="padding:4px 8px;font-size:11px">' + esc(fwStr) + '</td>' +
                 '<td style="padding:4px 8px;font-family:monospace;font-size:11px">' + esc(p.mac) + '</td>';
               tbody.appendChild(tr);
             });
@@ -2951,11 +3009,20 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     }
     const triggerButton = document.getElementById('trigger');
     const configForm = document.getElementById('config-form');
-    // INVARIANT: every <input> in the config form that is synced from telemetry MUST appear here.
-    // This ensures both 'input' and 'change' events set formDirty (spinners, paste, autofill
-    // only fire 'change', not 'input'). The form-level listener alone is insufficient.
-    // ALL syncs must use syncConfigField(), never the bare activeElement pattern.
-    // Violating this causes the "typed value gets overwritten" bug.
+    // ╔══════════════════════════════════════════════════════════════════════╗
+    // ║  STOP — ADD NEW SYNCED ELEMENTS HERE BEFORE WRITING SYNC CODE       ║
+    // ║                                                                      ║
+    // ║  Every <input>, <select>, or <checkbox> whose value is written from  ║
+    // ║  telemetry data MUST appear in this array. No exceptions.            ║
+    // ║  Missing it means the 1s telemetry tick overwrites the user's edit.  ║
+    // ║  This bug has regressed 5+ times. Adding the HTML and the sync code  ║
+    // ║  is not enough — you must also add the id here.                      ║
+    // ║                                                                      ║
+    // ║  Rules:                                                              ║
+    // ║  1. Add id to this array (inputs, selects, AND checkboxes)           ║
+    // ║  2. Sync via syncConfigField(id, value) — never bare .value = x      ║
+    // ║  2b. Checkboxes: sync inside if (!formDirty) with activeElement check ║
+    // ╚══════════════════════════════════════════════════════════════════════╝
     const configInputs = ['cfg-id', 'cfg-host', 'cfg-description', 'cfg-node', 'cfg-wifi-ssid',
       'cfg-wifi-pass', 'cfg-failsafe-s', 'cfg-index', 'cfg-green-timeout-ms', 'cfg-all4-valve-ms',
       'cfg-all4-lockout-s', 'cfg-seq-max-s', 'cfg-seq-start-ms', 'cfg-seq-dec-ms', 'cfg-seq-floor-ms', 'cfg-seq-exp-pct',
@@ -2964,7 +3031,8 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       'cfg-steam-ramp', 'cfg-steam-open',
       'cfg-green-recovery-ms', 'cfg-blue-recovery-ms', 'cfg-orange-recovery-ms', 'cfg-red-recovery-ms',
       'cfg-temp-thresh1', 'cfg-temp-mult1', 'cfg-temp-thresh2', 'cfg-temp-mult2',
-      'cfg-route-via-rpi', 'cfg-mesh-en', 'cfg-mesh-ch', 'cfg-dj-timeout-s']
+      'cfg-route-via-rpi', 'cfg-mesh-en', 'cfg-mesh-ch', 'cfg-dj-timeout-s',
+      'mesh-ch-sel']
       .map((id) => document.getElementById(id))
       .filter(Boolean);
     let holdActive = false;
@@ -4043,6 +4111,7 @@ void TempPollTask(void *);  // forward declaration
 void StartSequence(SeqType type);  // forward declaration
 void AbortSequence();              // forward declaration
 void MeshBroadcastOsc(const char *osc_addr, float osc_arg);          // forward declaration
+void MeshBroadcastChanChange(uint8_t new_ch, uint32_t delay_ms);    // forward declaration
 void MeshUnicastOsc(const uint8_t *mac, const char *osc_addr, float osc_arg);  // forward declaration
 void MeshInit();  // forward declaration
 
@@ -4194,6 +4263,30 @@ void HandleMeshRelayApi() {
   resp += String(peer_count);
   resp += "}";
   webServer.send(200, "application/json", resp);
+}
+
+// POST /api/mesh/chanchange  param: ch=<1-13>
+// Broadcasts a channel-change packet to all mesh peers with a 5 s countdown,
+// then applies the change locally after the same delay. Fallback: if mesh is
+// not active, saves cfg_mesh_ch locally only (single-node use).
+void HandleMeshChanChangeApi() {
+  const int ch = webServer.arg("ch").toInt();
+  if (ch < 1 || ch > 13) {
+    webServer.send(400, "application/json", "{\"ok\":false,\"error\":\"ch must be 1-13\"}");
+    return;
+  }
+  const uint32_t delay_ms = 5000;
+  if (cfg_mesh_en && mesh_initialized) {
+    MeshBroadcastChanChange((uint8_t)ch, delay_ms);
+    webServer.send(200, "application/json",
+      "{\"ok\":true,\"ch\":" + String(ch) + ",\"delay_ms\":" + String(delay_ms) + ",\"broadcast\":true}");
+  } else {
+    // Mesh not active — apply locally only, no countdown
+    SetConfigFieldValue("mesh_ch", String(ch));
+    SavePylonConfig();
+    webServer.send(200, "application/json",
+      "{\"ok\":true,\"ch\":" + String(ch) + ",\"delay_ms\":0,\"broadcast\":false}");
+  }
 }
 
 // ---- Chart SVG (battery and temperature) ------------------------------------
@@ -4450,6 +4543,7 @@ void SetupWebServer() {
   webServer.on("/api/sequence/steam", HTTP_POST, HandleSeqSteamApi);
   webServer.on("/api/sequence/abort", HTTP_POST, HandleSeqAbortApi);
   webServer.on("/api/mesh/relay",     HTTP_POST, HandleMeshRelayApi);
+  webServer.on("/api/mesh/chanchange", HTTP_POST, HandleMeshChanChangeApi);
   webServer.on("/api/barmode/btn",    HTTP_POST, HandleBarmodeBtn);
   webServer.on("/dj",                 HTTP_GET,  HandleDjPage);
   webServer.on("/api/dj/btn",         HTTP_POST, HandleDjBtn);
@@ -5167,6 +5261,13 @@ struct PylonTarget {
   bool is_self;     // true = fire local solenoid (barmode self-slot in sequential)
 };
 
+// Pending-close slot for red sequential overlap (step_ms < valve_ms → simultaneous opens)
+struct RedSeqClose {
+  bool          active;
+  PylonTarget   target;
+  unsigned long close_at;
+};
+
 // Low-level: build and send one OSC float packet to a single IP.
 // When cfg_route_via_rpi is true, enqueues to osc_proxy_queue instead of sending UDP;
 // PingTask (Core 0) drains the queue and forwards via POST /api/osc/send on rpiboosh.
@@ -5792,10 +5893,8 @@ void PollBarModeButtons() {
       static bool          red_seq_ascending  = true;
       static unsigned long red_seq_start_ms   = 0;
       static unsigned long red_seq_last_ms    = 0;   // millis() of last step fire
-      // Pending close (one at a time — we fire close before next open if needed)
-      static bool          red_seq_close_pend   = false;
-      static PylonTarget   red_seq_close_target = {};  // target to close (IP or mesh)
-      static unsigned long red_seq_close_at     = 0;
+      // Pending closes array — supports overlap (step_ms < valve_ms → multiple simultaneous open)
+      static RedSeqClose   red_seq_closes[16]   = {};
       // "Complete first pass" guarantee
       static int           red_seq_fires         = 0;    // fires completed in current hold
       static bool          red_seq_released_early = false; // button released before pass done
@@ -5825,7 +5924,7 @@ void PollBarModeButtons() {
             red_seq_ascending      = true;
             red_seq_start_ms       = now;
             red_seq_last_ms        = now - barmode_red_seq_step_ms;  // fire first step immediately
-            red_seq_close_pend     = false;
+            memset(red_seq_closes, 0, sizeof(red_seq_closes));
             red_seq_press_ms       = now;
             red_seq_fires          = 0;
             red_seq_released_early = false;
@@ -5858,7 +5957,7 @@ void PollBarModeButtons() {
             const bool first_pass_done = (red_seq_fires >= red_seq_count);
             if (held < 400 && now < red_recovery_until) {
               // Recovery active: close and stop
-              if (red_seq_close_pend) { SendOscToPylonTarget(kOscAddress, 0.0f, red_seq_close_target); red_seq_close_pend = false; }
+              for (auto &c : red_seq_closes) { if (c.active) { SendOscToPylonTarget(kOscAddress, 0.0f, c.target); c.active = false; } }
               barmode_recovery_wait_until_ms = red_recovery_until;
               red_state = 0;
               Console.printf("[BarMode] Red: quick-tap blocked by recovery (%lums held)\n", held);
@@ -5868,7 +5967,7 @@ void PollBarModeButtons() {
               Console.printf("[BarMode] Red: released early (%d/%d fired), completing pass\n", red_seq_fires, red_seq_count);
             } else {
               // Pass already done (or 2nd+ pass): stop immediately
-              if (red_seq_close_pend) { SendOscToPylonTarget(kOscAddress, 0.0f, red_seq_close_target); red_seq_close_pend = false; }
+              for (auto &c : red_seq_closes) { if (c.active) { SendOscToPylonTarget(kOscAddress, 0.0f, c.target); c.active = false; } }
               red_state = (held < 400) ? 1 : 0;
               if (red_state == 1) {
                 red_press1_ms = now;
@@ -5890,21 +5989,22 @@ void PollBarModeButtons() {
         if (red_state == 4) {
           if (now - red_seq_start_ms >= barmode_red_seq_max_ms) {
             // Max time elapsed: stop
-            if (red_seq_close_pend) {
-              SendOscToPylonTarget(kOscAddress, 0.0f, red_seq_close_target);
-              red_seq_close_pend = false;
-            }
+            for (auto &c : red_seq_closes) { if (c.active) { SendOscToPylonTarget(kOscAddress, 0.0f, c.target); c.active = false; } }
             red_state = 0;
             Console.println("[BarMode] Red: seq max time");
           } else {
-            // Pending close check
-            if (red_seq_close_pend && now >= red_seq_close_at) {
-              SendOscToPylonTarget(kOscAddress, 0.0f, red_seq_close_target);
-              red_seq_close_pend = false;
+            // Pending close scan — fire any expired closes
+            for (auto &c : red_seq_closes) {
+              if (c.active && now >= c.close_at) {
+                SendOscToPylonTarget(kOscAddress, 0.0f, c.target);
+                c.active = false;
+              }
             }
             // If early-released and first pass complete: drain then stop
+            bool any_close_active = false;
+            for (auto &c : red_seq_closes) { if (c.active) { any_close_active = true; break; } }
             if (red_seq_released_early && red_seq_fires >= red_seq_count) {
-              if (!red_seq_close_pend) {
+              if (!any_close_active) {
                 red_state = 0;
                 Console.println("[BarMode] Red: pass complete after early release, stopped");
               }
@@ -5912,19 +6012,18 @@ void PollBarModeButtons() {
               // Step tick
               if (red_seq_count > 0 && now - red_seq_last_ms >= barmode_red_seq_step_ms) {
                 red_seq_last_ms = now;
-                // Flush any still-pending close before next open (safety for step_ms < valve_ms)
-                if (red_seq_close_pend) {
-                  SendOscToPylonTarget(kOscAddress, 0.0f, red_seq_close_target);
-                  red_seq_close_pend = false;
-                }
+                // Claim a free close slot (with overlap, old slots may still be active)
+                int slot = -1;
+                for (int i = 0; i < 16; i++) { if (!red_seq_closes[i].active) { slot = i; break; } }
+                if (slot < 0) slot = 0;  // all full (shouldn't happen with ≤16 pylons) — reuse slot 0
                 // Fire open to current position
                 SendOscToPylonTarget(kOscAddress, 1.0f, red_seq_targets[red_seq_pos]);
-                red_seq_close_target = red_seq_targets[red_seq_pos];
-                red_seq_close_at     = now + barmode_red_seq_valve_ms;
-                red_seq_close_pend   = true;
+                red_seq_closes[slot].target   = red_seq_targets[red_seq_pos];
+                red_seq_closes[slot].close_at = now + barmode_red_seq_valve_ms;
+                red_seq_closes[slot].active   = true;
                 red_seq_lamp_until   = now + barmode_red_seq_valve_ms;
                 red_seq_fires++;
-                Console.printf("[BarMode] Red seq: open idx=%d fires=%d\n", red_seq_targets[red_seq_pos].seq_idx, red_seq_fires);
+                Console.printf("[BarMode] Red seq: open idx=%d fires=%d slot=%d\n", red_seq_targets[red_seq_pos].seq_idx, red_seq_fires, slot);
                 // Advance ping-pong
                 if (red_seq_count == 1) {
                   red_seq_pos = 0;
@@ -6239,6 +6338,14 @@ static void MeshOnRecv(const uint8_t *mac, const uint8_t *data, int len) {
       ev.seq = pkt.seq;
       xQueueSendFromISR(mesh_osc_queue, &ev, nullptr);
     }
+  } else if (pkt_type == kMeshPktChanChange && len >= (int)sizeof(MeshChanChangePkt)) {
+    MeshChanChangePkt pkt;
+    memcpy(&pkt, data, sizeof(pkt));
+    if (pkt.magic != kMeshMagic) return;
+    if (pkt.new_ch < 1 || pkt.new_ch > 13) return;
+    mesh_ch_pending  = pkt.new_ch;
+    mesh_ch_apply_at = millis() + pkt.apply_ms;
+    Console.printf("[Mesh] chan change pending: ch=%u in %ums\n", pkt.new_ch, (unsigned)pkt.apply_ms);
   }
 }
 
@@ -6286,6 +6393,28 @@ void MeshBroadcastOsc(const char *osc_addr, float osc_arg) {
   }
   mesh_cmds_sent++;
   Console.printf("[Mesh] broadcast %s %.1f seq=%u\n", osc_addr, osc_arg, pkt.seq);
+}
+
+// Broadcasts a channel-change packet with a countdown delay, then arms the
+// local pending change so this node switches at the same time as peers.
+// Safe to call from Core 1 (web handler). delay_ms must be long enough for
+// the broadcast to reach all peers before anyone switches (~5000ms is safe).
+void MeshBroadcastChanChange(uint8_t new_ch, uint32_t delay_ms) {
+  if (!mesh_initialized || !cfg_mesh_en) return;
+  MeshChanChangePkt pkt;
+  memset(&pkt, 0, sizeof(pkt));
+  pkt.magic    = kMeshMagic;
+  pkt.version  = kMeshVersion;
+  pkt.type     = kMeshPktChanChange;
+  pkt.new_ch   = new_ch;
+  pkt.apply_ms = delay_ms;
+  for (uint8_t i = 0; i < kMeshCmdRetries; i++) {
+    esp_now_send(kMeshBroadcastMac, (uint8_t *)&pkt, sizeof(pkt));
+    if (i < kMeshCmdRetries - 1) vTaskDelay(pdMS_TO_TICKS(kMeshCmdRetryMs));
+  }
+  mesh_ch_pending  = new_ch;
+  mesh_ch_apply_at = millis() + delay_ms;
+  Console.printf("[Mesh] chan change broadcast: ch=%u in %ums\n", new_ch, (unsigned)delay_ms);
 }
 
 // Sends an OSC command to a single mesh peer by MAC (unicast with retry).
@@ -6522,6 +6651,22 @@ void PingTask(void *) {
       MeshSendBeacon();
       MeshUpdateQuality();
       MeshExpirePeers();
+    }
+
+    // ---- Pending channel change apply ----------------------------------------
+    if (mesh_ch_pending && (long)(now - mesh_ch_apply_at) >= 0) {
+      const uint8_t new_ch = mesh_ch_pending;
+      mesh_ch_pending = 0;
+      cfg_mesh_ch = new_ch;
+      Preferences prefs;
+      prefs.begin("pyloncfg", false);
+      prefs.putUChar(kPrefsKeyMeshCh, cfg_mesh_ch);
+      prefs.end();
+      if (!WiFi.isConnected()) {
+        esp_wifi_set_channel(cfg_mesh_ch, WIFI_SECOND_CHAN_NONE);
+      }
+      Console.printf("[Mesh] channel applied: ch=%u (WiFi %s)\n",
+                     cfg_mesh_ch, WiFi.isConnected() ? "connected-will apply on reconnect" : "disconnected-applied now");
     }
 
     if (WiFi.status() != WL_CONNECTED) {
