@@ -4031,7 +4031,7 @@ void HandleBarmodeBtn() {
 
 // POST /api/mesh/relay  params: addr=<osc_addr>&arg=<float>
 // Lets any non-ESP-NOW node (e.g. rpiboosh) relay an OSC command onto the mesh.
-// The receiving PYLON broadcasts via ESP-NOW to all active peers; does NOT apply locally.
+// Also applies the command locally on this node (BARBAR fires too).
 void HandleMeshRelayApi() {
   if (!cfg_mesh_en || !mesh_initialized) {
     webServer.send(503, "application/json", "{\"ok\":false,\"error\":\"mesh not active\"}");
@@ -4050,7 +4050,18 @@ void HandleMeshRelayApi() {
     xSemaphoreGive(mesh_peers_mutex);
   }
   MeshBroadcastOsc(addr.c_str(), arg_f);
-  Console.printf("[Mesh/relay] %s %.3f -> %d peers\n", addr.c_str(), arg_f, peer_count);
+  // Apply locally so this node (e.g. BARBAR) also fires
+  if (addr == kOscAddress) {
+    ApplyBooshState(arg_f, "mesh-relay");
+  } else if (addr == kOscAddrPulseSingle && arg_f >= 0.5f) {
+    if (!action_pulse1_dis) StartSequence(SEQ_PULSE_ONCE);
+  } else if (addr == kOscAddrPulseTrain && arg_f >= 0.5f) {
+    if (!action_pt_dis) StartSequence(SEQ_PULSE_5X);
+  } else if (addr == kOscAddrSteam) {
+    if (arg_f >= 0.5f) { if (!action_steam_dis) StartSequence(SEQ_STEAM); }
+    else AbortSequence();
+  }
+  Console.printf("[Mesh/relay] %s %.3f -> %d peers + local\n", addr.c_str(), arg_f, peer_count);
   String resp = "{\"ok\":true,\"addr\":\"";
   resp += addr;
   resp += "\",\"arg\":";
@@ -5107,6 +5118,7 @@ int ExtractRegistryTargets(PylonTarget *dest, int maxCount) {
     dest[count].ip       = addr;
     dest[count].seq_idx  = seq_idx;
     dest[count].via_mesh = false;
+    dest[count].is_self  = false;
     memset(dest[count].mesh_mac, 0, 6);
     count++;
   }
@@ -5120,6 +5132,7 @@ int ExtractRegistryTargets(PylonTarget *dest, int maxCount) {
       dest[count].ip       = mp_ip;
       dest[count].seq_idx  = barmode_manual_pylons[i].index;
       dest[count].via_mesh = false;
+      dest[count].is_self  = false;
       memset(dest[count].mesh_mac, 0, 6);
       count++;
     }
@@ -5140,6 +5153,7 @@ int ExtractRegistryTargets(PylonTarget *dest, int maxCount) {
         dest[count].ip       = IPAddress(0, 0, 0, 0);
         dest[count].seq_idx  = pidx;
         dest[count].via_mesh = true;
+        dest[count].is_self  = false;
         memcpy(dest[count].mesh_mac, mesh_peers[i].mac, 6);
         count++;
       }
