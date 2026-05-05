@@ -3642,13 +3642,17 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
 </html>
 )HTML";
 
+void SendOscFloatToAllPylons(const char *addr, float value);  // defined later
+
 void HandleDjBtn() {
   const bool down = webServer.arg("down") == "1";
   if (down) {
+    SendOscFloatToAllPylons(kOscAddress, 1.0f);
     ApplyBooshState(1.0f, "dj");
-    dj_btn_held    = true;
+    dj_btn_held     = true;
     dj_btn_press_ms = millis();
   } else {
+    SendOscFloatToAllPylons(kOscAddress, 0.0f);
     ApplyBooshState(0.0f, "dj");
     dj_btn_held = false;
   }
@@ -6946,6 +6950,7 @@ void loop() {
   // DJ button timeout: auto-release if held beyond cfg_dj_timeout_s
   if (dj_btn_held && now - dj_btn_press_ms >= (unsigned long)(cfg_dj_timeout_s * 1000.0f)) {
     dj_btn_held = false;
+    SendOscFloatToAllPylons(kOscAddress, 0.0f);
     ApplyBooshState(0.0f, "dj-timeout");
     Console.println("[DJ] button timeout -> forcing OFF");
   }
