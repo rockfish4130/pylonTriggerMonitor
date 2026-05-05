@@ -2308,6 +2308,16 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         <span id="seq-status" style="color:var(--muted);font-size:14px"></span>
       </div>
     </div>
+    <div id="vbtn-panel" class="panel" style="margin-top:16px;display:none">
+      <h2>Virtual Buttons</h2>
+      <div style="display:flex;gap:24px;justify-content:center;padding:8px 0 4px;flex-wrap:wrap">
+        <div class="vbtn" id="vbtn-3" data-btn="3" style="background:#f44336;--vg:#f44336"><div style="font-size:30px;line-height:1.1">&#9632;</div><div>RED</div></div>
+        <div class="vbtn" id="vbtn-2" data-btn="2" style="background:#ff9800;--vg:#ff9800"><div style="font-size:30px;line-height:1.1">&#9632;</div><div>ORANGE</div></div>
+        <div class="vbtn" id="vbtn-0" data-btn="0" style="background:#4caf50;--vg:#4caf50"><div style="font-size:30px;line-height:1.1">&#9632;</div><div>GREEN</div></div>
+        <div class="vbtn" id="vbtn-1" data-btn="1" style="background:#2196f3;--vg:#2196f3"><div style="font-size:30px;line-height:1.1">&#9632;</div><div>BLUE</div></div>
+      </div>
+      <div style="color:var(--muted);font-size:11px;text-align:center;margin-top:6px">Hold to activate &mdash; mirrors physical button behavior including double-tap</div>
+    </div>
     <div class="panel" style="margin-top:16px">
       <h2>Node Config</h2>
       <form id="config-form" class="meta">
@@ -2548,16 +2558,6 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         <button type="submit" style="margin-bottom:2px">Add</button>
         <span id="mp-status" style="font-size:13px;color:var(--muted)"></span>
       </form>
-    </div>
-    <div id="vbtn-panel" class="panel" style="margin-top:16px;display:none">
-      <h2>Virtual Buttons</h2>
-      <div style="display:flex;gap:24px;justify-content:center;padding:8px 0 4px;flex-wrap:wrap">
-        <div class="vbtn" id="vbtn-0" data-btn="0" style="background:#4caf50;--vg:#4caf50"><div style="font-size:30px;line-height:1.1">&#9632;</div><div>GREEN</div></div>
-        <div class="vbtn" id="vbtn-1" data-btn="1" style="background:#2196f3;--vg:#2196f3"><div style="font-size:30px;line-height:1.1">&#9632;</div><div>BLUE</div></div>
-        <div class="vbtn" id="vbtn-2" data-btn="2" style="background:#ff9800;--vg:#ff9800"><div style="font-size:30px;line-height:1.1">&#9632;</div><div>ORANGE</div></div>
-        <div class="vbtn" id="vbtn-3" data-btn="3" style="background:#f44336;--vg:#f44336"><div style="font-size:30px;line-height:1.1">&#9632;</div><div>RED</div></div>
-      </div>
-      <div style="color:var(--muted);font-size:11px;text-align:center;margin-top:6px">Hold to activate &mdash; mirrors physical button behavior including double-tap</div>
     </div>
     <div id="btn-activity-panel" class="panel" style="margin-top:16px;display:none">
       <h2>Button Activity</h2>
