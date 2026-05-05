@@ -2580,6 +2580,10 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           <th style="padding:4px 8px">Quality</th>
           <th style="padding:4px 8px">Age</th>
           <th style="padding:4px 8px">Uptime</th>
+          <th style="padding:4px 8px">Batt V</th>
+          <th style="padding:4px 8px">SOC</th>
+          <th style="padding:4px 8px">Temp</th>
+          <th style="padding:4px 8px">FW</th>
           <th style="padding:4px 8px">MAC</th>
         </tr></thead>
         <tbody id="mesh-peer-tbody"></tbody>
@@ -2913,12 +2917,20 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
               const tr = document.createElement('tr');
               tr.style.borderTop = '1px solid var(--line)';
               const qualColor = p.qual_pct >= 80 ? '#4caf50' : p.qual_pct >= 50 ? '#ff9800' : '#f44336';
+              const battV   = p.batt_v   != null ? p.batt_v.toFixed(2) + 'V' : 'N/A';
+              const battPct = p.batt_pct != null ? p.batt_pct.toFixed(0) + '%' : 'N/A';
+              const tempStr = p.temp_f   != null ? p.temp_f.toFixed(1) + '°F' : 'N/A';
+              const fwStr   = p.fw_ver   || 'N/A';
               tr.innerHTML = '<td style="padding:4px 8px">' + esc(p.id) + '</td>' +
                 '<td style="padding:4px 8px">' + p.index + '</td>' +
                 '<td style="padding:4px 8px">' + (p.role === 1 ? 'BARMODE' : 'normal') + '</td>' +
                 '<td style="padding:4px 8px;color:' + qualColor + '">' + p.qual_pct + '%</td>' +
                 '<td style="padding:4px 8px">' + p.age_s + 's</td>' +
                 '<td style="padding:4px 8px">' + p.uptime_s + 's</td>' +
+                '<td style="padding:4px 8px">' + battV + '</td>' +
+                '<td style="padding:4px 8px">' + battPct + '</td>' +
+                '<td style="padding:4px 8px">' + tempStr + '</td>' +
+                '<td style="padding:4px 8px;font-size:11px;color:var(--muted)">' + esc(fwStr) + '</td>' +
                 '<td style="padding:4px 8px;font-family:monospace;font-size:11px">' + esc(p.mac) + '</td>';
               tbody.appendChild(tr);
             });
