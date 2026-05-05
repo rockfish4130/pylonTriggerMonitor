@@ -3647,12 +3647,12 @@ void SendOscFloatToAllPylons(const char *addr, float value);  // defined later
 void HandleDjBtn() {
   const bool down = webServer.arg("down") == "1";
   if (down) {
-    SendOscFloatToAllPylons(kOscAddress, 1.0f);
+    if (barmode_active) SendOscFloatToAllPylons(kOscAddress, 1.0f);
     ApplyBooshState(1.0f, "dj");
     dj_btn_held     = true;
     dj_btn_press_ms = millis();
   } else {
-    SendOscFloatToAllPylons(kOscAddress, 0.0f);
+    if (barmode_active) SendOscFloatToAllPylons(kOscAddress, 0.0f);
     ApplyBooshState(0.0f, "dj");
     dj_btn_held = false;
   }
@@ -5201,6 +5201,7 @@ unsigned long ApplyTempMult(unsigned long base_ms) {
 }
 
 int ExtractRegistryTargets(PylonTarget *dest, int maxCount) {
+  if (!barmode_registry_mutex) return 0;  // not a barmode node
   String json;
   if (xSemaphoreTake(barmode_registry_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
     json = barmode_registry_json;
@@ -5290,6 +5291,7 @@ int ExtractRegistryTargets(PylonTarget *dest, int maxCount) {
 // Extracts IPs from cached registry JSON into dest[]. Returns count (max maxCount).
 // Also appends resolved manual pylons (deduplicated by IP).
 int ExtractRegistryIPs(IPAddress *dest, int maxCount) {
+  if (!barmode_registry_mutex) return 0;  // not a barmode node
   String json;
   if (xSemaphoreTake(barmode_registry_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
     json = barmode_registry_json;
@@ -6967,7 +6969,7 @@ void loop() {
   // DJ button timeout: auto-release if held beyond cfg_dj_timeout_s
   if (dj_btn_held && now - dj_btn_press_ms >= (unsigned long)(cfg_dj_timeout_s * 1000.0f)) {
     dj_btn_held = false;
-    SendOscFloatToAllPylons(kOscAddress, 0.0f);
+    if (barmode_active) SendOscFloatToAllPylons(kOscAddress, 0.0f);
     ApplyBooshState(0.0f, "dj-timeout");
     Console.println("[DJ] button timeout -> forcing OFF");
   }
