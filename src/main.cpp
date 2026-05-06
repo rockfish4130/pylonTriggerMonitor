@@ -353,6 +353,7 @@ volatile uint32_t mesh_cmds_sent    = 0;
 static const uint8_t kMeshBroadcastMac[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 volatile uint8_t       mesh_ch_pending  = 0;   // 0 = no pending chan change
 volatile unsigned long mesh_ch_apply_at = 0;   // millis() when to apply
+volatile int           mesh_live_peer_count = 0; // updated by MeshExpirePeers every 2s
 
 // ---- Sequence state ---------------------------------------------------------
 enum SeqType { SEQ_NONE, SEQ_PULSE_ONCE, SEQ_PULSE_5X, SEQ_STEAM };
@@ -369,6 +370,8 @@ String web_log_text;
 String web_log_partial_line;
 bool ap_enabled = false;
 bool ap_active = false;
+bool ap_auto_enabled = false;  // true when AP was auto-started due to WiFi failure (not manual)
+volatile bool ap_chan_reset_pending = false; // set in WiFi event handler; main loop restarts AP on cfg_mesh_ch
 DNSServer dnsServer;
 String user_wifi_ssid;
 String user_wifi_pass;
@@ -2065,6 +2068,7 @@ String BuildTelemetryApiJson() {
   payload += "\"description\":\"" + JsonEscape(pylon_description) + "\",";
   payload += "\"hostname\":\"" + JsonEscape(hostname) + "\",";
   payload += "\"ip\":\"" + JsonEscape(ip) + "\",";
+  payload += "\"free_sketch_space\":" + String(ESP.getFreeSketchSpace()) + ",";
   payload += "\"fw_version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
   payload += "\"firmware_version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
   payload += "\"version\":\"" + JsonEscape(String(kFirmwareVersion)) + "\",";
@@ -4136,18 +4140,26 @@ void HandleConfigApApi() {
 
 void SetupApMode() {
   const String ssid = "PYLON_" + pylon_id;
+  // Use the mesh channel for the AP so ESP-NOW and the AP share the same channel.
+  // Without this, softAP defaults to ch 1 while ESP-NOW is pinned to cfg_mesh_ch,
+  // causing complete ESP-NOW silence while AP is active.
+  const uint8_t ap_ch = cfg_mesh_en ? (uint8_t)cfg_mesh_ch : 1;
   if (WiFi.status() == WL_CONNECTED) {
     WiFi.mode(WIFI_AP_STA);
   } else {
     WiFi.mode(WIFI_AP);
   }
   WiFi.softAPConfig(IPAddress(10, 1, 2, 3), IPAddress(10, 1, 2, 3), IPAddress(255, 255, 255, 0));
-  WiFi.softAP(ssid.c_str());  // no password
+  WiFi.softAP(ssid.c_str(), nullptr, ap_ch);
   delay(100);
+  // WiFi mode change tears down and restarts the WiFi driver, which invalidates
+  // the esp_now_init() done at boot. Re-init ESP-NOW so mesh keeps working.
+  // Guard: only re-init if mesh was already initialised (runtime mode change).
+  // At boot, setup() calls MeshInit() explicitly after SetupApMode() returns.
+  if (cfg_mesh_en && mesh_initialized) MeshInit();
   dnsServer.start(53, "*", IPAddress(10, 1, 2, 3));
   ap_active = true;
-  Console.print("[AP] started SSID: ");
-  Console.println(ssid);
+  Console.printf("[AP] started SSID: %s ch=%u\n", ssid.c_str(), ap_ch);
   Console.println("[AP] IP: 10.1.2.3, captive DNS active");
   SetupWebServer();
   // Captive portal detection paths for iOS/Android/Windows
@@ -4166,6 +4178,9 @@ void StopApMode() {
   }
   ap_active = false;
   Console.println("[AP] stopped");
+  // WiFi mode change restarts the driver; re-init ESP-NOW so mesh keeps working.
+  // Guard: only re-init if mesh was already initialised (runtime mode change).
+  if (cfg_mesh_en && mesh_initialized) MeshInit();
 }
 
 void HandleSeqPulseOnceApi() {
@@ -4479,8 +4494,12 @@ void HandleOtaUploadBody() {
     display.setCursor(0, 0);
     display.print("OTA...");
     display.display();
-    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
-      Console.printf("[OTA] begin() failed: %s\n", Update.errorString());
+    // Use actual file size when available; UPDATE_SIZE_UNKNOWN can trigger a false
+    // UPDATE_ERROR_SPACE on some nodes because it sets size = full partition size
+    // and then checks ESP.getFreeSketchSpace() < that value.
+    const size_t ota_size = (upload.totalSize > 0) ? upload.totalSize : UPDATE_SIZE_UNKNOWN;
+    if (!Update.begin(ota_size)) {
+      Console.printf("[OTA] begin() failed: %s (size=%u)\n", Update.errorString(), ota_size);
     }
   } else if (upload.status == UPLOAD_FILE_WRITE) {
     PollOtaDisplay();
@@ -4642,19 +4661,35 @@ void setup() {
         wifi_connected_since_ms = millis();
         wifi_has_ip = true;
         digitalWrite(kIo38Pin, HIGH);
+        Console.printf("[WiFi] GOT_IP — auto_ap=%d active=%d\n", ap_auto_enabled, ap_active);
+        // If AP was auto-started because WiFi was unavailable, tear it down now
+        // that STA has an IP. Manually-enabled AP (ap_auto_enabled==false) is left alone.
+        if (ap_auto_enabled && ap_active) {
+          ap_auto_enabled = false;
+          ap_enabled = false;
+          // StopApMode() touches WiFi mode — call from main loop via flag instead.
+          // We just clear the flags here; the main loop !ap_enabled && ap_active
+          // branch will call StopApMode() on the next iteration.
+        }
         break;
       case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
         last_disconnect_reason = info.wifi_sta_disconnected.reason;
         wifi_connected_since_ms = 0;
         wifi_has_ip = false;
         digitalWrite(kIo38Pin, LOW);
+        Console.printf("[WiFi] DISCONNECTED reason=%u ap_active=%d\n",
+                       info.wifi_sta_disconnected.reason, ap_active);
         // Pin radio to mesh channel whenever STA is disassociated.
-        // esp_wifi_set_channel() is valid (and a no-op if already on that ch)
-        // when STA is not associated. The AP association re-asserts its channel
-        // on reconnect. This event also fires after each failed reconnect
-        // attempt, so the pin is automatically re-asserted without polling.
+        // In AP mode the radio channel is owned by the AP interface;
+        // esp_wifi_set_channel() on the STA interface is a no-op.
+        // Instead, set a flag so the main loop can restart the AP on cfg_mesh_ch.
         if (cfg_mesh_en) {
-          esp_wifi_set_channel((uint8_t)cfg_mesh_ch, WIFI_SECOND_CHAN_NONE);
+          if (!ap_active) {
+            esp_wifi_set_channel((uint8_t)cfg_mesh_ch, WIFI_SECOND_CHAN_NONE);
+          } else {
+            // AP is running: main loop will call WiFi.softAP() to move it to cfg_mesh_ch
+            ap_chan_reset_pending = true;
+          }
         }
         break;
       default:
@@ -4772,6 +4807,7 @@ void setup() {
       SavePylonConfig();
       Console.println("[AP] auto-enabled: no WiFi network found");
     }
+    ap_auto_enabled = true;  // remember this was automatic, not user-requested
   }
 
   if (ap_enabled) {
@@ -5250,6 +5286,46 @@ void PollSosBlueLed() {
   }
   // Even step = ON, odd step = OFF
   ledcWrite(1, (step % 2 == 0) ? 200 : 0);
+}
+
+// Fast SOS pattern for yellow LED: ... --- ...
+// Unit = 60 ms. dot=1u, dash=3u, elem-gap=1u, letter-gap=3u, word-gap=7u
+static const uint16_t kSosFastMorseMs[] = {
+  // S: dot dot dot
+  60, 60,    // dot, elem-gap
+  60, 60,    // dot, elem-gap
+  60, 180,   // dot, letter-gap (3u)
+  // O: dash dash dash
+  180, 60,   // dash, elem-gap
+  180, 60,   // dash, elem-gap
+  180, 180,  // dash, letter-gap (3u)
+  // S: dot dot dot
+  60, 60,    // dot, elem-gap
+  60, 60,    // dot, elem-gap
+  60, 420,   // dot, word-gap (7u)
+};
+constexpr int kSosFastMorseMsCount = (int)(sizeof(kSosFastMorseMs) / sizeof(kSosFastMorseMs[0]));
+
+// Drives the yellow LED (LEDC channel 2) with a fast SOS alarm pattern.
+// Active when: mesh enabled, WiFi offline, zero live mesh peers.
+// Barmode owns yellow for lamp output — suppressed there.
+void PollSosYellowLed() {
+  if (barmode_active) return;
+  if (!cfg_mesh_en) return;
+  if (wifi_has_ip) return;
+  if (mesh_live_peer_count > 0) return;
+
+  static int step = 0;
+  static unsigned long step_start_ms = 0;
+  const unsigned long now = millis();
+  if (step_start_ms == 0) step_start_ms = now;
+
+  if (now - step_start_ms >= kSosFastMorseMs[step]) {
+    step = (step + 1) % kSosFastMorseMsCount;
+    step_start_ms = now;
+  }
+  // Even step = ON (full brightness), odd step = OFF
+  ledcWrite(2, (step % 2 == 0) ? 255 : 0);
 }
 
 // Pylon target with its sequence index for ordered sequential firing.
@@ -5731,6 +5807,7 @@ void PollBarModeButtons() {
           if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
           if (btn1_release_ms > 0 && now - btn1_release_ms <= 300) {
             // Double-tap: enter index-ordered sequential looping mode
+            seq_blue_armed = false;  // prevent all-4 from hijacking this hold
             btn1_single_fired = false;
             btn1_seq_count = ExtractRegistryTargets(btn1_seq_targets, 16);
             if (btn1_seq_count > 0) {
@@ -5903,6 +5980,16 @@ void PollBarModeButtons() {
       const bool r_falling = !btn_stable[3] && btn_prev_stable[3];
 
       if (!barmode_btn_disabled[3]) {
+        // Always drain expired closes regardless of red_state.
+        // This lets valve timers complete cleanly even after state transitions away from 4
+        // (e.g. quick-tap → state 1 mid-pass; closes still time out correctly).
+        for (auto &c : red_seq_closes) {
+          if (c.active && now >= c.close_at) {
+            SendOscToPylonTarget(kOscAddress, 0.0f, c.target);
+            c.active = false;
+          }
+        }
+
         // --- Rising edge ---
         if (r_rising) {
           if (red_state == 0 || (red_state == 1 && now - red_press1_ms > 500) || (red_state == 2 && now - red_press2_ms > 500)) {
@@ -5956,25 +6043,27 @@ void PollBarModeButtons() {
             const unsigned long held = now - red_seq_press_ms;
             const bool first_pass_done = (red_seq_fires >= red_seq_count);
             if (held < 400 && now < red_recovery_until) {
-              // Recovery active: close and stop
+              // Recovery active: flush all closes immediately and stop
               for (auto &c : red_seq_closes) { if (c.active) { SendOscToPylonTarget(kOscAddress, 0.0f, c.target); c.active = false; } }
               barmode_recovery_wait_until_ms = red_recovery_until;
               red_state = 0;
               Console.printf("[BarMode] Red: quick-tap blocked by recovery (%lums held)\n", held);
+            } else if (held < 400) {
+              // Quick tap: go to state 1 immediately so the steam gesture window opens NOW.
+              // Any open valves close on their timers via the always-running drain loop above.
+              // Do NOT set released_early — no more steps fire (state != 4 after this).
+              red_state = 1;
+              red_press1_ms = now;
+              Console.printf("[BarMode] Red: quick-tap (%lums), steam window open\n", held);
             } else if (!first_pass_done) {
-              // First pass incomplete: let it finish before stopping (no immediate close flush)
+              // Long hold released before first pass done: stay in state 4 to complete pass
               red_seq_released_early = true;
-              Console.printf("[BarMode] Red: released early (%d/%d fired), completing pass\n", red_seq_fires, red_seq_count);
+              Console.printf("[BarMode] Red: long-hold released early (%d/%d fired), completing pass\n", red_seq_fires, red_seq_count);
             } else {
-              // Pass already done (or 2nd+ pass): stop immediately
+              // Long hold, pass done: flush and stop
               for (auto &c : red_seq_closes) { if (c.active) { SendOscToPylonTarget(kOscAddress, 0.0f, c.target); c.active = false; } }
-              red_state = (held < 400) ? 1 : 0;
-              if (red_state == 1) {
-                red_press1_ms = now;
-                Console.printf("[BarMode] Red: quick-tap end (%lums), steam window\n", held);
-              } else {
-                Console.printf("[BarMode] Red: seq end (%lums)\n", held);
-              }
+              red_state = 0;
+              Console.printf("[BarMode] Red: seq end (%lums)\n", held);
             }
           } else if (red_state == 3) {
             SendOscFloatToAllPylons(kOscAddrSteam, 0.0f);
@@ -5993,14 +6082,7 @@ void PollBarModeButtons() {
             red_state = 0;
             Console.println("[BarMode] Red: seq max time");
           } else {
-            // Pending close scan — fire any expired closes
-            for (auto &c : red_seq_closes) {
-              if (c.active && now >= c.close_at) {
-                SendOscToPylonTarget(kOscAddress, 0.0f, c.target);
-                c.active = false;
-              }
-            }
-            // If early-released and first pass complete: drain then stop
+            // If early-released (long hold) and first pass complete: drain then stop
             bool any_close_active = false;
             for (auto &c : red_seq_closes) { if (c.active) { any_close_active = true; break; } }
             if (red_seq_released_early && red_seq_fires >= red_seq_count) {
@@ -6437,12 +6519,15 @@ static void MeshExpirePeers() {
   if (!mesh_peers_mutex) return;
   const uint32_t now = (uint32_t)millis();
   if (xSemaphoreTake(mesh_peers_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return;
+  int live = 0;
   for (int i = 0; i < kMeshMaxPeers; i++) {
     if (mesh_peers[i].active && now - mesh_peers[i].last_seen_ms > kMeshPeerTimeoutMs) {
       Console.printf("[Mesh] peer expired: %s\n", mesh_peers[i].node_id);
       mesh_peers[i].active = false;
     }
+    if (mesh_peers[i].active) live++;
   }
+  mesh_live_peer_count = live;
   xSemaphoreGive(mesh_peers_mutex);
 }
 
@@ -6495,13 +6580,23 @@ void PollMeshOscQueue() {
   }
 }
 
-// Initialises ESP-NOW. Called from setup() after WiFi init.
+// Initialises (or re-initialises) ESP-NOW. Safe to call multiple times.
+// FreeRTOS objects are created once and reused; ESP-NOW is deinitialized first
+// when called after a prior successful init (e.g. after a WiFi mode change).
 void MeshInit() {
   if (!cfg_mesh_en) return;
-  mesh_peers_mutex = xSemaphoreCreateMutex();
+  // Create FreeRTOS objects exactly once; reuse across re-inits.
+  if (!mesh_peers_mutex) mesh_peers_mutex = xSemaphoreCreateMutex();
+  if (!mesh_osc_queue)   mesh_osc_queue   = xQueueCreate(kMeshOscQueueDepth, sizeof(MeshOscEvent));
   memset(mesh_peers, 0, sizeof(mesh_peers));
   memset(mesh_dedup, 0, sizeof(mesh_dedup));
-  mesh_osc_queue = xQueueCreate(kMeshOscQueueDepth, sizeof(MeshOscEvent));
+  // If ESP-NOW was previously initialised, tear it down cleanly before re-init.
+  if (mesh_initialized) {
+    esp_now_unregister_recv_cb();
+    esp_now_deinit();
+    mesh_initialized = false;
+    delay(10);
+  }
   // NOTE: do NOT call esp_wifi_set_channel() here. In STA mode the channel is
   // locked by the AP association; the call silently fails and corrupts the
   // peer.channel expectation. Use channel=0 on the broadcast peer so ESP-NOW
@@ -6662,11 +6757,40 @@ void PingTask(void *) {
       prefs.begin("pyloncfg", false);
       prefs.putUChar(kPrefsKeyMeshCh, cfg_mesh_ch);
       prefs.end();
-      if (!WiFi.isConnected()) {
+      if (ap_active) {
+        // AP channel must match mesh channel — restart AP on the new channel.
+        // SetupApMode reads cfg_mesh_ch which is already updated above.
+        StopApMode();
+        SetupApMode();
+        Console.printf("[Mesh] channel applied: ch=%u (AP restarted on new channel)\n", cfg_mesh_ch);
+      } else if (!WiFi.isConnected()) {
         esp_wifi_set_channel(cfg_mesh_ch, WIFI_SECOND_CHAN_NONE);
+        Console.printf("[Mesh] channel applied: ch=%u (STA disconnected, channel pinned)\n", cfg_mesh_ch);
+      } else {
+        Console.printf("[Mesh] channel applied: ch=%u (STA connected, will apply on reconnect)\n", cfg_mesh_ch);
       }
-      Console.printf("[Mesh] channel applied: ch=%u (WiFi %s)\n",
-                     cfg_mesh_ch, WiFi.isConnected() ? "connected-will apply on reconnect" : "disconnected-applied now");
+    }
+
+    // ---- Mesh channel mismatch detection ----------------------------------------
+    // If WiFi is connected but we see 0 live mesh peers for >20 s, the STA radio
+    // is locked to the AP's channel which likely differs from cfg_mesh_ch.
+    // Force-disconnect WiFi so the DISCONNECTED event re-pins the radio to
+    // cfg_mesh_ch and the rest of the mesh can be heard again.
+    // This timer resets whenever peers are visible or WiFi is not connected.
+    {
+      static unsigned long wifi_no_peer_since_ms = 0;
+      if (cfg_mesh_en && wifi_has_ip && mesh_live_peer_count == 0) {
+        if (wifi_no_peer_since_ms == 0) wifi_no_peer_since_ms = now;
+        else if (now - wifi_no_peer_since_ms >= 20000UL) {
+          Console.printf("[Mesh] WiFi connected but 0 peers for 20s — channel mismatch suspected "
+                         "(WiFi ch vs cfg_mesh_ch=%u). Disconnecting WiFi to restore mesh channel.\n",
+                         cfg_mesh_ch);
+          wifi_no_peer_since_ms = 0;
+          WiFi.disconnect(false, false);
+        }
+      } else {
+        wifi_no_peer_since_ms = 0;
+      }
     }
 
     if (WiFi.status() != WL_CONNECTED) {
@@ -7035,6 +7159,7 @@ void loop() {
   PollMeshOscQueue();
   PollBlinkLeds();
   PollSosBlueLed();
+  PollSosYellowLed();  // overrides yellow with fast SOS when mesh_en + no WiFi + 0 peers
   PollBarModeButtons();
   PollBarModeBtn0Chase();  // must run last — overwrites all 3 LEDs while btn0 held
   PollSequence();
@@ -7051,15 +7176,16 @@ void loop() {
     StopApMode();
   }
 
-  if (WiFi.status() != WL_CONNECTED) {
+  const unsigned long now = millis();
+  const bool wifi_up = (WiFi.status() == WL_CONNECTED);
+
+  if (!wifi_up) {
     static unsigned long disconnected_since_ms = 0;
     static unsigned long last_reconnect_attempt_ms = 0;
-    static unsigned long last_disconnect_display_ms = 0;
-    const unsigned long now_dc = millis();
 
     if (wasConnected) {
       wasConnected = false;
-      disconnected_since_ms = now_dc;
+      disconnected_since_ms = now;
       last_reconnect_attempt_ms = 0;
       target_ip_string = "";
       registry_announced = false;
@@ -7068,52 +7194,64 @@ void loop() {
       Console.println("WiFi disconnected: registry state reset.");
     }
     if (disconnected_since_ms == 0) {
-      disconnected_since_ms = now_dc;  // boot with no WiFi
+      disconnected_since_ms = now;  // boot with no WiFi
     }
 
-    const unsigned long offline_ms = now_dc - disconnected_since_ms;
+    const unsigned long offline_ms = now - disconnected_since_ms;
 
-    // Escalating reconnect: nudge WiFi stack every 3 min, reboot after 10 min.
-    // With setAutoReconnect(false), failed attempts fire DISCONNECTED again,
-    // which re-pins the mesh channel via the event handler above.
-    if (!ap_active) {
-      if (offline_ms >= 600000UL) {
-        Console.println("[WiFi] Offline 10 min — rebooting.");
-        ESP.restart();
-      } else if (now_dc - last_reconnect_attempt_ms >= 30000UL) {
-        last_reconnect_attempt_ms = now_dc;
-        Console.printf("[WiFi] Offline %.0fs — reconnect attempt.\n", offline_ms / 1000.0f);
+    // When STA disconnects while AP is active, the radio stays on the STA's
+    // last channel (e.g. basketballshorts). Re-anchor the AP to cfg_mesh_ch so
+    // ESP-NOW can reach other nodes. Safe to call from main loop (not in ISR).
+    if (ap_chan_reset_pending && ap_active) {
+      ap_chan_reset_pending = false;
+      const String ssid = "PYLON_" + pylon_id;
+      const uint8_t ap_ch = (uint8_t)cfg_mesh_ch;
+      Console.printf("[AP] STA disconnected: restarting AP on mesh ch %u\n", ap_ch);
+      WiFi.softAP(ssid.c_str(), nullptr, ap_ch);
+    }
+
+    // Escalating reconnect: nudge WiFi stack every 30s regardless of AP mode.
+    // The 10-min reboot is suppressed in AP mode (AP mode is intentional).
+    // With setAutoReconnect(false), failed attempts fire DISCONNECTED again.
+    // Skip reconnect when mesh is active and has live peers — reconnecting to
+    // WiFi would lock the radio to the AP's channel and break ESP-NOW comms
+    // with peers that are already pinned to cfg_mesh_ch.
+    if (now - last_reconnect_attempt_ms >= 30000UL) {
+      last_reconnect_attempt_ms = now;
+      if (cfg_mesh_en && mesh_live_peer_count > 0) {
+        Console.printf("[WiFi] Offline %.0fs — mesh has %d live peers; skipping WiFi reconnect "
+                       "to preserve mesh channel.\n",
+                       offline_ms / 1000.0f, (int)mesh_live_peer_count);
+      } else {
+        Console.printf("[WiFi] Offline %.0fs — reconnect attempt (ap_active=%d).\n",
+                       offline_ms / 1000.0f, ap_active);
         WiFi.reconnect();
       }
     }
-
-    // Update display at ~4 Hz without blocking.
-    if (now_dc - last_disconnect_display_ms >= 250) {
-      last_disconnect_display_ms = now_dc;
-      if (ap_active) {
-        ShowStatus("AP mode", "PYLON_" + pylon_id);
-      } else {
-        ShowStatus("WiFi lost", "Reconnecting");
-      }
+    if (!ap_active && offline_ms >= 600000UL) {
+      Console.println("[WiFi] Offline 10 min — rebooting.");
+      ESP.restart();
     }
-    return;
-  }
-  PollOsc();
-  const unsigned long now = millis();
-  if (!wasConnected) {
-    wasConnected = true;
-    registry_announced = false;
-    registry_next_attempt_ms = now;
-    registry_consecutive_failures = 0;
-    RestartMdnsIfConnected();
-    oscUdp.stop();
-    oscUdp.begin(kOscPort);
-    SetupWebServer();
-    Console.println("WiFi connected: mDNS/OSC/web restarted, registry announce scheduled.");
-  }
-  // Registry HTTP is handled in PingTask (Core 0) — no blocking call here.
-  if (!wifi_has_ip && wifi_connected_since_ms == 0) {
-    wifi_connected_since_ms = now;
+    // No return — fall through so OLED page cycling continues even without WiFi.
+    // The WiFi metrics pages and mesh page in the cycle convey connectivity state.
+  } else {
+    PollOsc();
+    if (!wasConnected) {
+      wasConnected = true;
+      registry_announced = false;
+      registry_next_attempt_ms = now;
+      registry_consecutive_failures = 0;
+      RestartMdnsIfConnected();
+      oscUdp.stop();
+      oscUdp.begin(kOscPort);
+      SetupWebServer();
+      Console.printf("WiFi connected: mDNS/OSC/web restarted (ap_active=%d ap_auto=%d)\n",
+                     ap_active, ap_auto_enabled);
+    }
+    // Registry HTTP is handled in PingTask (Core 0) — no blocking call here.
+    if (!wifi_has_ip && wifi_connected_since_ms == 0) {
+      wifi_connected_since_ms = now;
+    }
   }
   if (boosh_failsafe_armed && now - boosh_failsafe_start_ms >= boosh_failsafe_timeout_ms) {
     boosh_failsafe_armed = false;
