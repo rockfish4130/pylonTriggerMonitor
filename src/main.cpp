@@ -520,6 +520,8 @@ static void DrawMeshBadge(int by, uint8_t text_size = 2) {
     for (int i = 0; i < kMeshMaxPeers; i++) if (mesh_peers[i].active) peer_count++;
     xSemaphoreGive(mesh_peers_mutex);
   }
+
+  // M:N badge — right-aligned, caller-specified text size
   char buf[8];
   snprintf(buf, sizeof(buf), "M:%d", peer_count);
   const int charW = (text_size == 1) ? 6 : 12;
@@ -528,6 +530,24 @@ static void DrawMeshBadge(int by, uint8_t text_size = 2) {
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(128 - w, by);
   display.print(buf);
+
+  // Ch:N — actual hardware radio channel, right-aligned just below the badge.
+  // Source: esp_wifi_get_channel() reads the driver directly, not any cached
+  // variable. Appends '*' when hw channel differs from cfg_mesh_ch so a
+  // channel-mismatch corner case is immediately visible on every page.
+  uint8_t hw_ch = 0;
+  wifi_second_chan_t hw_sec = WIFI_SECOND_CHAN_NONE;
+  esp_wifi_get_channel(&hw_ch, &hw_sec);
+  char ch_buf[10];
+  if (hw_ch != (uint8_t)cfg_mesh_ch) {
+    snprintf(ch_buf, sizeof(ch_buf), "C%u*%u", hw_ch, (uint8_t)cfg_mesh_ch);
+  } else {
+    snprintf(ch_buf, sizeof(ch_buf), "Ch:%u", hw_ch);
+  }
+  const int ch_w = static_cast<int>(strlen(ch_buf)) * 6;  // always size=1
+  display.setTextSize(1);
+  display.setCursor(128 - ch_w, by + text_size * 8);
+  display.print(ch_buf);
 }
 
 void RenderDisplayPage(const DisplayPageLines &page) {
@@ -6643,11 +6663,6 @@ void ShowMeshPage() {
     xSemaphoreGive(mesh_peers_mutex);
   }
 
-  // --- Read actual hardware channel directly from WiFi driver ---
-  uint8_t hw_ch = 0;
-  wifi_second_chan_t hw_second = WIFI_SECOND_CHAN_NONE;
-  esp_wifi_get_channel(&hw_ch, &hw_second);
-
   // --- Render ---
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
@@ -6667,25 +6682,14 @@ void ShowMeshPage() {
     return;
   }
 
-  // Row 0 (y=0): "MESH" label left, M:N badge right (size=2)
+  // Row 0 (y=0):  "MESH" left  +  M:N badge right (size=2, 16px tall)
+  // Row 1 (y=16): Ch:N badge drawn by DrawMeshBadge just below M:N (right-aligned, size=1)
   display.setTextSize(1);
   display.setCursor(0, 0);
   display.print("MESH");
-  DrawMeshBadge(0, 2);  // "M:N" size-2 top-right
+  DrawMeshBadge(0, 2);  // draws M:N at y=0 AND Ch:N at y=16, both right-aligned
 
-  // Row 1 (y=8): actual hardware channel — lives under/left of the badge
-  display.setTextSize(1);
-  display.setCursor(0, 8);
-  char ch_buf[16];
-  if (hw_ch != (uint8_t)cfg_mesh_ch) {
-    // Mismatch: show both so operator can spot it immediately
-    snprintf(ch_buf, sizeof(ch_buf), "Ch:%u*cfg:%u", hw_ch, (uint8_t)cfg_mesh_ch);
-  } else {
-    snprintf(ch_buf, sizeof(ch_buf), "Ch:%u", hw_ch);
-  }
-  display.print(ch_buf);
-
-  // Rows 2..6 (y=16..56): peer list, textSize=1, up to 5 entries
+  // Rows y=16..56: peer list (left-aligned, shares row with Ch:N which is right-aligned)
   for (int i = 0; i < filled; i++) {
     display.setCursor(0, 16 + i * 8);
     char pbuf[22];
