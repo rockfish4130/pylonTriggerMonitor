@@ -371,7 +371,6 @@ String web_log_partial_line;
 bool ap_enabled = false;
 bool ap_active = false;
 bool ap_auto_enabled = false;  // true when AP was auto-started due to WiFi failure (not manual)
-volatile bool ap_chan_reset_pending = false; // set in WiFi event handler; main loop restarts AP on cfg_mesh_ch
 DNSServer dnsServer;
 String user_wifi_ssid;
 String user_wifi_pass;
@@ -4679,17 +4678,13 @@ void setup() {
         digitalWrite(kIo38Pin, LOW);
         Console.printf("[WiFi] DISCONNECTED reason=%u ap_active=%d\n",
                        info.wifi_sta_disconnected.reason, ap_active);
-        // Pin radio to mesh channel whenever STA is disassociated.
-        // In AP mode the radio channel is owned by the AP interface;
-        // esp_wifi_set_channel() on the STA interface is a no-op.
-        // Instead, set a flag so the main loop can restart the AP on cfg_mesh_ch.
-        if (cfg_mesh_en) {
-          if (!ap_active) {
-            esp_wifi_set_channel((uint8_t)cfg_mesh_ch, WIFI_SECOND_CHAN_NONE);
-          } else {
-            // AP is running: main loop will call WiFi.softAP() to move it to cfg_mesh_ch
-            ap_chan_reset_pending = true;
-          }
+        // Pin radio to mesh channel when STA-only mode loses WiFi.
+        // In AP or APSTA mode the AP interface owns the channel; changing the
+        // STA channel is a no-op. When AP is active all nodes stay on whatever
+        // channel they were last on (LavaLounge's channel), so they all remain
+        // on the same channel and ESP-NOW continues to work — no action needed.
+        if (cfg_mesh_en && !ap_active) {
+          esp_wifi_set_channel((uint8_t)cfg_mesh_ch, WIFI_SECOND_CHAN_NONE);
         }
         break;
       default:
@@ -7198,17 +7193,6 @@ void loop() {
     }
 
     const unsigned long offline_ms = now - disconnected_since_ms;
-
-    // When STA disconnects while AP is active, the radio stays on the STA's
-    // last channel (e.g. basketballshorts). Re-anchor the AP to cfg_mesh_ch so
-    // ESP-NOW can reach other nodes. Safe to call from main loop (not in ISR).
-    if (ap_chan_reset_pending && ap_active) {
-      ap_chan_reset_pending = false;
-      const String ssid = "PYLON_" + pylon_id;
-      const uint8_t ap_ch = (uint8_t)cfg_mesh_ch;
-      Console.printf("[AP] STA disconnected: restarting AP on mesh ch %u\n", ap_ch);
-      WiFi.softAP(ssid.c_str(), nullptr, ap_ch);
-    }
 
     // Escalating reconnect: nudge WiFi stack every 30s regardless of AP mode.
     // The 10-min reboot is suppressed in AP mode (AP mode is intentional).
