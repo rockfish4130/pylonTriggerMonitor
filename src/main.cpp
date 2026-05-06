@@ -6613,44 +6613,88 @@ void MeshInit() {
   Console.printf("[Mesh] init OK wifi_ch=%u\n", (unsigned)WiFi.channel());
 }
 
-// OLED page: shows mesh status and up to 3 peers.
+// OLED page: shows mesh status and up to 5 peers.
+// Custom layout — mixed text sizes:
+//   y=0..15  textSize=2  "M:N" badge (top-right, via DrawMeshBadge)
+//   y=0..7   textSize=1  "MESH" label (top-left, fits left of badge)
+//   y=8..15  textSize=1  "Ch:NN" — ACTUAL radio channel from esp_wifi_get_channel(),
+//                        not cfg_mesh_ch.  Appends "*" when they differ so the
+//                        operator can spot a channel-mismatch at a glance.
+//   y=16..55 textSize=1  up to 5 peer rows (8 px each)
 void ShowMeshPage() {
-  char line0[22], line1[22], line2[22], line3[22];
+  // --- Collect peer data under mutex ---
   int peer_count = 0;
+  struct { char id[17]; uint32_t age_s; uint8_t qual_pct; } peers[5];
+  int filled = 0;
+
   if (mesh_peers_mutex && xSemaphoreTake(mesh_peers_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-    for (int i = 0; i < kMeshMaxPeers; i++) if (mesh_peers[i].active) peer_count++;
-    xSemaphoreGive(mesh_peers_mutex);
-  }
-  if (!cfg_mesh_en) {
-    snprintf(line0, sizeof(line0), "MESH disabled");
-    line1[0] = line2[0] = line3[0] = '\0';
-  } else if (!mesh_initialized) {
-    snprintf(line0, sizeof(line0), "MESH init fail");
-    line1[0] = line2[0] = line3[0] = '\0';
-  } else {
-    snprintf(line0, sizeof(line0), "MESH ch:%u %dp", cfg_mesh_ch, peer_count);
-    // Fill up to 3 peer lines
-    const char *lines[3] = {line1, line2, line3};
-    int filled = 0;
-    if (xSemaphoreTake(mesh_peers_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-      const uint32_t now = (uint32_t)millis();
-      for (int i = 0; i < kMeshMaxPeers && filled < 3; i++) {
-        if (!mesh_peers[i].active) continue;
-        uint32_t age_s = (now - mesh_peers[i].last_seen_ms) / 1000;
-        snprintf((char *)lines[filled], 22, "%-8s %us q:%u%%",
-                 mesh_peers[i].node_id, age_s, mesh_peers[i].qual_pct);
+    const uint32_t now = (uint32_t)millis();
+    for (int i = 0; i < kMeshMaxPeers; i++) {
+      if (!mesh_peers[i].active) continue;
+      peer_count++;
+      if (filled < 5) {
+        strncpy(peers[filled].id, mesh_peers[i].node_id, 16);
+        peers[filled].id[16] = '\0';
+        peers[filled].age_s    = (now - mesh_peers[i].last_seen_ms) / 1000;
+        peers[filled].qual_pct = mesh_peers[i].qual_pct;
         filled++;
       }
-      xSemaphoreGive(mesh_peers_mutex);
     }
-    while (filled < 3) { ((char *)lines[filled])[0] = '\0'; filled++; }
+    xSemaphoreGive(mesh_peers_mutex);
   }
-  DisplayPageLines pg;
-  pg.line1 = line0;
-  pg.line2 = line1;
-  pg.line3 = line2;
-  pg.line4 = line3;
-  RenderDisplayPage(pg);
+
+  // --- Read actual hardware channel directly from WiFi driver ---
+  uint8_t hw_ch = 0;
+  wifi_second_chan_t hw_second = WIFI_SECOND_CHAN_NONE;
+  esp_wifi_get_channel(&hw_ch, &hw_second);
+
+  // --- Render ---
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+
+  if (!cfg_mesh_en) {
+    display.setTextSize(1);
+    display.setCursor(0, 0);
+    display.print("MESH disabled");
+    display.display();
+    return;
+  }
+  if (!mesh_initialized) {
+    display.setTextSize(1);
+    display.setCursor(0, 0);
+    display.print("MESH init fail");
+    display.display();
+    return;
+  }
+
+  // Row 0 (y=0): "MESH" label left, M:N badge right (size=2)
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.print("MESH");
+  DrawMeshBadge(0, 2);  // "M:N" size-2 top-right
+
+  // Row 1 (y=8): actual hardware channel — lives under/left of the badge
+  display.setTextSize(1);
+  display.setCursor(0, 8);
+  char ch_buf[16];
+  if (hw_ch != (uint8_t)cfg_mesh_ch) {
+    // Mismatch: show both so operator can spot it immediately
+    snprintf(ch_buf, sizeof(ch_buf), "Ch:%u*cfg:%u", hw_ch, (uint8_t)cfg_mesh_ch);
+  } else {
+    snprintf(ch_buf, sizeof(ch_buf), "Ch:%u", hw_ch);
+  }
+  display.print(ch_buf);
+
+  // Rows 2..6 (y=16..56): peer list, textSize=1, up to 5 entries
+  for (int i = 0; i < filled; i++) {
+    display.setCursor(0, 16 + i * 8);
+    char pbuf[22];
+    snprintf(pbuf, sizeof(pbuf), "%-8s%3us q:%u%%",
+             peers[i].id, peers[i].age_s, peers[i].qual_pct);
+    display.print(pbuf);
+  }
+
+  display.display();
 }
 
 // ---- Ping task (Core 0) -----------------------------------------------------
