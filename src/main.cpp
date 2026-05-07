@@ -7280,23 +7280,19 @@ void loop() {
 
     const unsigned long offline_ms = now - disconnected_since_ms;
 
-    // Escalating reconnect: nudge WiFi stack every 30s regardless of AP mode.
+    // Reconnect watchdog: every 30s without live mesh peers; every 10 min with them.
+    // With live peers the radio is pinned to cfg_mesh_ch for ESP-NOW. WiFi.reconnect()
+    // temporarily disrupts that channel (~5-10s) but the DISCONNECTED handler re-pins
+    // it if the attempt fails, so the disruption is bounded and infrequent.
     // The 10-min reboot is suppressed in AP mode (AP mode is intentional).
     // With setAutoReconnect(false), failed attempts fire DISCONNECTED again.
-    // Skip reconnect when mesh is active and has live peers — reconnecting to
-    // WiFi would lock the radio to the AP's channel and break ESP-NOW comms
-    // with peers that are already pinned to cfg_mesh_ch.
-    if (now - last_reconnect_attempt_ms >= 30000UL) {
+    const unsigned long reconnect_interval_ms =
+        (cfg_mesh_en && mesh_live_peer_count > 0) ? 600000UL : 30000UL;
+    if (now - last_reconnect_attempt_ms >= reconnect_interval_ms) {
       last_reconnect_attempt_ms = now;
-      if (cfg_mesh_en && mesh_live_peer_count > 0) {
-        Console.printf("[WiFi] Offline %.0fs — mesh has %d live peers; skipping WiFi reconnect "
-                       "to preserve mesh channel.\n",
-                       offline_ms / 1000.0f, (int)mesh_live_peer_count);
-      } else {
-        Console.printf("[WiFi] Offline %.0fs — reconnect attempt (ap_active=%d).\n",
-                       offline_ms / 1000.0f, ap_active);
-        WiFi.reconnect();
-      }
+      Console.printf("[WiFi] Offline %.0fs — reconnect attempt (peers=%d ap=%d).\n",
+                     offline_ms / 1000.0f, (int)mesh_live_peer_count, ap_active);
+      WiFi.reconnect();
     }
     if (!ap_active && offline_ms >= 600000UL) {
       Console.println("[WiFi] Offline 10 min — rebooting.");
