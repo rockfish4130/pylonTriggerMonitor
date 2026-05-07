@@ -84,7 +84,7 @@ All nodes participate in a peer-to-peer ESP-NOW mesh on a configurable channel (
 **Constants:**
 - `kMeshMagic = 0x4D455348UL` ("MESH") — first 4 bytes of every packet; quick sanity check
 - `kMeshVersion = 3` — bump whenever a packet struct layout changes; mismatched nodes are dropped
-- `kMeshPktBeacon = 1`, `kMeshPktCommand = 2`, `kMeshPktChanChange = 3`, `kMeshPktPadEvent = 4`
+- `kMeshPktBeacon = 1`, `kMeshPktCommand = 2`, `kMeshPktChanChange = 3`, `kMeshPktPadEvent = 4`, `kMeshPktRemoteTelem = 5`
 - Beacon interval: 2000 ms. Peer timeout: 8000 ms. Max peers: 10.
 - Quality metric: 16-slot rolling bitmap, one slot per beacon interval (32s window); `qual_pct = popcount(qual_bits) * 100 / 16`
 
@@ -92,7 +92,8 @@ All nodes participate in a peer-to-peer ESP-NOW mesh on a configurable channel (
 - `MeshBeaconPkt` — node announcement: node_id, pylon_index, role, uptime_s, batt_v, batt_pct, temp_f, fw_ver[32]
 - `MeshCommandPkt` — OSC relay: seq (dedup), osc_addr[32], osc_arg (float)
 - `MeshChanChangePkt` — coordinated channel switch: new_ch (1-11), apply_ms (countdown from receipt)
-- `MeshPadEventPkt` — MIDI pad event from ESP-NOW-only remote: note, velocity, channel, remote_id[16]
+- `MeshPadEventPkt` — MIDI pad event from ESP-NOW-only remote: magic, version, type, seq (uint16, dedup), note, velocity, channel, remote_id[16], dedup_ms (uint16)
+- `MeshRemoteTelemPkt` — remote telemetry beacon: magic, version, type, remote_id[16], description[32], mac[6], uptime_s, press_red, press_yellow, mode (0=WiFi/1=mesh), rssi
 
 **Channel management:**
 - In STA mode (WiFi connected): radio channel is controlled by the AP. `peer.channel = 0` so ESP-NOW follows the current WiFi channel automatically.
@@ -118,7 +119,9 @@ In AP-only mode `WIFI_IF_STA` is unassociated — ESP-NOW through it is silently
 
 **Dedup:** `MeshDedupEntry[16]` with 500ms window prevents duplicate OSC fires from retried broadcasts.
 
-**Pad bridge (type 4):** ESP-NOW-only remotes (no WiFi client) broadcast `MeshPadEventPkt` on ch 11. `MeshOnRecv` on **all nodes** enqueues to `mesh_pad_queue`. PingTask (Core 0) drains the queue **before** ping/registry HTTP calls and POSTs `{"note","velocity","channel"}` to `rpiboosh.local:5000/send_virtual_midi` — identical payload to the MQTT remote. Uses pre-resolved `target_ip_string` (not mDNS hostname) to avoid per-call DNS latency. Timeout 200 ms.
+**Pad bridge (type 4):** ESP-NOW-only remotes (no WiFi client) broadcast `MeshPadEventPkt` on ch 11. `MeshOnRecv` on **all nodes** runs per-node dedup (keyed on remote_id+seq, `dedup_ms` window from packet), then enqueues to `mesh_pad_queue`. PingTask (Core 0) drains the queue **before** ping/registry HTTP calls and POSTs `{"note","velocity","channel","remoteID","seq"}` to `rpiboosh.local:5000/send_virtual_midi`. Uses pre-resolved `target_ip_string` (not mDNS hostname). Timeout 200 ms. rpiboosh `is_pad_event_duplicate()` provides the authoritative cross-PYLON dedup on `(remoteID, seq)`.
+
+**Remote telemetry (type 5):** ESP-NOW-only remotes broadcast `MeshRemoteTelemPkt` periodically. `MeshOnRecv` on all nodes enqueues raw packet to `mesh_telem_queue`. PingTask drains it: publishes retained JSON to MQTT topic `boosh/remote/<remoteID>/telemetry` and updates `mesh_remote_table[8]` (keyed by remote_id; stale after 90 s, expired after 300 s; protected by `mesh_remote_mutex`). `/api/mesh_remotes` (GET) returns a JSON array of non-expired entries. Bar-mode web UI shows the table, polled every 10 s; stale rows render at opacity 0.5.
 
 ## OSC Addresses
 - `/pylon/BooshMain` — raw solenoid open/close (1.0/0.0)
