@@ -6799,10 +6799,7 @@ void PingTask(void *) {
       const uint8_t new_ch = mesh_ch_pending;
       mesh_ch_pending = 0;
       cfg_mesh_ch = new_ch;
-      Preferences prefs;
-      prefs.begin("pyloncfg", false);
-      prefs.putUChar(kPrefsKeyMeshCh, cfg_mesh_ch);
-      prefs.end();
+      SavePylonConfig();  // use full config save — same path as web UI, reliable on AP-enabled nodes
       if (ap_active) {
         // AP channel must match mesh channel — restart AP on the new channel.
         // SetupApMode reads cfg_mesh_ch which is already updated above.
