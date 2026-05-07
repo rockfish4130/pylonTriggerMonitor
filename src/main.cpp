@@ -6371,7 +6371,7 @@ static void MeshUpsertPeer(const uint8_t *mac, const MeshBeaconPkt &pkt) {
     memset(&peer_info, 0, sizeof(peer_info));
     memcpy(peer_info.peer_addr, mac, 6);
     peer_info.channel = 0;
-    peer_info.ifidx   = WIFI_IF_STA;
+    peer_info.ifidx   = ap_active ? WIFI_IF_AP : WIFI_IF_STA;
     peer_info.encrypt = false;
     esp_now_add_peer(&peer_info);
   }
@@ -6644,8 +6644,8 @@ void MeshInit() {
   esp_now_peer_info_t peer;
   memset(&peer, 0, sizeof(peer));
   memcpy(peer.peer_addr, kMeshBroadcastMac, 6);
-  peer.channel = 0;        // 0 = follow WiFi STA channel; never hardcode in STA mode
-  peer.ifidx   = WIFI_IF_STA;
+  peer.channel = 0;        // 0 = follow current interface channel
+  peer.ifidx   = ap_active ? WIFI_IF_AP : WIFI_IF_STA;
   peer.encrypt = false;
   esp_now_add_peer(&peer);
   mesh_initialized = true;
