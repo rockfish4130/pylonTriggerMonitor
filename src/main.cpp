@@ -18,6 +18,7 @@
 #include <OSCMessage.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
+#include <PubSubClient.h>
 
 #include "wifi_credentials.h"
 
@@ -82,6 +83,7 @@ constexpr uint8_t  kMeshPktBeacon        = 1;
 constexpr uint8_t  kMeshPktCommand       = 2;
 constexpr uint8_t  kMeshPktChanChange    = 3;
 constexpr uint8_t  kMeshPktPadEvent      = 4;  // remote pad → rpiboosh (all nodes)
+constexpr uint8_t  kMeshPktRemoteTelem   = 5;  // remote telemetry → rpiboosh MQTT
 constexpr uint32_t kMeshBeaconIntervalMs = 2000;   // broadcast beacon every 2 s
 constexpr uint32_t kMeshPeerTimeoutMs    = 8000;   // drop peer after 8 s silence
 constexpr uint8_t  kMeshMaxPeers         = 10;
@@ -330,6 +332,20 @@ struct __attribute__((packed)) MeshPadEventPkt {
   uint8_t  channel;
   char     remote_id[16];  // offset 11
   uint16_t dedup_ms;        // offset 27 — dedup window the receiver should apply
+};
+
+struct __attribute__((packed)) MeshRemoteTelemPkt {
+  uint32_t magic;          // 0x4D455348
+  uint8_t  version;        // 3
+  uint8_t  type;           // kMeshPktRemoteTelem
+  char     remote_id[16];  // null-terminated remoteID
+  char     description[32];// null-terminated description
+  uint8_t  mac[6];         // remote's own MAC
+  uint32_t uptime_s;
+  uint32_t press_red;
+  uint32_t press_yellow;
+  uint8_t  mode;           // 0 = wifi, 1 = mesh
+  int8_t   rssi;           // WiFi RSSI; 0 in mesh mode
 };
 
 struct MeshPeerInfo {
@@ -6452,6 +6468,15 @@ struct MeshPadEvent {
 constexpr int kMeshPadQueueDepth = 8;
 static QueueHandle_t mesh_pad_queue = nullptr;
 
+// Remote telemetry queue: MeshOnRecv → PingTask → rpiboosh MQTT retained publish.
+// Payload is pre-formatted in the callback so PingTask just calls publish().
+struct MeshTelemQueueItem {
+  char topic[48];
+  char payload[384];
+};
+constexpr int kMeshTelemQueueDepth = 4;
+static QueueHandle_t mesh_telem_queue = nullptr;
+
 // Per-remote dedup table for type-4 pad events. Keyed by remote_id; 8 slots covers
 // all realistic remotes. Oldest entry evicted when full. Accessed only from MeshOnRecv
 // (WiFi task, Core 0) so no mutex needed.
@@ -6526,6 +6551,39 @@ static void MeshOnRecv(const uint8_t *mac, const uint8_t *data, int len) {
       ev.channel  = p->channel;
       strlcpy(ev.remote_id, p->remote_id, sizeof(ev.remote_id));
       xQueueSendFromISR(mesh_pad_queue, &ev, nullptr);
+    }
+  } else if (pkt_type == kMeshPktRemoteTelem && len >= (int)sizeof(MeshRemoteTelemPkt)) {
+    if (mesh_telem_queue) {
+      MeshRemoteTelemPkt pkt;
+      memcpy(&pkt, data, sizeof(pkt));
+      pkt.remote_id[15]    = '\0';
+      pkt.description[31]  = '\0';
+      char srcMac[18], remMac[18];
+      snprintf(srcMac, sizeof(srcMac), "%02X:%02X:%02X:%02X:%02X:%02X",
+               mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+      snprintf(remMac, sizeof(remMac), "%02X:%02X:%02X:%02X:%02X:%02X",
+               pkt.mac[0], pkt.mac[1], pkt.mac[2], pkt.mac[3], pkt.mac[4], pkt.mac[5]);
+      MeshTelemQueueItem item;
+      snprintf(item.topic, sizeof(item.topic),
+               "boosh/remote/%s/telemetry", pkt.remote_id);
+      snprintf(item.payload, sizeof(item.payload),
+               "{\"remoteID\":\"%s\","
+               "\"description\":\"%s\","
+               "\"mac\":\"%s\","
+               "\"uptime_s\":%lu,"
+               "\"press_red\":%lu,"
+               "\"press_yellow\":%lu,"
+               "\"mode\":\"%s\","
+               "\"rssi\":%d,"
+               "\"forwarded_by\":\"%s\"}",
+               pkt.remote_id, pkt.description, remMac,
+               (unsigned long)pkt.uptime_s,
+               (unsigned long)pkt.press_red,
+               (unsigned long)pkt.press_yellow,
+               pkt.mode ? "mesh" : "wifi",
+               (int)pkt.rssi,
+               pylon_id.c_str());
+      xQueueSendFromISR(mesh_telem_queue, &item, nullptr);
     }
   }
 }
@@ -6688,6 +6746,7 @@ void MeshInit() {
   if (!mesh_peers_mutex) mesh_peers_mutex = xSemaphoreCreateMutex();
   if (!mesh_osc_queue)   mesh_osc_queue   = xQueueCreate(kMeshOscQueueDepth, sizeof(MeshOscEvent));
   if (!mesh_pad_queue)   mesh_pad_queue   = xQueueCreate(kMeshPadQueueDepth, sizeof(MeshPadEvent));
+  if (!mesh_telem_queue) mesh_telem_queue = xQueueCreate(kMeshTelemQueueDepth, sizeof(MeshTelemQueueItem));
   memset(mesh_peers, 0, sizeof(mesh_peers));
   memset(mesh_dedup, 0, sizeof(mesh_dedup));
   // If ESP-NOW was previously initialised, tear it down cleanly before re-init.
@@ -6967,6 +7026,32 @@ void PingTask(void *) {
         http.end();
         Console.printf("[PadBridge] note=%u vel=%u ch=%u -> %d (from %.15s)\n",
                        pev.note, pev.velocity, pev.channel, code, pev.remote_id);
+      }
+    }
+
+    // Remote telemetry bridge: drain mesh_telem_queue, publish to rpiboosh MQTT retained.
+    // MQTT client is persistent across PingTask iterations; reconnects as needed.
+    if (mesh_telem_queue) {
+      static WiFiClient      mqttWifiClient;
+      static PubSubClient    mqttClient(mqttWifiClient);
+      static bool            mqttInit = false;
+      if (!mqttInit) {
+        mqttClient.setBufferSize(512);
+        mqttInit = true;
+      }
+      if (!mqttClient.connected()) {
+        const String broker = (target_ip_string.length() > 0) ? target_ip_string : "rpiboosh.local";
+        const String cid    = "PYL_" + pylon_id.substring(0, 16);
+        mqttClient.setServer(broker.c_str(), 1883);
+        mqttClient.connect(cid.c_str());  // non-blocking on failure
+      }
+      mqttClient.loop();
+      if (mqttClient.connected()) {
+        MeshTelemQueueItem item;
+        while (xQueueReceive(mesh_telem_queue, &item, 0) == pdTRUE) {
+          const bool ok = mqttClient.publish(item.topic, item.payload, true /* retain */);
+          Console.printf("[Telem] MQTT %s -> %s\n", item.topic, ok ? "ok" : "fail");
+        }
       }
     }
 
