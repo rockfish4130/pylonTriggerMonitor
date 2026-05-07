@@ -81,6 +81,7 @@ constexpr uint8_t  kMeshVersion          = 3;  // bump when beacon struct change
 constexpr uint8_t  kMeshPktBeacon        = 1;
 constexpr uint8_t  kMeshPktCommand       = 2;
 constexpr uint8_t  kMeshPktChanChange    = 3;
+constexpr uint8_t  kMeshPktPadEvent      = 4;  // BARBAR bridge: remote pad → rpiboosh
 constexpr uint32_t kMeshBeaconIntervalMs = 2000;   // broadcast beacon every 2 s
 constexpr uint32_t kMeshPeerTimeoutMs    = 8000;   // drop peer after 8 s silence
 constexpr uint8_t  kMeshMaxPeers         = 10;
@@ -317,6 +318,16 @@ struct __attribute__((packed)) MeshChanChangePkt {
   uint8_t  new_ch;    // target channel 1-13
   uint8_t  _pad;
   uint32_t apply_ms;  // ms from receipt to apply
+};
+
+struct __attribute__((packed)) MeshPadEventPkt {
+  uint32_t magic;
+  uint8_t  version;
+  uint8_t  type;       // kMeshPktPadEvent
+  uint8_t  note;
+  uint8_t  velocity;
+  uint8_t  channel;
+  char     remote_id[16];
 };
 
 struct MeshPeerInfo {
@@ -6429,6 +6440,17 @@ struct MeshOscEvent {
 constexpr int kMeshOscQueueDepth = 8;
 static QueueHandle_t mesh_osc_queue = nullptr;
 
+// Pad event bridge queue: MeshOnRecv → PingTask → rpiboosh /send_virtual_midi.
+// Only populated on BARBAR (barmode_active). Items are tiny; 8 slots is plenty.
+struct MeshPadEvent {
+  uint8_t note;
+  uint8_t velocity;
+  uint8_t channel;
+  char    remote_id[16];
+};
+constexpr int kMeshPadQueueDepth = 8;
+static QueueHandle_t mesh_pad_queue = nullptr;
+
 // ESP-NOW receive callback — runs in WiFi task context (Core 0).
 static void MeshOnRecv(const uint8_t *mac, const uint8_t *data, int len) {
   if (!cfg_mesh_en) return;
@@ -6462,6 +6484,18 @@ static void MeshOnRecv(const uint8_t *mac, const uint8_t *data, int len) {
     mesh_ch_pending  = pkt.new_ch;
     mesh_ch_apply_at = millis() + pkt.apply_ms;
     Console.printf("[Mesh] chan change pending: ch=%u in %ums\n", pkt.new_ch, (unsigned)pkt.apply_ms);
+  } else if (pkt_type == kMeshPktPadEvent && len >= (int)sizeof(MeshPadEventPkt)) {
+    // Bar-mode-only: bridge pad event to rpiboosh via PingTask HTTP POST.
+    if (barmode_active && mesh_pad_queue) {
+      const MeshPadEventPkt *p = reinterpret_cast<const MeshPadEventPkt *>(data);
+      if (p->magic != kMeshMagic) return;
+      MeshPadEvent ev;
+      ev.note     = p->note;
+      ev.velocity = p->velocity;
+      ev.channel  = p->channel;
+      strlcpy(ev.remote_id, p->remote_id, sizeof(ev.remote_id));
+      xQueueSendFromISR(mesh_pad_queue, &ev, nullptr);
+    }
   }
 }
 
@@ -6622,6 +6656,7 @@ void MeshInit() {
   // Create FreeRTOS objects exactly once; reuse across re-inits.
   if (!mesh_peers_mutex) mesh_peers_mutex = xSemaphoreCreateMutex();
   if (!mesh_osc_queue)   mesh_osc_queue   = xQueueCreate(kMeshOscQueueDepth, sizeof(MeshOscEvent));
+  if (!mesh_pad_queue)   mesh_pad_queue   = xQueueCreate(kMeshPadQueueDepth, sizeof(MeshPadEvent));
   memset(mesh_peers, 0, sizeof(mesh_peers));
   memset(mesh_dedup, 0, sizeof(mesh_dedup));
   // If ESP-NOW was previously initialised, tear it down cleanly before re-init.
@@ -7170,6 +7205,25 @@ void PingTask(void *) {
         const int code = http.POST(body);
         http.end();
         Console.printf("[OSCProxy] %s %.3f -> %s : %d\n", msg.address, msg.value, host.c_str(), code);
+      }
+    }
+
+    // Pad event bridge: drain mesh_pad_queue, POST to rpiboosh /send_virtual_midi.
+    // Only active in bar mode; ESP-NOW-only remotes send MeshPadEventPkt to BARBAR.
+    if (barmode_active && mesh_pad_queue) {
+      MeshPadEvent pev;
+      while (xQueueReceive(mesh_pad_queue, &pev, 0) == pdTRUE) {
+        const String body = "{\"note\":" + String(pev.note) +
+                            ",\"velocity\":" + String(pev.velocity) +
+                            ",\"channel\":" + String(pev.channel) + "}";
+        HTTPClient http;
+        http.begin(String(kRegistryBaseUrlPrimary) + "/send_virtual_midi");
+        http.setTimeout(500);
+        http.addHeader("Content-Type", "application/json");
+        const int code = http.POST(body);
+        http.end();
+        Console.printf("[PadBridge] note=%u vel=%u ch=%u -> %d (from %.15s)\n",
+                       pev.note, pev.velocity, pev.channel, code, pev.remote_id);
       }
     }
 
