@@ -7308,7 +7308,7 @@ void loop() {
       wifi_connected_since_ms = now;
     }
   }
-  if (boosh_failsafe_armed && now - boosh_failsafe_start_ms >= boosh_failsafe_timeout_ms) {
+  if (boosh_failsafe_armed && millis() - boosh_failsafe_start_ms >= boosh_failsafe_timeout_ms) {
     boosh_failsafe_armed = false;
     ApplyBooshState(0.0f);
     Console.println("Failsafe: BooshMain timeout -> forcing OFF.");
