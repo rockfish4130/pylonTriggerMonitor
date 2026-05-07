@@ -6660,12 +6660,26 @@ void ShowMeshPage() {
     xSemaphoreGive(mesh_peers_mutex);
   }
 
-  // Internal page cycling: 2 peers per page
+  // Internal page cycling: 2 peers per page, advance at most once per 1500ms.
+  // Re-entry after >2s gap resets to page 0 (display switched away and back).
   static uint8_t s_page = 0;
+  static unsigned long s_last_advance_ms = 0;
+  static unsigned long s_last_call_ms = 0;
+
+  const unsigned long call_ms = millis();
+  if (s_last_call_ms == 0 || call_ms - s_last_call_ms > 2000UL) {
+    s_page = 0;
+    s_last_advance_ms = call_ms;
+  }
+  s_last_call_ms = call_ms;
+
   const int num_pages = (filled <= 2) ? 1 : (filled + 1) / 2;
   if (s_page >= (uint8_t)num_pages) s_page = 0;
+  if (call_ms - s_last_advance_ms >= 1500UL) {
+    s_page = (uint8_t)((s_page + 1) % num_pages);
+    s_last_advance_ms = call_ms;
+  }
   const int cur_page = s_page;
-  s_page = (uint8_t)((s_page + 1) % num_pages);
 
   // Render
   display.clearDisplay();
@@ -7366,7 +7380,12 @@ void loop() {
       }
     } else if (lastDisplayMs == 0) {
       lastDisplayMs = now;
-    } else if (now - lastDisplayMs >= kDisplayCycleMs) {
+    } else if (now - lastDisplayMs >= (
+        // Mesh container page dwells long enough for all sub-pages (1500ms each).
+        // All other pages use the normal kDisplayCycleMs.
+        (displayPage == 3 && displayOtherIdx == 6)
+          ? (unsigned long)(max(1, ((int)mesh_live_peer_count + 1) / 2)) * 1500UL
+          : (unsigned long)kDisplayCycleMs)) {
       lastDisplayMs = now;
       if (barmode_active) {
         // Barmode: no battery/temp hardware — skip those pages, only cycle info sub-pages
