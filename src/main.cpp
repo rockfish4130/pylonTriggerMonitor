@@ -6637,35 +6637,37 @@ void MeshInit() {
   Console.printf("[Mesh] init OK wifi_ch=%u\n", (unsigned)WiFi.channel());
 }
 
-// OLED page: shows mesh status and up to 5 peers.
-// Display is 128×32. Custom layout:
-//   y=0..15  textSize=2  "M:N" badge (top-right, via DrawMeshBadge(0,2))
-//   y=0..7   textSize=1  "MESH" label (top-left, fits left of badge)
-//   y=16..23 textSize=1  "Ch:N" badge (top-right) + first peer row (left)
-//   y=24..31 textSize=1  second peer row (left); that's all that fits on 32px
+// OLED page: shows all mesh peers, 2 per page, cycling on each call.
+// Display is 128×32. Layout per page:
+//   y=0..15  size=2  M:N badge top-right (DrawMeshBadge)
+//   y=0..7   size=1  "MESH" or "MESH 2/3" top-left (page indicator when >1 page)
+//   y=16..23 size=1  peer slot A: id+quality left, Ch:N badge right
+//   y=24..31 size=1  peer slot B: id+quality left (no badge, full width)
+// Each call advances to the next page; wraps when peer count changes.
 void ShowMeshPage() {
-  // --- Collect peer data under mutex ---
-  int peer_count = 0;
-  struct { char id[17]; uint32_t age_s; uint8_t qual_pct; } peers[5];
+  // Collect ALL active peers (up to kMeshMaxPeers)
+  struct { char id[17]; uint8_t qual_pct; } peers[kMeshMaxPeers];
   int filled = 0;
 
   if (mesh_peers_mutex && xSemaphoreTake(mesh_peers_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-    const uint32_t now = (uint32_t)millis();
     for (int i = 0; i < kMeshMaxPeers; i++) {
       if (!mesh_peers[i].active) continue;
-      peer_count++;
-      if (filled < 5) {
-        strncpy(peers[filled].id, mesh_peers[i].node_id, 16);
-        peers[filled].id[16] = '\0';
-        peers[filled].age_s    = (now - mesh_peers[i].last_seen_ms) / 1000;
-        peers[filled].qual_pct = mesh_peers[i].qual_pct;
-        filled++;
-      }
+      strncpy(peers[filled].id, mesh_peers[i].node_id, 16);
+      peers[filled].id[16] = '\0';
+      peers[filled].qual_pct = mesh_peers[i].qual_pct;
+      filled++;
     }
     xSemaphoreGive(mesh_peers_mutex);
   }
 
-  // --- Render ---
+  // Internal page cycling: 2 peers per page
+  static uint8_t s_page = 0;
+  const int num_pages = (filled <= 2) ? 1 : (filled + 1) / 2;
+  if (s_page >= (uint8_t)num_pages) s_page = 0;
+  const int cur_page = s_page;
+  s_page = (uint8_t)((s_page + 1) % num_pages);
+
+  // Render
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
 
@@ -6684,18 +6686,27 @@ void ShowMeshPage() {
     return;
   }
 
-  // y=0:  "MESH" left  +  M:N badge right (size=2, y=0..15)
-  // y=56: Ch:N bottom-right (size=1) — drawn by DrawMeshBadge, always at y=56
+  // Header: "MESH" or "MESH 2/3" + M:N+Ch:N badges
+  // "MESH 2/3" = 8 chars = 48px, well left of M:N badge at x=92
   display.setTextSize(1);
   display.setCursor(0, 0);
-  display.print("MESH");
-  DrawMeshBadge(0, 2);  // M:N at y=0 (size=2), Ch:N at y=56 (size=1)
+  if (num_pages > 1) {
+    char hdr[12];
+    snprintf(hdr, sizeof(hdr), "MESH %d/%d", cur_page + 1, num_pages);
+    display.print(hdr);
+  } else {
+    display.print("MESH");
+  }
+  DrawMeshBadge(0, 2);  // M:N at y=0 (size=2), Ch:N at y=16
 
-  // Rows y=16..48: peer list (left-aligned; y=56 is reserved for Ch:N)
-  for (int i = 0; i < filled; i++) {
+  // Two peer rows for this page
+  const int page_start = cur_page * 2;
+  for (int i = 0; i < 2; i++) {
+    const int pi = page_start + i;
+    if (pi >= filled) break;
     display.setCursor(0, 16 + i * 8);
-    char pbuf[14];  // max 13 chars + null — stays left of Ch:N badge at x=92
-    snprintf(pbuf, sizeof(pbuf), "%-8s %3u%%", peers[i].id, peers[i].qual_pct);
+    char pbuf[14];  // 13 chars max — stays left of Ch:N badge at x=92
+    snprintf(pbuf, sizeof(pbuf), "%-8s %3u%%", peers[pi].id, peers[pi].qual_pct);
     display.print(pbuf);
   }
 
