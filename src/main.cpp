@@ -7273,6 +7273,18 @@ void loop() {
       registry_next_attempt_ms = 0;
       registry_consecutive_failures = 0;
       Console.println("WiFi disconnected: registry state reset.");
+      // If AP is active and was started on the STA channel (e.g. LavaLounge ch 6),
+      // restart it on cfg_mesh_ch now so ESP-NOW peers can find us.
+      if (ap_active && cfg_mesh_en) {
+        uint8_t hw_ch = 0;
+        esp_wifi_get_channel(&hw_ch, nullptr);
+        if (hw_ch != (uint8_t)cfg_mesh_ch) {
+          Console.printf("[AP] STA lost — restarting AP on mesh ch=%u (was ch=%u)\n",
+                         cfg_mesh_ch, hw_ch);
+          StopApMode();
+          SetupApMode();
+        }
+      }
     }
     if (disconnected_since_ms == 0) {
       disconnected_since_ms = now;  // boot with no WiFi
