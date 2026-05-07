@@ -324,11 +324,12 @@ struct __attribute__((packed)) MeshPadEventPkt {
   uint32_t magic;
   uint8_t  version;
   uint8_t  type;       // kMeshPktPadEvent
-  uint16_t seq;        // sender's sequence number; used for dedup across nodes
+  uint16_t seq;        // sender's sequence number; used for dedup
   uint8_t  note;
   uint8_t  velocity;
   uint8_t  channel;
-  char     remote_id[16];
+  char     remote_id[16];  // offset 11
+  uint16_t dedup_ms;        // offset 27 — dedup window the receiver should apply
 };
 
 struct MeshPeerInfo {
@@ -6514,7 +6515,7 @@ static void MeshOnRecv(const uint8_t *mac, const uint8_t *data, int len) {
       if (match < 0) {
         strlcpy(pad_dedup[idx].remote_id, p->remote_id, sizeof(pad_dedup[idx].remote_id));
         pad_dedup[idx].active = true;
-      } else if (pad_dedup[idx].last_seq == p->seq && now_ms - pad_dedup[idx].last_ms < 2000) {
+      } else if (pad_dedup[idx].last_seq == p->seq && now_ms - pad_dedup[idx].last_ms < p->dedup_ms) {
         return;  // duplicate from another node forwarding the same broadcast
       }
       pad_dedup[idx].last_seq = p->seq;
