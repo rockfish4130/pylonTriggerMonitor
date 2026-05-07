@@ -84,7 +84,7 @@ All nodes participate in a peer-to-peer ESP-NOW mesh on a configurable channel (
 **Constants:**
 - `kMeshMagic = 0x4D455348UL` ("MESH") — first 4 bytes of every packet; quick sanity check
 - `kMeshVersion = 3` — bump whenever a packet struct layout changes; mismatched nodes are dropped
-- `kMeshPktBeacon = 1`, `kMeshPktCommand = 2`, `kMeshPktChanChange = 3`
+- `kMeshPktBeacon = 1`, `kMeshPktCommand = 2`, `kMeshPktChanChange = 3`, `kMeshPktPadEvent = 4`
 - Beacon interval: 2000 ms. Peer timeout: 8000 ms. Max peers: 10.
 - Quality metric: 16-slot rolling bitmap, one slot per beacon interval (32s window); `qual_pct = popcount(qual_bits) * 100 / 16`
 
@@ -92,6 +92,7 @@ All nodes participate in a peer-to-peer ESP-NOW mesh on a configurable channel (
 - `MeshBeaconPkt` — node announcement: node_id, pylon_index, role, uptime_s, batt_v, batt_pct, temp_f, fw_ver[32]
 - `MeshCommandPkt` — OSC relay: seq (dedup), osc_addr[32], osc_arg (float)
 - `MeshChanChangePkt` — coordinated channel switch: new_ch (1-11), apply_ms (countdown from receipt)
+- `MeshPadEventPkt` — MIDI pad event from ESP-NOW-only remote: note, velocity, channel, remote_id[16]
 
 **Channel management:**
 - In STA mode (WiFi connected): radio channel is controlled by the AP. `peer.channel = 0` so ESP-NOW follows the current WiFi channel automatically.
@@ -116,6 +117,8 @@ In AP-only mode `WIFI_IF_STA` is unassociated — ESP-NOW through it is silently
 **Peer registration:** `esp_now_add_peer()` must be called before unicast. Broadcast peer uses MAC `FF:FF:FF:FF:FF:FF` with `channel=0`. Done in `MeshUpsertPeer` and mesh init.
 
 **Dedup:** `MeshDedupEntry[16]` with 500ms window prevents duplicate OSC fires from retried broadcasts.
+
+**BARBAR pad bridge (type 4):** ESP-NOW-only remotes (no WiFi client) broadcast `MeshPadEventPkt` on ch 11. `MeshOnRecv` enqueues to `mesh_pad_queue` when `barmode_active`. PingTask (Core 0) drains the queue **before** ping/registry HTTP calls and POSTs `{"note","velocity","channel"}` to `rpiboosh.local:5000/send_virtual_midi` — identical payload to the MQTT remote. Uses pre-resolved `target_ip_string` (not mDNS hostname) to avoid per-call DNS latency. Timeout 200 ms. Bridge is a no-op on all non-bar-mode nodes.
 
 ## OSC Addresses
 - `/pylon/BooshMain` — raw solenoid open/close (1.0/0.0)
