@@ -118,7 +118,7 @@ In AP-only mode `WIFI_IF_STA` is unassociated — ESP-NOW through it is silently
 
 **Dedup:** `MeshDedupEntry[16]` with 500ms window prevents duplicate OSC fires from retried broadcasts.
 
-**BARBAR pad bridge (type 4):** ESP-NOW-only remotes (no WiFi client) broadcast `MeshPadEventPkt` on ch 11. `MeshOnRecv` enqueues to `mesh_pad_queue` when `barmode_active`. PingTask (Core 0) drains the queue **before** ping/registry HTTP calls and POSTs `{"note","velocity","channel"}` to `rpiboosh.local:5000/send_virtual_midi` — identical payload to the MQTT remote. Uses pre-resolved `target_ip_string` (not mDNS hostname) to avoid per-call DNS latency. Timeout 200 ms. Bridge is a no-op on all non-bar-mode nodes.
+**Pad bridge (type 4):** ESP-NOW-only remotes (no WiFi client) broadcast `MeshPadEventPkt` on ch 11. `MeshOnRecv` on **all nodes** enqueues to `mesh_pad_queue`. PingTask (Core 0) drains the queue **before** ping/registry HTTP calls and POSTs `{"note","velocity","channel"}` to `rpiboosh.local:5000/send_virtual_midi` — identical payload to the MQTT remote. Uses pre-resolved `target_ip_string` (not mDNS hostname) to avoid per-call DNS latency. Timeout 200 ms.
 
 ## OSC Addresses
 - `/pylon/BooshMain` — raw solenoid open/close (1.0/0.0)

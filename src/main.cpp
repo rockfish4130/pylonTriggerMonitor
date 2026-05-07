@@ -81,7 +81,7 @@ constexpr uint8_t  kMeshVersion          = 3;  // bump when beacon struct change
 constexpr uint8_t  kMeshPktBeacon        = 1;
 constexpr uint8_t  kMeshPktCommand       = 2;
 constexpr uint8_t  kMeshPktChanChange    = 3;
-constexpr uint8_t  kMeshPktPadEvent      = 4;  // BARBAR bridge: remote pad → rpiboosh
+constexpr uint8_t  kMeshPktPadEvent      = 4;  // remote pad → rpiboosh (all nodes)
 constexpr uint32_t kMeshBeaconIntervalMs = 2000;   // broadcast beacon every 2 s
 constexpr uint32_t kMeshPeerTimeoutMs    = 8000;   // drop peer after 8 s silence
 constexpr uint8_t  kMeshMaxPeers         = 10;
@@ -6485,8 +6485,7 @@ static void MeshOnRecv(const uint8_t *mac, const uint8_t *data, int len) {
     mesh_ch_apply_at = millis() + pkt.apply_ms;
     Console.printf("[Mesh] chan change pending: ch=%u in %ums\n", pkt.new_ch, (unsigned)pkt.apply_ms);
   } else if (pkt_type == kMeshPktPadEvent && len >= (int)sizeof(MeshPadEventPkt)) {
-    // Bar-mode-only: bridge pad event to rpiboosh via PingTask HTTP POST.
-    if (barmode_active && mesh_pad_queue) {
+    if (mesh_pad_queue) {
       const MeshPadEventPkt *p = reinterpret_cast<const MeshPadEventPkt *>(data);
       if (p->magic != kMeshMagic) return;
       MeshPadEvent ev;
@@ -6919,7 +6918,7 @@ void PingTask(void *) {
 
     // Pad event bridge — drain first, before ping/registry, to minimise latency.
     // Uses cached IP (target_ip_string) to avoid mDNS lookup on every POST.
-    if (barmode_active && mesh_pad_queue) {
+    if (mesh_pad_queue) {
       MeshPadEvent pev;
       while (xQueueReceive(mesh_pad_queue, &pev, 0) == pdTRUE) {
         const String url = (target_ip_string.length() > 0)
