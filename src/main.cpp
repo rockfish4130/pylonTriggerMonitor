@@ -6917,6 +6917,28 @@ void PingTask(void *) {
       continue;
     }
 
+    // Pad event bridge — drain first, before ping/registry, to minimise latency.
+    // Uses cached IP (target_ip_string) to avoid mDNS lookup on every POST.
+    if (barmode_active && mesh_pad_queue) {
+      MeshPadEvent pev;
+      while (xQueueReceive(mesh_pad_queue, &pev, 0) == pdTRUE) {
+        const String url = (target_ip_string.length() > 0)
+            ? "http://" + target_ip_string + ":5000/send_virtual_midi"
+            : String(kRegistryBaseUrlPrimary) + "/send_virtual_midi";
+        const String body = "{\"note\":" + String(pev.note) +
+                            ",\"velocity\":" + String(pev.velocity) +
+                            ",\"channel\":" + String(pev.channel) + "}";
+        HTTPClient http;
+        http.begin(url);
+        http.setTimeout(200);
+        http.addHeader("Content-Type", "application/json");
+        const int code = http.POST(body);
+        http.end();
+        Console.printf("[PadBridge] note=%u vel=%u ch=%u -> %d (from %.15s)\n",
+                       pev.note, pev.velocity, pev.channel, code, pev.remote_id);
+      }
+    }
+
     if (!hasIp && now - lastResolveMs > 10000) {
       lastResolveMs = now;
       if (WiFi.hostByName(kTargetHost, targetIp) || WiFi.hostByName(kTargetHostMdns, targetIp)) {
@@ -7205,25 +7227,6 @@ void PingTask(void *) {
         const int code = http.POST(body);
         http.end();
         Console.printf("[OSCProxy] %s %.3f -> %s : %d\n", msg.address, msg.value, host.c_str(), code);
-      }
-    }
-
-    // Pad event bridge: drain mesh_pad_queue, POST to rpiboosh /send_virtual_midi.
-    // Only active in bar mode; ESP-NOW-only remotes send MeshPadEventPkt to BARBAR.
-    if (barmode_active && mesh_pad_queue) {
-      MeshPadEvent pev;
-      while (xQueueReceive(mesh_pad_queue, &pev, 0) == pdTRUE) {
-        const String body = "{\"note\":" + String(pev.note) +
-                            ",\"velocity\":" + String(pev.velocity) +
-                            ",\"channel\":" + String(pev.channel) + "}";
-        HTTPClient http;
-        http.begin(String(kRegistryBaseUrlPrimary) + "/send_virtual_midi");
-        http.setTimeout(500);
-        http.addHeader("Content-Type", "application/json");
-        const int code = http.POST(body);
-        http.end();
-        Console.printf("[PadBridge] note=%u vel=%u ch=%u -> %d (from %.15s)\n",
-                       pev.note, pev.velocity, pev.channel, code, pev.remote_id);
       }
     }
 
