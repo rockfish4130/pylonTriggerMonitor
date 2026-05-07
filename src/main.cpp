@@ -258,6 +258,27 @@ volatile float barmode_bpm = 0.0f;  // 0 = no BPM lock; updated by PingTask from
 // Set by main loop (PollBarModeButtons), read by PingTask which sends press/keepalive/release.
 volatile bool barmode_all4_midi_held = false;
 
+// Seen-remote table: written by PingTask (Core 0) when draining mesh_telem_queue;
+// read by web handler (Core 1) under mesh_remote_mutex.
+constexpr int      kMeshRemoteSlots    = 8;
+constexpr uint32_t kMeshRemoteStaleMs  = 90000;   // 3 missed 30s beacons → dim
+constexpr uint32_t kMeshRemoteExpireMs = 300000;  // 5 min → drop from API
+struct MeshRemoteRecord {
+  bool     active;
+  char     remote_id[16];
+  char     description[32];
+  char     mac[18];
+  char     forwarded_by[16];
+  uint32_t uptime_s;
+  uint32_t press_red;
+  uint32_t press_yellow;
+  uint8_t  mode;
+  int8_t   rssi;
+  uint32_t last_seen_ms;
+};
+static MeshRemoteRecord  mesh_remote_table[kMeshRemoteSlots];
+static SemaphoreHandle_t mesh_remote_mutex = nullptr;
+
 // OSC proxy queue: when cfg_route_via_rpi is true, SendOscFloatToIP enqueues messages here
 // instead of sending UDP directly. PingTask (Core 0) drains the queue via HTTP POST to rpiboosh.
 struct OscProxyMsg {
@@ -2709,6 +2730,12 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         <span style="color:var(--muted);font-size:13px">Loading...</span>
       </div>
     </div>
+    <div id="mesh-remotes-panel" class="panel" style="margin-top:16px;display:none">
+      <h2>ESP-NOW Remotes</h2>
+      <div id="mesh-remotes-content" style="overflow-x:auto">
+        <span style="color:var(--muted);font-size:13px">Waiting for remote beacons&hellip;</span>
+      </div>
+    </div>
     <div id="manual-pylons-panel" class="panel" style="margin-top:16px;display:none">
       <h2>Manual Pylons</h2>
       <div style="color:var(--muted);font-size:12px;margin-bottom:10px">Pylons added here are included in all OSC fanouts alongside the rpiboosh registry. Persists across reboots.</div>
@@ -3773,6 +3800,50 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     setInterval(refreshManualPylons, 5000);
     setInterval(refreshBtnEvents, 10000);
     setInterval(drawBtnChart, 5000);
+    async function refreshMeshRemotes(){
+      try{
+        const data=await fetchJson('/api/mesh_remotes');
+        const panel=document.getElementById('mesh-remotes-panel');
+        const content=document.getElementById('mesh-remotes-content');
+        if(!barmodeActive){panel.style.display='none';return;}
+        panel.style.display='';
+        if(!data.length){content.innerHTML='<span style="color:var(--muted);font-size:13px">No remotes seen yet.</span>';return;}
+        let h='<table style="border-collapse:collapse;font-size:13px;width:100%"><thead><tr style="border-bottom:1px solid var(--border)">'
+          +'<th style="padding:4px 8px;text-align:left">Remote ID</th>'
+          +'<th style="padding:4px 8px;text-align:left">Description</th>'
+          +'<th style="padding:4px 8px;text-align:left">MAC</th>'
+          +'<th style="padding:4px 8px;text-align:right">Mode</th>'
+          +'<th style="padding:4px 8px;text-align:right">RSSI</th>'
+          +'<th style="padding:4px 8px;text-align:right">Red</th>'
+          +'<th style="padding:4px 8px;text-align:right">Yellow</th>'
+          +'<th style="padding:4px 8px;text-align:right">Uptime</th>'
+          +'<th style="padding:4px 8px;text-align:right">Last seen</th>'
+          +'<th style="padding:4px 8px;text-align:left">Via</th>'
+          +'</tr></thead><tbody>';
+        for(const r of data){
+          const op=r.stale?'opacity:0.5;':'';
+          const mode=r.mode===0?'WiFi':'Mesh';
+          const upH=Math.floor(r.uptime_s/3600),upM=Math.floor((r.uptime_s%3600)/60),upS=r.uptime_s%60;
+          const upStr=(upH?upH+'h ':'')+(upM?upM+'m ':'')+upS+'s';
+          h+=`<tr style="border-bottom:1px solid var(--border);${op}">`
+            +`<td style="padding:4px 8px">${r.remote_id}</td>`
+            +`<td style="padding:4px 8px">${r.description}</td>`
+            +`<td style="padding:4px 8px;font-size:11px">${r.mac}</td>`
+            +`<td style="padding:4px 8px;text-align:right">${mode}</td>`
+            +`<td style="padding:4px 8px;text-align:right">${r.rssi} dBm</td>`
+            +`<td style="padding:4px 8px;text-align:right">${r.press_red}</td>`
+            +`<td style="padding:4px 8px;text-align:right">${r.press_yellow}</td>`
+            +`<td style="padding:4px 8px;text-align:right">${upStr}</td>`
+            +`<td style="padding:4px 8px;text-align:right">${r.last_seen_s}s ago</td>`
+            +`<td style="padding:4px 8px">${r.forwarded_by}</td>`
+            +'</tr>';
+        }
+        h+='</tbody></table>';
+        content.innerHTML=h;
+      }catch(e){}
+    }
+    setInterval(refreshMeshRemotes, 10000);
+    refreshMeshRemotes();
   </script>
 </body>
 </html>
@@ -3857,6 +3928,37 @@ void HandleDjPage() {
 
 void HandleWebRoot() {
   webServer.send(200, "text/html", kWebUiHtml);
+}
+
+void HandleMeshRemotesApi() {
+  const uint32_t now_ms = (uint32_t)millis();
+  String out = "[";
+  bool first = true;
+  if (xSemaphoreTake(mesh_remote_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+    for (int i = 0; i < kMeshRemoteSlots; i++) {
+      const MeshRemoteRecord &r = mesh_remote_table[i];
+      if (!r.active) continue;
+      const uint32_t age_ms = now_ms - r.last_seen_ms;
+      if (age_ms > kMeshRemoteExpireMs) continue;
+      if (!first) out += ',';
+      first = false;
+      out += "{\"remote_id\":\"";   out += r.remote_id;
+      out += "\",\"description\":\""; out += r.description;
+      out += "\",\"mac\":\"";       out += r.mac;
+      out += "\",\"forwarded_by\":\""; out += r.forwarded_by;
+      out += "\",\"uptime_s\":";    out += r.uptime_s;
+      out += ",\"press_red\":";     out += r.press_red;
+      out += ",\"press_yellow\":";  out += r.press_yellow;
+      out += ",\"mode\":";          out += r.mode;
+      out += ",\"rssi\":";          out += r.rssi;
+      out += ",\"last_seen_s\":";   out += (age_ms / 1000);
+      out += ",\"stale\":";         out += (age_ms > kMeshRemoteStaleMs ? "true" : "false");
+      out += '}';
+    }
+    xSemaphoreGive(mesh_remote_mutex);
+  }
+  out += ']';
+  webServer.send(200, "application/json", out);
 }
 
 void HandleTelemetryApi() {
@@ -4631,6 +4733,7 @@ void SetupWebServer() {
   webServer.on("/api/mesh/relay",     HTTP_POST, HandleMeshRelayApi);
   webServer.on("/api/mesh/chanchange", HTTP_POST, HandleMeshChanChangeApi);
   webServer.on("/api/barmode/btn",    HTTP_POST, HandleBarmodeBtn);
+  webServer.on("/api/mesh_remotes",   HTTP_GET,  HandleMeshRemotesApi);
   webServer.on("/dj",                 HTTP_GET,  HandleDjPage);
   webServer.on("/api/dj/btn",         HTTP_POST, HandleDjBtn);
   webServer.begin();
@@ -6460,10 +6563,11 @@ static QueueHandle_t mesh_osc_queue = nullptr;
 
 // Pad event bridge queue: MeshOnRecv → PingTask → rpiboosh /send_virtual_midi.
 struct MeshPadEvent {
-  uint8_t note;
-  uint8_t velocity;
-  uint8_t channel;
-  char    remote_id[16];
+  uint8_t  note;
+  uint8_t  velocity;
+  uint8_t  channel;
+  uint16_t seq;
+  char     remote_id[16];
 };
 constexpr int kMeshPadQueueDepth = 8;
 static QueueHandle_t mesh_pad_queue = nullptr;
@@ -6471,8 +6575,8 @@ static QueueHandle_t mesh_pad_queue = nullptr;
 // Remote telemetry queue: MeshOnRecv → PingTask → rpiboosh MQTT retained publish.
 // Payload is pre-formatted in the callback so PingTask just calls publish().
 struct MeshTelemQueueItem {
-  char topic[48];
-  char payload[384];
+  MeshRemoteTelemPkt pkt;     // raw packet (74 bytes)
+  uint8_t            src_mac[6]; // ESP-NOW sender MAC
 };
 constexpr int kMeshTelemQueueDepth = 4;
 static QueueHandle_t mesh_telem_queue = nullptr;
@@ -6549,40 +6653,17 @@ static void MeshOnRecv(const uint8_t *mac, const uint8_t *data, int len) {
       ev.note     = p->note;
       ev.velocity = p->velocity;
       ev.channel  = p->channel;
+      ev.seq      = p->seq;
       strlcpy(ev.remote_id, p->remote_id, sizeof(ev.remote_id));
       xQueueSendFromISR(mesh_pad_queue, &ev, nullptr);
     }
   } else if (pkt_type == kMeshPktRemoteTelem && len >= (int)sizeof(MeshRemoteTelemPkt)) {
     if (mesh_telem_queue) {
-      MeshRemoteTelemPkt pkt;
-      memcpy(&pkt, data, sizeof(pkt));
-      pkt.remote_id[15]    = '\0';
-      pkt.description[31]  = '\0';
-      char srcMac[18], remMac[18];
-      snprintf(srcMac, sizeof(srcMac), "%02X:%02X:%02X:%02X:%02X:%02X",
-               mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-      snprintf(remMac, sizeof(remMac), "%02X:%02X:%02X:%02X:%02X:%02X",
-               pkt.mac[0], pkt.mac[1], pkt.mac[2], pkt.mac[3], pkt.mac[4], pkt.mac[5]);
       MeshTelemQueueItem item;
-      snprintf(item.topic, sizeof(item.topic),
-               "boosh/remote/%s/telemetry", pkt.remote_id);
-      snprintf(item.payload, sizeof(item.payload),
-               "{\"remoteID\":\"%s\","
-               "\"description\":\"%s\","
-               "\"mac\":\"%s\","
-               "\"uptime_s\":%lu,"
-               "\"press_red\":%lu,"
-               "\"press_yellow\":%lu,"
-               "\"mode\":\"%s\","
-               "\"rssi\":%d,"
-               "\"forwarded_by\":\"%s\"}",
-               pkt.remote_id, pkt.description, remMac,
-               (unsigned long)pkt.uptime_s,
-               (unsigned long)pkt.press_red,
-               (unsigned long)pkt.press_yellow,
-               pkt.mode ? "mesh" : "wifi",
-               (int)pkt.rssi,
-               pylon_id.c_str());
+      memcpy(&item.pkt, data, sizeof(item.pkt));
+      item.pkt.remote_id[15]   = '\0';
+      item.pkt.description[31] = '\0';
+      memcpy(item.src_mac, mac, 6);
       xQueueSendFromISR(mesh_telem_queue, &item, nullptr);
     }
   }
@@ -6746,7 +6827,8 @@ void MeshInit() {
   if (!mesh_peers_mutex) mesh_peers_mutex = xSemaphoreCreateMutex();
   if (!mesh_osc_queue)   mesh_osc_queue   = xQueueCreate(kMeshOscQueueDepth, sizeof(MeshOscEvent));
   if (!mesh_pad_queue)   mesh_pad_queue   = xQueueCreate(kMeshPadQueueDepth, sizeof(MeshPadEvent));
-  if (!mesh_telem_queue) mesh_telem_queue = xQueueCreate(kMeshTelemQueueDepth, sizeof(MeshTelemQueueItem));
+  if (!mesh_telem_queue)  mesh_telem_queue  = xQueueCreate(kMeshTelemQueueDepth, sizeof(MeshTelemQueueItem));
+  if (!mesh_remote_mutex) mesh_remote_mutex = xSemaphoreCreateMutex();
   memset(mesh_peers, 0, sizeof(mesh_peers));
   memset(mesh_dedup, 0, sizeof(mesh_dedup));
   // If ESP-NOW was previously initialised, tear it down cleanly before re-init.
@@ -7017,7 +7099,9 @@ void PingTask(void *) {
             : String(kRegistryBaseUrlPrimary) + "/send_virtual_midi";
         const String body = "{\"note\":" + String(pev.note) +
                             ",\"velocity\":" + String(pev.velocity) +
-                            ",\"channel\":" + String(pev.channel) + "}";
+                            ",\"channel\":" + String(pev.channel) +
+                            ",\"remoteID\":\"" + String(pev.remote_id) + "\"" +
+                            ",\"seq\":" + String(pev.seq) + "}";
         HTTPClient http;
         http.begin(url);
         http.setTimeout(200);
@@ -7029,28 +7113,65 @@ void PingTask(void *) {
       }
     }
 
-    // Remote telemetry bridge: drain mesh_telem_queue, publish to rpiboosh MQTT retained.
-    // MQTT client is persistent across PingTask iterations; reconnects as needed.
+    // Remote telemetry bridge: drain mesh_telem_queue, publish MQTT + update remote table.
     if (mesh_telem_queue) {
-      static WiFiClient      mqttWifiClient;
-      static PubSubClient    mqttClient(mqttWifiClient);
-      static bool            mqttInit = false;
-      if (!mqttInit) {
-        mqttClient.setBufferSize(512);
-        mqttInit = true;
-      }
+      static WiFiClient   mqttWifiClient;
+      static PubSubClient mqttClient(mqttWifiClient);
+      static bool         mqttInit = false;
+      if (!mqttInit) { mqttClient.setBufferSize(512); mqttInit = true; }
       if (!mqttClient.connected()) {
         const String broker = (target_ip_string.length() > 0) ? target_ip_string : "rpiboosh.local";
-        const String cid    = "PYL_" + pylon_id.substring(0, 16);
         mqttClient.setServer(broker.c_str(), 1883);
-        mqttClient.connect(cid.c_str());  // non-blocking on failure
+        mqttClient.connect(("PYL_" + pylon_id.substring(0, 16)).c_str());
       }
       mqttClient.loop();
-      if (mqttClient.connected()) {
-        MeshTelemQueueItem item;
-        while (xQueueReceive(mesh_telem_queue, &item, 0) == pdTRUE) {
-          const bool ok = mqttClient.publish(item.topic, item.payload, true /* retain */);
-          Console.printf("[Telem] MQTT %s -> %s\n", item.topic, ok ? "ok" : "fail");
+      MeshTelemQueueItem item;
+      while (xQueueReceive(mesh_telem_queue, &item, 0) == pdTRUE) {
+        char remMac[18];
+        snprintf(remMac, sizeof(remMac), "%02X:%02X:%02X:%02X:%02X:%02X",
+                 item.pkt.mac[0], item.pkt.mac[1], item.pkt.mac[2],
+                 item.pkt.mac[3], item.pkt.mac[4], item.pkt.mac[5]);
+        // MQTT publish (retained)
+        if (mqttClient.connected()) {
+          char topic[48], payload[384];
+          snprintf(topic, sizeof(topic), "boosh/remote/%s/telemetry", item.pkt.remote_id);
+          snprintf(payload, sizeof(payload),
+                   "{\"remoteID\":\"%s\",\"description\":\"%s\",\"mac\":\"%s\","
+                   "\"uptime_s\":%lu,\"press_red\":%lu,\"press_yellow\":%lu,"
+                   "\"mode\":\"%s\",\"rssi\":%d,\"forwarded_by\":\"%s\"}",
+                   item.pkt.remote_id, item.pkt.description, remMac,
+                   (unsigned long)item.pkt.uptime_s, (unsigned long)item.pkt.press_red,
+                   (unsigned long)item.pkt.press_yellow,
+                   item.pkt.mode ? "mesh" : "wifi", (int)item.pkt.rssi, pylon_id.c_str());
+          const bool ok = mqttClient.publish(topic, payload, true);
+          Console.printf("[Telem] MQTT %s -> %s\n", topic, ok ? "ok" : "fail");
+        }
+        // Update in-memory remote table (for /api/mesh_remotes web UI)
+        if (mesh_remote_mutex && xSemaphoreTake(mesh_remote_mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+          const uint32_t now_t = millis();
+          int match = -1, oldest = 0;
+          for (int i = 0; i < kMeshRemoteSlots; i++) {
+            if (mesh_remote_table[i].active &&
+                strncmp(mesh_remote_table[i].remote_id, item.pkt.remote_id, 16) == 0) {
+              match = i; break;
+            }
+            if (!mesh_remote_table[i].active ||
+                now_t - mesh_remote_table[i].last_seen_ms > now_t - mesh_remote_table[oldest].last_seen_ms)
+              oldest = i;
+          }
+          MeshRemoteRecord &r = mesh_remote_table[(match >= 0) ? match : oldest];
+          r.active = true;
+          strlcpy(r.remote_id,    item.pkt.remote_id,   sizeof(r.remote_id));
+          strlcpy(r.description,  item.pkt.description, sizeof(r.description));
+          strlcpy(r.mac,          remMac,               sizeof(r.mac));
+          strlcpy(r.forwarded_by, pylon_id.c_str(),     sizeof(r.forwarded_by));
+          r.uptime_s     = item.pkt.uptime_s;
+          r.press_red    = item.pkt.press_red;
+          r.press_yellow = item.pkt.press_yellow;
+          r.mode         = item.pkt.mode;
+          r.rssi         = item.pkt.rssi;
+          r.last_seen_ms = now_t;
+          xSemaphoreGive(mesh_remote_mutex);
         }
       }
     }
