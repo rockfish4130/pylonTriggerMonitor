@@ -28,8 +28,13 @@ ESP32-S2 (Wemos S2 Pico) firmware for fire-effect pylons. PlatformIO/Arduino fra
 - **Read `memory/MEMORY.md` at the start of every session** before taking any action
 
 ## Key Nodes
-- **testnodex.local** — stress-test board; now safe to include in normal OTA deployments
-- **barbar.local** — Bar Mode development board
+- **testnodex.local** — stress-test board; safe to include in normal OTA deployments
+- **barbar.local** — Bar Mode development board (AP always-on, pylon_index=1)
+- **tiki0.local** — MEGA TIKI Zero, pylon_index=3
+- **tiki1.local** — MEGA TIKI One, pylon_index=2
+- **testredled.local** — unspecified, pylon_index=6
+- **pylon5d90.local** — unspecified, pylon_index=7
+- **booshstriker.local** — High Striker Boosh node (different firmware project)
 
 ## Web UI Config Inputs — formDirty Anti-Pattern (DO NOT VIOLATE)
 
@@ -54,9 +59,27 @@ Checkboxes are exempt from Rule 2 but **are NOT exempt from Rule 1**. Sync check
 
 Display-only `<span>` elements go OUTSIDE the formDirty block so they always update.
 
+## AP Soft-Access-Point
+
+- AP SSID: `FIRE_PYLON_<pylon_id>` (e.g. `FIRE_PYLON_BARBAR`). Max 21 chars for current node names, well under the 32-char WiFi limit.
+- AP IP: `10.1.2.3`. Captive portal DNS active when in AP mode.
+- AP is auto-enabled when WiFi fails at boot (saved to NVS); barbar has AP permanently on.
+
+**AP channel management (three-part rule — do not simplify):**
+
+1. **AP+STA mode** (STA connected to router): the single radio is locked to the router's channel. `SetupApMode()` reads `WiFi.channel()` before the mode switch and passes that to `softAP()`. Passing any other channel silently fails, leaving the default `ESP_Fxxxxxx` SSID.
+
+2. **AP-only mode** (no router): `softAP()` is called with `cfg_mesh_ch`. The default regulatory domain allows ch 1–11 only; ch 12–13 fail silently. A `softAP()` return-value check retries on ch 1 if the mesh channel is rejected.
+
+3. **STA-loss transition**: when the STA drops and the AP was running on the router's channel (not `cfg_mesh_ch`), the `wasConnected→false` block in the main loop immediately calls `StopApMode()` + `SetupApMode()` to restart the AP on `cfg_mesh_ch`. This ensures all nodes converge on the same channel within seconds of WAP loss.
+
+**Deployed mesh channel: 11.** Ch 11 is within the 1–11 regulatory range, so `softAP()` always succeeds on ch 11 without the ch-1 fallback. Do not change `cfg_mesh_ch` to 12 or 13 — `softAP()` will fail silently, restoring the `ESP_Fxxxxxx` SSID regression.
+
+**OLED channel badge:** `Ch:11` when hardware matches config. `C6*11` means hardware is on ch 6 (router's channel) while config is 11 — expected in AP+STA mode, resolves automatically when the router drops.
+
 ## ESP-NOW Mesh Protocol
 
-All nodes participate in a peer-to-peer ESP-NOW mesh on a configurable channel (default ch 1, NVS key `mesh_ch`). Key constants and structs are all in `src/main.cpp`.
+All nodes participate in a peer-to-peer ESP-NOW mesh on a configurable channel (NVS key `mesh_ch`, **deployed value: 11**). Key constants and structs are all in `src/main.cpp`.
 
 **Constants:**
 - `kMeshMagic = 0x4D455348UL` ("MESH") — first 4 bytes of every packet; quick sanity check
@@ -68,12 +91,25 @@ All nodes participate in a peer-to-peer ESP-NOW mesh on a configurable channel (
 **Packet structs** (all `__attribute__((packed))`):
 - `MeshBeaconPkt` — node announcement: node_id, pylon_index, role, uptime_s, batt_v, batt_pct, temp_f, fw_ver[32]
 - `MeshCommandPkt` — OSC relay: seq (dedup), osc_addr[32], osc_arg (float)
-- `MeshChanChangePkt` — coordinated channel switch: new_ch (1-13), apply_ms (countdown from receipt)
+- `MeshChanChangePkt` — coordinated channel switch: new_ch (1-11), apply_ms (countdown from receipt)
 
 **Channel management:**
-- In STA mode (WiFi connected): radio channel is controlled by the AP. Use `peer.channel = 0` so ESP-NOW follows the current WiFi channel. Do NOT call `esp_wifi_set_channel()` in STA mode.
-- In disconnected mode: pin radio to `cfg_mesh_ch` via `esp_wifi_set_channel()` in the WiFi disconnect event handler.
-- Coordinated channel change: broadcast `MeshChanChangePkt` with a 5s countdown from BARBAR's web UI. All receiving nodes arm a timer; PingTask (Core 0) applies the change when it fires. Saves to NVS. If STA-connected, NVS is updated but radio applies on next disconnect.
+- In STA mode (WiFi connected): radio channel is controlled by the AP. `peer.channel = 0` so ESP-NOW follows the current WiFi channel automatically.
+- In AP-only mode: radio is on the AP channel (`cfg_mesh_ch`, or ch 1 fallback). `peer.channel = 0` follows the AP channel.
+- Do NOT call `esp_wifi_set_channel()` while AP is active — the AP interface owns the channel; the call is a no-op or corrupts state.
+- Coordinated channel change: broadcast `MeshChanChangePkt` with a 5s countdown from BARBAR's web UI. All receiving nodes arm a timer; PingTask (Core 0) applies the change when it fires. Saves to NVS. Only use channels 1–11.
+
+**ESP-NOW interface selection — critical:**
+Both `MeshInit()` (broadcast peer) and `MeshUpsertPeer()` (unicast peers) select the interface at runtime:
+```cpp
+peer.ifidx = ap_active ? WIFI_IF_AP : WIFI_IF_STA;
+```
+In AP-only mode `WIFI_IF_STA` is unassociated — ESP-NOW through it is silently dropped (M:0). In AP+STA mode either interface works since they share the radio channel. **Never hardcode `WIFI_IF_STA`.**
+
+**WiFi reconnect behavior:**
+- `setAutoReconnect(false)` when mesh is enabled (reconnect scans disrupt ESP-NOW channel).
+- Main loop watchdog: `WiFi.reconnect()` every 30 s when no live peers; every **10 minutes** when live peers are present (brief ~5–10 s ESP-NOW disruption is acceptable vs. permanent WiFi loss).
+- After 10 min offline with AP inactive: hard reboot. AP-active nodes (barbar) never auto-reboot.
 
 **Receive callback** `MeshOnRecv` runs in WiFi task (Core 0). OSC commands are queued via `mesh_osc_queue` (FreeRTOS queue) for processing on Core 1. Do not block in the callback.
 
