@@ -1715,18 +1715,18 @@ DisplayPageLines BuildPingPageLines(const String &host, const PingStats &stats, 
   unsigned long since_success_ms = has_success ? (now_ms - last_success_ms) : 0;
   bool timing_out =
       (has_success && since_success_ms >= kPingTimeoutMs) || (!has_success && now_ms >= kPingTimeoutMs);
-  page.line1 = host + (timing_out ? " TIMEOUT" : (last_ok ? " OK" : " FAIL"));
+  page.line1 = TrimForDisplay(host + (timing_out ? " TIMEOUT" : (last_ok ? " OK" : " FAIL")), 15);
 
   if (stats.has_data()) {
-    page.line2 = "last " + String(stats.last_ms) + "ms";
+    page.line2 = TrimForDisplay("last " + String(stats.last_ms) + "ms", 15);
   } else {
     page.line2 = "last --";
   }
 
   if (has_success) {
-    page.line3 = "since " + FormatDurationHms(static_cast<uint32_t>(since_success_ms / 1000));
+    page.line3 = TrimForDisplay("since " + FormatDurationHms(static_cast<uint32_t>(since_success_ms / 1000)), 15);
   } else {
-    page.line3 = "since --:--:--";
+    page.line3 = "since --:--:--";  // exactly 14 chars, fits
   }
 
   if (stats.has_data()) {
@@ -1746,19 +1746,18 @@ DisplayPageLines BuildWifiMetricsPageLines(uint8_t page, unsigned long connected
                                            uint8_t disconnect_reason) {
   DisplayPageLines lines;
   if (page == 0) {
-    String ssid = TrimForDisplay(WiFi.SSID(), 20);
-    lines.line1 = "WiFi " + ssid;
-    lines.line2 = "RSSI " + String(WiFi.RSSI()) + "dBm";
-    lines.line3 = "IP " + WiFi.localIP().toString();
+    lines.line1 = "WiFi " + TrimForDisplay(WiFi.SSID(), 10);          // "WiFi " + 10 = 15 max
+    lines.line2 = TrimForDisplay("RSSI " + String(WiFi.RSSI()) + "dBm", 15);
+    lines.line3 = TrimForDisplay("IP " + WiFi.localIP().toString(), 15);
     if (connected_since_ms > 0) {
       lines.line4 = "UP " + FormatDurationHms(static_cast<uint32_t>((millis() - connected_since_ms) / 1000));
     } else {
       lines.line4 = "UP --:--:--";
     }
   } else {
-    lines.line1 = "RSN " + String(disconnect_reason) + " " + WifiDisconnectReasonToString(disconnect_reason);
-    lines.line2 = "SSID " + TrimForDisplay(WiFi.SSID(), 20);
-    lines.line3 = "RSSI " + String(WiFi.RSSI()) + "dBm";
+    lines.line1 = TrimForDisplay("RSN " + String(disconnect_reason) + " " + WifiDisconnectReasonToString(disconnect_reason), 15);
+    lines.line2 = "SSID " + TrimForDisplay(WiFi.SSID(), 10);          // "SSID " + 10 = 15 max
+    lines.line3 = TrimForDisplay("RSSI " + String(WiFi.RSSI()) + "dBm", 15);
     lines.line4 = "IP " + WiFi.localIP().toString();
   }
   return lines;
@@ -1770,9 +1769,9 @@ void ShowWifiMetricsPage(uint8_t page, unsigned long connected_since_ms, uint8_t
 
 DisplayPageLines BuildNodeConfigPageLines() {
   DisplayPageLines page;
-  page.line1 = "NODE CONFIG";
-  page.line2 = "ID: " + TrimForDisplay(pylon_id, 14);
-  page.line3 = "TRIG: " + String(trigger_event_count);
+  page.line1 = "NODE CONFIG";                                  // 11 chars, fits
+  page.line2 = "ID: " + TrimForDisplay(pylon_id, 11);        // "ID: " + 11 = 15 max
+  page.line3 = TrimForDisplay("TRIG: " + String(trigger_event_count), 15);
   page.line4 = "FW " + String(kFirmwareSemver);
   return page;
 }
@@ -1783,10 +1782,10 @@ void ShowNodeConfigPage() {
 
 DisplayPageLines BuildFirmwarePageLines() {
   DisplayPageLines page;
-  page.line1 = "FIRMWARE";
-  page.line2 = "VER " + String(kFirmwareSemver);
-  page.line3 = String(kFirmwareBuildDate);
-  page.line4 = String(kFirmwareBuildTime);
+  page.line1 = "FIRMWARE";                                              // 8 chars, fits
+  page.line2 = TrimForDisplay("VER " + String(kFirmwareSemver), 15);
+  page.line3 = TrimForDisplay(String(kFirmwareBuildDate), 15);          // "2026-05-06" = 10, fits
+  page.line4 = String(kFirmwareBuildTime);                              // line4 free
   return page;
 }
 
@@ -1826,34 +1825,34 @@ void ShowPylonPingPage() {
   } else {
     const uint32_t overall_avg = total_count ? static_cast<uint32_t>(total_sum / total_count) : 0;
     const int n = barmode_pylon_ping_count;
-    page.line2 = "avg " + String(overall_avg) + "ms N=" + String(n) +
-                 (lost_count ? " " + String(lost_count) + "x!" : " ok");
+    page.line2 = TrimForDisplay("avg " + String(overall_avg) + "ms N=" + String(n) +
+                 (lost_count ? " " + String(lost_count) + "x!" : " ok"), 15);
   }
-  page.line3 = (issue_n > 0) ? (String("!") + issue_ids[0] + " timeout") : "";
-  page.line4 = (issue_n > 1) ? (String("!") + issue_ids[1] + " timeout") : "";
+  page.line3 = TrimForDisplay((issue_n > 0) ? (String("!") + issue_ids[0] + " timeout") : "", 15);
+  page.line4 = (issue_n > 1) ? (String("!") + issue_ids[1] + " timeout") : "";  // line4 free
   RenderDisplayPage(page);
 }
 
 DisplayPageLines BuildSensorStatusPageLines() {
   DisplayPageLines page;
-  page.line1 = TrimForDisplay(pylon_id, 21);
+  page.line1 = TrimForDisplay(pylon_id, 15);
 
   if (isfinite(sensor_temp_f)) {
     float tempC = (sensor_temp_f - 32.0f) * 5.0f / 9.0f;
-    char buf[22];
-    snprintf(buf, sizeof(buf), "Temp %.1fF %.1fC", sensor_temp_f, tempC);
+    char buf[16];
+    snprintf(buf, sizeof(buf), "Temp %.0fF %.0fC", sensor_temp_f, tempC);  // "Temp 75F 24C" = 12
     page.line2 = buf;
   } else {
     page.line2 = "Temp --";
   }
 
   if (isfinite(sensor_battery_v) && isfinite(sensor_battery_pct)) {
-    char buf[22];
-    snprintf(buf, sizeof(buf), "Batt %.2fV  %.0f%%", sensor_battery_v, sensor_battery_pct);
+    char buf[16];
+    snprintf(buf, sizeof(buf), "Batt %.1fV %.0f%%", sensor_battery_v, sensor_battery_pct);  // "Batt 13.3V 87%" = 14
     page.line3 = buf;
   } else if (isfinite(sensor_battery_v)) {
-    char buf[22];
-    snprintf(buf, sizeof(buf), "Batt %.2fV  --%% ", sensor_battery_v);
+    char buf[16];
+    snprintf(buf, sizeof(buf), "Batt %.1fV --%%", sensor_battery_v);  // "Batt 13.3V --%" = 14
     page.line3 = buf;
   } else {
     page.line3 = "Batt --";
@@ -6695,9 +6694,8 @@ void ShowMeshPage() {
   // Rows y=16..48: peer list (left-aligned; y=56 is reserved for Ch:N)
   for (int i = 0; i < filled; i++) {
     display.setCursor(0, 16 + i * 8);
-    char pbuf[22];
-    snprintf(pbuf, sizeof(pbuf), "%-8s%3us q:%u%%",
-             peers[i].id, peers[i].age_s, peers[i].qual_pct);
+    char pbuf[14];  // max 13 chars + null — stays left of Ch:N badge at x=92
+    snprintf(pbuf, sizeof(pbuf), "%-8s %3u%%", peers[i].id, peers[i].qual_pct);
     display.print(pbuf);
   }
 
