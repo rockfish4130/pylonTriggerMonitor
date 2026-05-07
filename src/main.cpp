@@ -561,9 +561,8 @@ void RenderDisplayPage(const DisplayPageLines &page) {
   display.println(page.line2);
   display.println(page.line3);
   display.println(page.line4);
-  // M:N at y=0 (size=1, 8px), Ch:N at y=8 (size=1, 8px) — top-right corner.
-  // Rows 3-4 (y=16, y=24) are completely clear of badges.
-  DrawMeshBadge(0, 1);
+  // M:N at y=0 (size=2, 16px), Ch:N at y=16 — top-right corner.
+  DrawMeshBadge(0, 2);
   display.display();
 }
 
@@ -1929,8 +1928,8 @@ void ShowTempPctPage() {
   display.setCursor(x, yUnit);
   display.print("%");
 
-  // M:N at y=0 (size=1, 8px), Ch:N at y=8 — top-right, size-3 content stays left of badge
-  DrawMeshBadge(0, 1);
+  // M:N at y=0 (size=2, 16px), Ch:N at y=16 — top-right
+  DrawMeshBadge(0, 2);
   display.display();
 }
 
@@ -1985,8 +1984,8 @@ void ShowTimeVoltagePage() {
   display.setCursor(x, yUnit);
   display.print("V");
 
-  // M:N at y=0 (size=1, 8px), Ch:N at y=8 — top-right; y=0 is empty on this page (yNum=8)
-  DrawMeshBadge(0, 1);
+  // M:N at y=0 (size=2, 16px), Ch:N at y=16 — top-right; y=0..7 is empty on this page (yNum=8)
+  DrawMeshBadge(0, 2);
   display.display();
 }
 
