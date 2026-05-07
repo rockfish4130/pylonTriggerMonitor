@@ -509,12 +509,14 @@ struct DisplayPageLines {
   String line4;
 };
 
-// Draw the mesh status indicators, right-aligned, into the bottom-right corner.
-//   by        — y-coordinate for the M:N badge
-//   text_size — size of the M:N badge (1 = 8px tall, 2 = 16px tall)
-// Ch:N is always drawn at y=56 (last row), size=1, so it never moves regardless
-// of where M:N sits. Ch:N shows the actual hardware radio channel from the WiFi
-// driver (not cfg_mesh_ch). Shows "C<hw>*<cfg>" when they differ.
+// Draw the mesh status indicators right-aligned in the top-right corner.
+// Display is 128×32. M:N badge sits at row `by` in `text_size`; Ch:N sits
+// at `by + text_size*8` in size=1. Normal callers use DrawMeshBadge(0,1):
+//   y=0..7  M:N  (size=1, 8px)
+//   y=8..15 Ch:N (size=1, 8px)
+// This leaves rows 3-4 (y=16, y=24) fully clear of badge pixels.
+// The mesh page uses DrawMeshBadge(0,2) for a larger M:N badge.
+// Ch:N shows the actual HW channel; shows "C<hw>*<cfg>" when mismatched.
 // No-op if mesh is disabled. Caller must call display.display() afterward.
 static void DrawMeshBadge(int by, uint8_t text_size = 2) {
   if (!cfg_mesh_en) return;
@@ -534,8 +536,7 @@ static void DrawMeshBadge(int by, uint8_t text_size = 2) {
   display.setCursor(128 - w, by);
   display.print(buf);
 
-  // Ch:N — fixed at y=56 (last row), size=1, always right-aligned.
-  // Anchoring to the bottom means it never collides with page content above.
+  // Ch:N — right-aligned just below the M:N badge (by + text_size*8), size=1.
   uint8_t hw_ch = 0;
   wifi_second_chan_t hw_sec = WIFI_SECOND_CHAN_NONE;
   esp_wifi_get_channel(&hw_ch, &hw_sec);
@@ -547,7 +548,7 @@ static void DrawMeshBadge(int by, uint8_t text_size = 2) {
   }
   const int ch_w = static_cast<int>(strlen(ch_buf)) * 6;
   display.setTextSize(1);
-  display.setCursor(128 - ch_w, 56);
+  display.setCursor(128 - ch_w, by + text_size * 8);
   display.print(ch_buf);
 }
 
@@ -560,8 +561,9 @@ void RenderDisplayPage(const DisplayPageLines &page) {
   display.println(page.line2);
   display.println(page.line3);
   display.println(page.line4);
-  // M:N at y=48 (size=1), Ch:N at y=56 — both bottom-right, clear of 4 content lines (y=0..31)
-  DrawMeshBadge(48, 1);
+  // M:N at y=0 (size=1, 8px), Ch:N at y=8 (size=1, 8px) — top-right corner.
+  // Rows 3-4 (y=16, y=24) are completely clear of badges.
+  DrawMeshBadge(0, 1);
   display.display();
 }
 
@@ -1927,8 +1929,8 @@ void ShowTempPctPage() {
   display.setCursor(x, yUnit);
   display.print("%");
 
-  // M:N at y=48 (size=1), Ch:N at y=56 — bottom-right, clear of size-3 content (y=0..31)
-  DrawMeshBadge(48, 1);
+  // M:N at y=0 (size=1, 8px), Ch:N at y=8 — top-right, size-3 content stays left of badge
+  DrawMeshBadge(0, 1);
   display.display();
 }
 
@@ -1983,8 +1985,8 @@ void ShowTimeVoltagePage() {
   display.setCursor(x, yUnit);
   display.print("V");
 
-  // M:N at y=48 (size=1), Ch:N at y=56 — bottom-right, clear of size-2 content (y=8..31)
-  DrawMeshBadge(48, 1);
+  // M:N at y=0 (size=1, 8px), Ch:N at y=8 — top-right; y=0 is empty on this page (yNum=8)
+  DrawMeshBadge(0, 1);
   display.display();
 }
 
@@ -6638,11 +6640,11 @@ void MeshInit() {
 }
 
 // OLED page: shows mesh status and up to 5 peers.
-// Custom layout — mixed text sizes:
-//   y=0..15  textSize=2  "M:N" badge (top-right, via DrawMeshBadge)
+// Display is 128×32. Custom layout:
+//   y=0..15  textSize=2  "M:N" badge (top-right, via DrawMeshBadge(0,2))
 //   y=0..7   textSize=1  "MESH" label (top-left, fits left of badge)
-//   y=16..55 textSize=1  up to 5 peer rows (8 px each, left-aligned)
-//   y=56..63 textSize=1  "Ch:N" or "C<hw>*<cfg>" (bottom-right, via DrawMeshBadge)
+//   y=16..23 textSize=1  "Ch:N" badge (top-right) + first peer row (left)
+//   y=24..31 textSize=1  second peer row (left); that's all that fits on 32px
 void ShowMeshPage() {
   // --- Collect peer data under mutex ---
   int peer_count = 0;
