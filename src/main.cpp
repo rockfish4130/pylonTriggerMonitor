@@ -4162,18 +4162,33 @@ void HandleConfigApApi() {
 }
 
 void SetupApMode() {
-  const String ssid = "PYLON_" + pylon_id;
-  // Use the mesh channel for the AP so ESP-NOW and the AP share the same channel.
-  // Without this, softAP defaults to ch 1 while ESP-NOW is pinned to cfg_mesh_ch,
-  // causing complete ESP-NOW silence while AP is active.
-  const uint8_t ap_ch = cfg_mesh_en ? (uint8_t)cfg_mesh_ch : 1;
-  if (WiFi.status() == WL_CONNECTED) {
+  const String ssid = "FIRE_PYLON_" + pylon_id;
+  const bool sta_connected = WiFi.status() == WL_CONNECTED;
+  // AP channel strategy:
+  // - AP+STA mode: radio is shared; AP channel must match the STA channel.
+  //   Read the live STA channel before the mode switch.
+  // - AP-only mode: use mesh channel so ESP-NOW stays on the same channel.
+  //   Default regulatory domain allows ch 1-11 only; cap at 11 to prevent
+  //   softAP from failing silently and falling back to the ESP default SSID.
+  uint8_t ap_ch;
+  if (sta_connected) {
+    ap_ch = (uint8_t)WiFi.channel();
+    if (ap_ch == 0) ap_ch = 1;
+  } else {
+    const uint8_t mesh_ch = cfg_mesh_en ? (uint8_t)cfg_mesh_ch : 1;
+    ap_ch = (mesh_ch >= 1 && mesh_ch <= 11) ? mesh_ch : 1;
+  }
+  if (sta_connected) {
     WiFi.mode(WIFI_AP_STA);
   } else {
     WiFi.mode(WIFI_AP);
   }
   WiFi.softAPConfig(IPAddress(10, 1, 2, 3), IPAddress(10, 1, 2, 3), IPAddress(255, 255, 255, 0));
-  WiFi.softAP(ssid.c_str(), nullptr, ap_ch);
+  bool ap_ok = WiFi.softAP(ssid.c_str(), nullptr, ap_ch);
+  if (!ap_ok) {
+    Console.printf("[AP] softAP ch=%u failed, retrying ch=1\n", ap_ch);
+    ap_ok = WiFi.softAP(ssid.c_str(), nullptr, 1);
+  }
   delay(100);
   // WiFi mode change tears down and restarts the WiFi driver, which invalidates
   // the esp_now_init() done at boot. Re-init ESP-NOW so mesh keeps working.
@@ -4182,7 +4197,7 @@ void SetupApMode() {
   if (cfg_mesh_en && mesh_initialized) MeshInit();
   dnsServer.start(53, "*", IPAddress(10, 1, 2, 3));
   ap_active = true;
-  Console.printf("[AP] started SSID: %s ch=%u\n", ssid.c_str(), ap_ch);
+  Console.printf("[AP] started SSID: %s ch=%u ok=%d\n", ssid.c_str(), ap_ch, (int)ap_ok);
   Console.println("[AP] IP: 10.1.2.3, captive DNS active");
   SetupWebServer();
   // Captive portal detection paths for iOS/Android/Windows
