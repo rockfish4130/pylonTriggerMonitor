@@ -324,6 +324,7 @@ struct __attribute__((packed)) MeshPadEventPkt {
   uint32_t magic;
   uint8_t  version;
   uint8_t  type;       // kMeshPktPadEvent
+  uint16_t seq;        // sender's sequence number; used for dedup across nodes
   uint8_t  note;
   uint8_t  velocity;
   uint8_t  channel;
@@ -6441,7 +6442,6 @@ constexpr int kMeshOscQueueDepth = 8;
 static QueueHandle_t mesh_osc_queue = nullptr;
 
 // Pad event bridge queue: MeshOnRecv → PingTask → rpiboosh /send_virtual_midi.
-// Only populated on BARBAR (barmode_active). Items are tiny; 8 slots is plenty.
 struct MeshPadEvent {
   uint8_t note;
   uint8_t velocity;
@@ -6450,6 +6450,18 @@ struct MeshPadEvent {
 };
 constexpr int kMeshPadQueueDepth = 8;
 static QueueHandle_t mesh_pad_queue = nullptr;
+
+// Per-remote dedup table for type-4 pad events. Keyed by remote_id; 8 slots covers
+// all realistic remotes. Oldest entry evicted when full. Accessed only from MeshOnRecv
+// (WiFi task, Core 0) so no mutex needed.
+struct PadDedupEntry {
+  char     remote_id[16];
+  uint16_t last_seq;
+  uint32_t last_ms;
+  bool     active;
+};
+constexpr int kPadDedupSlots = 8;
+static PadDedupEntry pad_dedup[kPadDedupSlots];
 
 // ESP-NOW receive callback — runs in WiFi task context (Core 0).
 static void MeshOnRecv(const uint8_t *mac, const uint8_t *data, int len) {
@@ -6488,6 +6500,25 @@ static void MeshOnRecv(const uint8_t *mac, const uint8_t *data, int len) {
     if (mesh_pad_queue) {
       const MeshPadEventPkt *p = reinterpret_cast<const MeshPadEventPkt *>(data);
       if (p->magic != kMeshMagic) return;
+      // Dedup: each remote broadcasts to all nodes; only forward the first arrival.
+      const uint32_t now_ms = (uint32_t)millis();
+      int match = -1, oldest_i = 0;
+      for (int i = 0; i < kPadDedupSlots; i++) {
+        if (pad_dedup[i].active && strncmp(pad_dedup[i].remote_id, p->remote_id, 16) == 0) {
+          match = i; break;
+        }
+        if (!pad_dedup[i].active || now_ms - pad_dedup[i].last_ms > now_ms - pad_dedup[oldest_i].last_ms)
+          oldest_i = i;
+      }
+      const int idx = (match >= 0) ? match : oldest_i;
+      if (match < 0) {
+        strlcpy(pad_dedup[idx].remote_id, p->remote_id, sizeof(pad_dedup[idx].remote_id));
+        pad_dedup[idx].active = true;
+      } else if (pad_dedup[idx].last_seq == p->seq && now_ms - pad_dedup[idx].last_ms < 2000) {
+        return;  // duplicate from another node forwarding the same broadcast
+      }
+      pad_dedup[idx].last_seq = p->seq;
+      pad_dedup[idx].last_ms  = now_ms;
       MeshPadEvent ev;
       ev.note     = p->note;
       ev.velocity = p->velocity;
