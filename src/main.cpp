@@ -7290,15 +7290,8 @@ void PingTask(void *) {
       }
     }
 
-    if (WiFi.status() != WL_CONNECTED) {
-      hasIp = false;
-      pingWasDown = false;
-      stats = PingStats{};
-      vTaskDelay(pdMS_TO_TICKS(500));
-      continue;
-    }
-
-    // Pad event bridge — drain first, before ping/registry, to minimise latency.
+    // Pad event bridge — runs even when STA is down (mesh works in AP-only mode).
+    // FAF coincidence detection needs no WiFi; HTTP POST fails gracefully if offline.
     // Uses cached IP (target_ip_string) to avoid mDNS lookup on every POST.
     // Coincidence table for group pattern detection (Core 0 only — no mutex).
     struct GroupCoincEntry { char remote_id[16]; uint32_t press_ms; };
@@ -7375,6 +7368,14 @@ void PingTask(void *) {
         memset(group_coinc, 0, sizeof(group_coinc));
         group_coinc_first_press_ms = 0;
       }
+    }
+
+    if (WiFi.status() != WL_CONNECTED) {
+      hasIp = false;
+      pingWasDown = false;
+      stats = PingStats{};
+      vTaskDelay(pdMS_TO_TICKS(500));
+      continue;
     }
 
     // Remote telemetry bridge: drain mesh_telem_queue, publish MQTT + update remote table.
