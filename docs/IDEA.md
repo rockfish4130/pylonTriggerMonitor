@@ -2,6 +2,10 @@
 
 Speculative features and directions — not committed to the roadmap.
 
+## Remote Find-a-Friend Mode
+
+N people each hold an ESP-NOW remote. When multiple people press their buttons at approximately the same time, the pylons recognize the synchronized press and trigger a secret "reward" fire pattern not available through any other means. The more people in sync, the cooler the pattern.
+
 ## Choreography Protocol
 
 Define a lightweight timing protocol so RPIBOOSH can schedule fire events at specific offsets across multiple pylons without relying on round-trip HTTP latency. Options:
@@ -124,3 +128,9 @@ whichever barmode button does the steam train needs to do the command equivalent
 then tell me the exact path of the FW binary as I will have to manually upload it.
 
 any questions?
+
+
+=======
+
+Will a PYLON using ESPNOW also be able to be a wifi client? Can it be a wifi AP mode?
+Ensure the OLED clearly shows when ESPNOW is active. Print relavent metrics and report details of other PYLONs on the network. Include this in the web status page as well.
