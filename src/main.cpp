@@ -6793,7 +6793,8 @@ struct MeshPadEvent {
   char     remote_id[16];
 };
 constexpr int kMeshPadQueueDepth = 8;
-static QueueHandle_t mesh_pad_queue = nullptr;
+static QueueHandle_t mesh_pad_queue     = nullptr;
+static QueueHandle_t mesh_pad_faf_queue = nullptr;  // Core 1 FAF coincidence detection
 
 // Remote telemetry queue: MeshOnRecv → PingTask → rpiboosh MQTT retained publish.
 // Payload is pre-formatted in the callback so PingTask just calls publish().
@@ -6879,6 +6880,7 @@ static void MeshOnRecv(const uint8_t *mac, const uint8_t *data, int len) {
       ev.seq      = p->seq;
       strlcpy(ev.remote_id, p->remote_id, sizeof(ev.remote_id));
       xQueueSendFromISR(mesh_pad_queue, &ev, nullptr);
+      if (mesh_pad_faf_queue) xQueueSendFromISR(mesh_pad_faf_queue, &ev, nullptr);
     }
   } else if (pkt_type == kMeshPktRemoteTelem &&
              len >= (int)offsetof(MeshRemoteTelemPkt, hostname)) {
@@ -7054,7 +7056,8 @@ void MeshInit() {
   // Create FreeRTOS objects exactly once; reuse across re-inits.
   if (!mesh_peers_mutex) mesh_peers_mutex = xSemaphoreCreateMutex();
   if (!mesh_osc_queue)   mesh_osc_queue   = xQueueCreate(kMeshOscQueueDepth, sizeof(MeshOscEvent));
-  if (!mesh_pad_queue)   mesh_pad_queue   = xQueueCreate(kMeshPadQueueDepth, sizeof(MeshPadEvent));
+  if (!mesh_pad_queue)     mesh_pad_queue     = xQueueCreate(kMeshPadQueueDepth, sizeof(MeshPadEvent));
+  if (!mesh_pad_faf_queue) mesh_pad_faf_queue = xQueueCreate(16, sizeof(MeshPadEvent));
   if (!mesh_telem_queue)  mesh_telem_queue  = xQueueCreate(kMeshTelemQueueDepth, sizeof(MeshTelemQueueItem));
   if (!mesh_remote_mutex) mesh_remote_mutex = xSemaphoreCreateMutex();
   memset(mesh_peers, 0, sizeof(mesh_peers));
@@ -7344,47 +7347,11 @@ void PingTask(void *) {
 
     // Pad event bridge — runs even when STA is down (mesh works in AP-only mode).
     // FAF coincidence detection needs no WiFi; HTTP POST fails gracefully if offline.
-    // Uses cached IP (target_ip_string) to avoid mDNS lookup on every POST.
-    // Coincidence table for group pattern detection (Core 0 only — no mutex).
-    struct GroupCoincEntry { char remote_id[16]; uint32_t press_ms; };
-    static GroupCoincEntry group_coinc[8] = {};
-    static uint32_t group_coinc_last_trigger_ms = 0;
-    static uint32_t group_coinc_first_press_ms  = 0;
-
+    // Pad bridge: forward pad events to rpiboosh via HTTP POST.
+    // Coincidence/FAF detection has moved to PollFafQueue() on Core 1 — no network dependency there.
     if (mesh_pad_queue) {
       MeshPadEvent pev;
       while (xQueueReceive(mesh_pad_queue, &pev, 0) == pdTRUE) {
-        // Coincidence detection runs FIRST — no network dependency.
-        // The HTTP bridge below may block for up to 200ms per event when rpiboosh
-        // is unreachable; doing detection first keeps press_ms accurate and prevents
-        // the stale-eviction window from expiring before all remotes are recorded.
-        if (pev.note == 7 && pev.velocity == 0x7D && cfg_group_pattern_en &&
-            group_pattern_pending_n == 0) {
-          const uint32_t nc = (uint32_t)millis();
-          const uint32_t cooldown_elapsed = nc - group_coinc_last_trigger_ms;
-          if (group_coinc_last_trigger_ms == 0 || cooldown_elapsed >= cfg_grp_cool_ms) {
-            int slot = -1, empty_slot = -1;
-            for (int i = 0; i < 8; i++) {
-              if (group_coinc[i].remote_id[0] != '\0') {
-                if (nc - group_coinc[i].press_ms > cfg_grp_win_ms) {
-                  group_coinc[i].remote_id[0] = '\0';
-                } else if (strncmp(group_coinc[i].remote_id, pev.remote_id, 16) == 0) {
-                  slot = i;
-                }
-              }
-              if (group_coinc[i].remote_id[0] == '\0' && empty_slot < 0) empty_slot = i;
-            }
-            const int target = (slot >= 0) ? slot : empty_slot;
-            if (target >= 0) {
-              strlcpy(group_coinc[target].remote_id, pev.remote_id, 16);
-              group_coinc[target].press_ms = nc;
-            }
-            if (group_coinc_first_press_ms == 0) group_coinc_first_press_ms = nc;
-          }
-        }
-
-        // HTTP bridge to rpiboosh — only when WiFi STA is up and IP is resolved.
-        // Skip entirely in AP-only / mesh-only mode to avoid blocking the drain loop.
         if (WiFi.status() == WL_CONNECTED && target_ip_string.length() > 0) {
           const String url = "http://" + target_ip_string + ":5000/send_virtual_midi";
           const String body = "{\"note\":" + String(pev.note) +
@@ -7404,27 +7371,6 @@ void PingTask(void *) {
           Console.printf("[PadBridge] note=%u vel=%u ch=%u -> skipped (from %.15s)\n",
                          pev.note, pev.velocity, pev.channel, pev.remote_id);
         }
-      }
-    }
-
-    // Group pattern window-expiry: after draining all queued presses, fire if window elapsed.
-    if (group_coinc_first_press_ms != 0 && group_pattern_pending_n == 0) {
-      const uint32_t nc2 = (uint32_t)millis();
-      const bool in_cooldown = group_coinc_last_trigger_ms != 0 &&
-                               (nc2 - group_coinc_last_trigger_ms) < cfg_grp_cool_ms;
-      if (nc2 - group_coinc_first_press_ms >= cfg_grp_win_ms || in_cooldown) {
-        if (!in_cooldown) {
-          int cnt = 0;
-          for (int i = 0; i < 8; i++)
-            if (group_coinc[i].remote_id[0] != '\0') cnt++;
-          if (cnt >= 2) {
-            group_pattern_pending_n = (uint8_t)(cnt > 8 ? 8 : cnt);
-            group_coinc_last_trigger_ms = nc2;
-            Console.printf("[GroupPat] window closed N=%d\n", cnt);
-          }
-        }
-        memset(group_coinc, 0, sizeof(group_coinc));
-        group_coinc_first_press_ms = 0;
       }
     }
 
@@ -7848,6 +7794,65 @@ void PingTask(void *) {
   }
 }
 
+// ---- FAF coincidence detection (Core 1) -------------------------------------
+// Drains mesh_pad_faf_queue every loop() iteration with no network I/O.
+// Runs on Core 1, same as the SEQ engine that reads group_pattern_pending_n.
+void PollFafQueue() {
+  if (!mesh_pad_faf_queue) return;
+  struct GroupCoincEntry { char remote_id[16]; uint32_t press_ms; };
+  static GroupCoincEntry group_coinc[8]       = {};
+  static uint32_t group_coinc_last_trigger_ms = 0;
+  static uint32_t group_coinc_first_press_ms  = 0;
+
+  MeshPadEvent pev;
+  while (xQueueReceive(mesh_pad_faf_queue, &pev, 0) == pdTRUE) {
+    if (pev.note == 7 && pev.velocity == 0x7D && cfg_group_pattern_en &&
+        group_pattern_pending_n == 0) {
+      const uint32_t nc = (uint32_t)millis();
+      if (group_coinc_last_trigger_ms == 0 ||
+          (nc - group_coinc_last_trigger_ms) >= cfg_grp_cool_ms) {
+        int slot = -1, empty_slot = -1;
+        for (int i = 0; i < 8; i++) {
+          if (group_coinc[i].remote_id[0] != '\0') {
+            if (nc - group_coinc[i].press_ms > cfg_grp_win_ms) {
+              group_coinc[i].remote_id[0] = '\0';
+            } else if (strncmp(group_coinc[i].remote_id, pev.remote_id, 16) == 0) {
+              slot = i;
+            }
+          }
+          if (group_coinc[i].remote_id[0] == '\0' && empty_slot < 0) empty_slot = i;
+        }
+        const int target = (slot >= 0) ? slot : empty_slot;
+        if (target >= 0) {
+          strlcpy(group_coinc[target].remote_id, pev.remote_id, 16);
+          group_coinc[target].press_ms = nc;
+        }
+        if (group_coinc_first_press_ms == 0) group_coinc_first_press_ms = nc;
+      }
+    }
+  }
+
+  if (group_coinc_first_press_ms != 0 && group_pattern_pending_n == 0) {
+    const uint32_t nc2 = (uint32_t)millis();
+    const bool in_cooldown = group_coinc_last_trigger_ms != 0 &&
+                             (nc2 - group_coinc_last_trigger_ms) < cfg_grp_cool_ms;
+    if (nc2 - group_coinc_first_press_ms >= cfg_grp_win_ms || in_cooldown) {
+      if (!in_cooldown) {
+        int cnt = 0;
+        for (int i = 0; i < 8; i++)
+          if (group_coinc[i].remote_id[0] != '\0') cnt++;
+        if (cnt >= 2) {
+          group_pattern_pending_n = (uint8_t)(cnt > 8 ? 8 : cnt);
+          group_coinc_last_trigger_ms = nc2;
+          Console.printf("[GroupPat] window closed N=%d\n", cnt);
+        }
+      }
+      memset(group_coinc, 0, sizeof(group_coinc));
+      group_coinc_first_press_ms = 0;
+    }
+  }
+}
+
 // ---- Main loop --------------------------------------------------------------
 
 void loop() {
@@ -7859,6 +7864,7 @@ void loop() {
   static uint8_t identPhase = 0;
 
   PollMeshOscQueue();
+  PollFafQueue();
   PollBlinkLeds();
   PollSosBlueLed();
   PollSosYellowLed();  // overrides yellow with fast SOS when mesh_en + no WiFi + 0 peers
