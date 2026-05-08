@@ -274,6 +274,8 @@ struct MeshRemoteRecord {
   uint32_t press_yellow;
   uint8_t  mode;
   int8_t   rssi;
+  char     hostname[40];
+  char     ip[16];
   uint32_t last_seen_ms;
 };
 static MeshRemoteRecord  mesh_remote_table[kMeshRemoteSlots];
@@ -367,6 +369,9 @@ struct __attribute__((packed)) MeshRemoteTelemPkt {
   uint32_t press_yellow;
   uint8_t  mode;           // 0 = wifi, 1 = mesh
   int8_t   rssi;           // WiFi RSSI; 0 in mesh mode
+  // v2 tail fields — absent in older firmware; check len before reading
+  char     hostname[40];   // mDNS hostname without .local, e.g. "remotec3-4fa8"
+  char     ip[16];         // last-known WiFi IP as dotted-decimal, or ""
 };
 
 struct MeshPeerInfo {
@@ -3811,6 +3816,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         let h='<table style="border-collapse:collapse;font-size:13px;width:100%"><thead><tr style="border-bottom:1px solid var(--border)">'
           +'<th style="padding:4px 8px;text-align:left">Remote ID</th>'
           +'<th style="padding:4px 8px;text-align:left">Description</th>'
+          +'<th style="padding:4px 8px;text-align:left">Host / IP</th>'
           +'<th style="padding:4px 8px;text-align:left">MAC</th>'
           +'<th style="padding:4px 8px;text-align:right">Mode</th>'
           +'<th style="padding:4px 8px;text-align:right">RSSI</th>'
@@ -3825,9 +3831,13 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           const mode=r.mode===0?'WiFi':'Mesh';
           const upH=Math.floor(r.uptime_s/3600),upM=Math.floor((r.uptime_s%3600)/60),upS=r.uptime_s%60;
           const upStr=(upH?upH+'h ':'')+(upM?upM+'m ':'')+upS+'s';
+          const hnLink=r.hostname?`<a href="http://${r.hostname}.local" target="_blank">${r.hostname}.local</a>`:'';
+          const ipLink=r.ip?`<a href="http://${r.ip}" target="_blank">${r.ip}</a>`:'';
+          const hostCell=hnLink&&ipLink?`${hnLink}<br><span style="font-size:11px;color:var(--muted)">${ipLink}</span>`:hnLink||ipLink||'&mdash;';
           h+=`<tr style="border-bottom:1px solid var(--border);${op}">`
             +`<td style="padding:4px 8px">${r.remote_id}</td>`
             +`<td style="padding:4px 8px">${r.description}</td>`
+            +`<td style="padding:4px 8px">${hostCell}</td>`
             +`<td style="padding:4px 8px;font-size:11px">${r.mac}</td>`
             +`<td style="padding:4px 8px;text-align:right">${mode}</td>`
             +`<td style="padding:4px 8px;text-align:right">${r.rssi} dBm</td>`
@@ -3953,7 +3963,9 @@ void HandleMeshRemotesApi() {
       out += ",\"rssi\":";          out += r.rssi;
       out += ",\"last_seen_s\":";   out += (age_ms / 1000);
       out += ",\"stale\":";         out += (age_ms > kMeshRemoteStaleMs ? "true" : "false");
-      out += '}';
+      out += ",\"hostname\":\"";    out += r.hostname;
+      out += "\",\"ip\":\"";        out += r.ip;
+      out += "\"}";
     }
     xSemaphoreGive(mesh_remote_mutex);
   }
@@ -6657,12 +6669,16 @@ static void MeshOnRecv(const uint8_t *mac, const uint8_t *data, int len) {
       strlcpy(ev.remote_id, p->remote_id, sizeof(ev.remote_id));
       xQueueSendFromISR(mesh_pad_queue, &ev, nullptr);
     }
-  } else if (pkt_type == kMeshPktRemoteTelem && len >= (int)sizeof(MeshRemoteTelemPkt)) {
+  } else if (pkt_type == kMeshPktRemoteTelem &&
+             len >= (int)offsetof(MeshRemoteTelemPkt, hostname)) {
     if (mesh_telem_queue) {
       MeshTelemQueueItem item;
-      memcpy(&item.pkt, data, sizeof(item.pkt));
+      memset(&item.pkt, 0, sizeof(item.pkt));
+      memcpy(&item.pkt, data, min((size_t)len, sizeof(item.pkt)));
       item.pkt.remote_id[15]   = '\0';
       item.pkt.description[31] = '\0';
+      item.pkt.hostname[39]    = '\0';
+      item.pkt.ip[15]          = '\0';
       memcpy(item.src_mac, mac, 6);
       xQueueSendFromISR(mesh_telem_queue, &item, nullptr);
     }
@@ -7138,11 +7154,13 @@ void PingTask(void *) {
           snprintf(payload, sizeof(payload),
                    "{\"remoteID\":\"%s\",\"description\":\"%s\",\"mac\":\"%s\","
                    "\"uptime_s\":%lu,\"press_red\":%lu,\"press_yellow\":%lu,"
-                   "\"mode\":\"%s\",\"rssi\":%d,\"forwarded_by\":\"%s\"}",
+                   "\"mode\":\"%s\",\"rssi\":%d,\"forwarded_by\":\"%s\","
+                   "\"hostname\":\"%s\",\"ip\":\"%s\"}",
                    item.pkt.remote_id, item.pkt.description, remMac,
                    (unsigned long)item.pkt.uptime_s, (unsigned long)item.pkt.press_red,
                    (unsigned long)item.pkt.press_yellow,
-                   item.pkt.mode ? "mesh" : "wifi", (int)item.pkt.rssi, pylon_id.c_str());
+                   item.pkt.mode ? "mesh" : "wifi", (int)item.pkt.rssi, pylon_id.c_str(),
+                   item.pkt.hostname, item.pkt.ip);
           const bool ok = mqttClient.publish(topic, payload, true);
           Console.printf("[Telem] MQTT %s -> %s\n", topic, ok ? "ok" : "fail");
         }
@@ -7170,6 +7188,8 @@ void PingTask(void *) {
           r.press_yellow = item.pkt.press_yellow;
           r.mode         = item.pkt.mode;
           r.rssi         = item.pkt.rssi;
+          strlcpy(r.hostname, item.pkt.hostname, sizeof(r.hostname));
+          strlcpy(r.ip,       item.pkt.ip,       sizeof(r.ip));
           r.last_seen_ms = now_t;
           xSemaphoreGive(mesh_remote_mutex);
         }
