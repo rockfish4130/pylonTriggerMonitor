@@ -4442,6 +4442,7 @@ void SetupWebServer();  // forward declaration
 void PingTask(void *);      // forward declaration
 void TempPollTask(void *);  // forward declaration
 void RpiTask(void *);       // forward declaration
+void EnqueueRpiNote(uint8_t note, uint8_t velocity, uint32_t delay_ms = 0);  // forward declaration
 void StartSequence(SeqType type);  // forward declaration
 void AbortSequence();              // forward declaration
 void MeshBroadcastOsc(const char *osc_addr, float osc_arg);          // forward declaration
@@ -6367,7 +6368,7 @@ void PollBarModeButtons() {
         // (e.g. quick-tap → state 1 mid-pass; closes still time out correctly).
         for (auto &c : red_seq_closes) {
           if (c.active && now >= c.close_at) {
-            SendOscToPylonTarget(kOscAddress, 0.0f, c.target);
+            if (c.target.is_self) SendOscToPylonTarget(kOscAddress, 0.0f, c.target);
             c.active = false;
           }
         }
@@ -6399,6 +6400,7 @@ void PollBarModeButtons() {
             red_seq_released_early = false;
             barmode_act_counts[4]++;
             red_state          = 4;
+            EnqueueRpiNote(0x1e, 127);
             Console.printf("[BarMode] Red: seq start, %d pylons (incl. self)\n", red_seq_count);
           } else if (red_state == 1 && now - red_press1_ms <= 500) {
             // Second tap in triple-tap sequence
@@ -6426,7 +6428,8 @@ void PollBarModeButtons() {
             const bool first_pass_done = (red_seq_fires >= red_seq_count);
             if (held < 400 && now < red_recovery_until) {
               // Recovery active: flush all closes immediately and stop
-              for (auto &c : red_seq_closes) { if (c.active) { SendOscToPylonTarget(kOscAddress, 0.0f, c.target); c.active = false; } }
+              for (auto &c : red_seq_closes) { if (c.active) { if (c.target.is_self) SendOscToPylonTarget(kOscAddress, 0.0f, c.target); c.active = false; } }
+              EnqueueRpiNote(0x1e, 0);
               barmode_recovery_wait_until_ms = red_recovery_until;
               red_state = 0;
               Console.printf("[BarMode] Red: quick-tap blocked by recovery (%lums held)\n", held);
@@ -6434,6 +6437,7 @@ void PollBarModeButtons() {
               // Quick tap: go to state 1 immediately so the steam gesture window opens NOW.
               // Any open valves close on their timers via the always-running drain loop above.
               // Do NOT set released_early — no more steps fire (state != 4 after this).
+              EnqueueRpiNote(0x1e, 0);
               red_state = 1;
               red_press1_ms = now;
               Console.printf("[BarMode] Red: quick-tap (%lums), steam window open\n", held);
@@ -6443,12 +6447,13 @@ void PollBarModeButtons() {
               Console.printf("[BarMode] Red: long-hold released early (%d/%d fired), completing pass\n", red_seq_fires, red_seq_count);
             } else {
               // Long hold, pass done: flush and stop
-              for (auto &c : red_seq_closes) { if (c.active) { SendOscToPylonTarget(kOscAddress, 0.0f, c.target); c.active = false; } }
+              for (auto &c : red_seq_closes) { if (c.active) { if (c.target.is_self) SendOscToPylonTarget(kOscAddress, 0.0f, c.target); c.active = false; } }
+              EnqueueRpiNote(0x1e, 0);
               red_state = 0;
               Console.printf("[BarMode] Red: seq end (%lums)\n", held);
             }
           } else if (red_state == 3) {
-            SendOscFloatToAllPylons(kOscAddrSteam, 0.0f);
+            EnqueueRpiNote(0x0e, 0);
             if (!action_steam_dis) AbortSequence();
             red_state = 0;
             if (barmode_red_recovery_ms > 0) red_recovery_until = now + ApplyTempMult(barmode_red_recovery_ms);
@@ -6460,7 +6465,8 @@ void PollBarModeButtons() {
         if (red_state == 4) {
           if (now - red_seq_start_ms >= barmode_red_seq_max_ms) {
             // Max time elapsed: stop
-            for (auto &c : red_seq_closes) { if (c.active) { SendOscToPylonTarget(kOscAddress, 0.0f, c.target); c.active = false; } }
+            for (auto &c : red_seq_closes) { if (c.active) { if (c.target.is_self) SendOscToPylonTarget(kOscAddress, 0.0f, c.target); c.active = false; } }
+            EnqueueRpiNote(0x1e, 0);
             red_state = 0;
             Console.println("[BarMode] Red: seq max time");
           } else {
@@ -6469,6 +6475,7 @@ void PollBarModeButtons() {
             for (auto &c : red_seq_closes) { if (c.active) { any_close_active = true; break; } }
             if (red_seq_released_early && red_seq_fires >= red_seq_count) {
               if (!any_close_active) {
+                EnqueueRpiNote(0x1e, 0);
                 red_state = 0;
                 Console.println("[BarMode] Red: pass complete after early release, stopped");
               }
@@ -6480,8 +6487,8 @@ void PollBarModeButtons() {
                 int slot = -1;
                 for (int i = 0; i < 16; i++) { if (!red_seq_closes[i].active) { slot = i; break; } }
                 if (slot < 0) slot = 0;  // all full (shouldn't happen with ≤16 pylons) — reuse slot 0
-                // Fire open to current position
-                SendOscToPylonTarget(kOscAddress, 1.0f, red_seq_targets[red_seq_pos]);
+                // Fire open to self only; remote pylons handled by rpiboosh via MIDI note 0x1e
+                if (red_seq_targets[red_seq_pos].is_self) SendOscToPylonTarget(kOscAddress, 1.0f, red_seq_targets[red_seq_pos]);
                 red_seq_closes[slot].target   = red_seq_targets[red_seq_pos];
                 red_seq_closes[slot].close_at = now + barmode_red_seq_valve_ms;
                 red_seq_closes[slot].active   = true;
@@ -7241,7 +7248,7 @@ void TempPollTask(void *) {
 // Enqueue a MIDI note to be POSTed to rpiboosh /send_virtual_midi.
 // delay_ms: how long to wait after enqueue before firing (0 = immediate).
 // Call from any core; non-blocking (drops if queue full).
-void EnqueueRpiNote(uint8_t note, uint8_t velocity, uint32_t delay_ms = 0) {
+void EnqueueRpiNote(uint8_t note, uint8_t velocity, uint32_t delay_ms) {
   if (!rpi_cmd_queue) return;
   const RpiCmd cmd = { note, velocity, (uint32_t)(millis() + delay_ms) };
   xQueueSend(rpi_cmd_queue, &cmd, 0);
@@ -7347,37 +7354,22 @@ void PingTask(void *) {
     if (mesh_pad_queue) {
       MeshPadEvent pev;
       while (xQueueReceive(mesh_pad_queue, &pev, 0) == pdTRUE) {
-        const String url = (target_ip_string.length() > 0)
-            ? "http://" + target_ip_string + ":5000/send_virtual_midi"
-            : String(kRegistryBaseUrlPrimary) + "/send_virtual_midi";
-        const String body = "{\"note\":" + String(pev.note) +
-                            ",\"velocity\":" + String(pev.velocity) +
-                            ",\"channel\":" + String(pev.channel) +
-                            ",\"remoteID\":\"" + String(pev.remote_id) + "\"" +
-                            ",\"seq\":" + String(pev.seq) + "}";
-        HTTPClient http;
-        http.begin(url);
-        http.setTimeout(200);
-        http.addHeader("Content-Type", "application/json");
-        const int code = http.POST(body);
-        http.end();
-        Console.printf("[PadBridge] note=%u vel=%u ch=%u -> %d (from %.15s)\n",
-                       pev.note, pev.velocity, pev.channel, code, pev.remote_id);
-
-        // Group coincidence detection: yellow press (note=7, vel=0x7D) from distinct remotes
+        // Coincidence detection runs FIRST — no network dependency.
+        // The HTTP bridge below may block for up to 200ms per event when rpiboosh
+        // is unreachable; doing detection first keeps press_ms accurate and prevents
+        // the stale-eviction window from expiring before all remotes are recorded.
         if (pev.note == 7 && pev.velocity == 0x7D && cfg_group_pattern_en &&
             group_pattern_pending_n == 0) {
           const uint32_t nc = (uint32_t)millis();
           const uint32_t cooldown_elapsed = nc - group_coinc_last_trigger_ms;
           if (group_coinc_last_trigger_ms == 0 || cooldown_elapsed >= cfg_grp_cool_ms) {
-            // Evict stale entries (older than 2s window) and upsert this remote
             int slot = -1, empty_slot = -1;
             for (int i = 0; i < 8; i++) {
               if (group_coinc[i].remote_id[0] != '\0') {
                 if (nc - group_coinc[i].press_ms > cfg_grp_win_ms) {
-                  group_coinc[i].remote_id[0] = '\0'; // evict stale
+                  group_coinc[i].remote_id[0] = '\0';
                 } else if (strncmp(group_coinc[i].remote_id, pev.remote_id, 16) == 0) {
-                  slot = i; // update existing
+                  slot = i;
                 }
               }
               if (group_coinc[i].remote_id[0] == '\0' && empty_slot < 0) empty_slot = i;
@@ -7387,9 +7379,30 @@ void PingTask(void *) {
               strlcpy(group_coinc[target].remote_id, pev.remote_id, 16);
               group_coinc[target].press_ms = nc;
             }
-            // Track time of first entry; fire deferred to post-drain window check below
             if (group_coinc_first_press_ms == 0) group_coinc_first_press_ms = nc;
           }
+        }
+
+        // HTTP bridge to rpiboosh — only when WiFi STA is up and IP is resolved.
+        // Skip entirely in AP-only / mesh-only mode to avoid blocking the drain loop.
+        if (WiFi.status() == WL_CONNECTED && target_ip_string.length() > 0) {
+          const String url = "http://" + target_ip_string + ":5000/send_virtual_midi";
+          const String body = "{\"note\":" + String(pev.note) +
+                              ",\"velocity\":" + String(pev.velocity) +
+                              ",\"channel\":" + String(pev.channel) +
+                              ",\"remoteID\":\"" + String(pev.remote_id) + "\"" +
+                              ",\"seq\":" + String(pev.seq) + "}";
+          HTTPClient http;
+          http.begin(url);
+          http.setTimeout(200);
+          http.addHeader("Content-Type", "application/json");
+          const int code = http.POST(body);
+          http.end();
+          Console.printf("[PadBridge] note=%u vel=%u ch=%u -> %d (from %.15s)\n",
+                         pev.note, pev.velocity, pev.channel, code, pev.remote_id);
+        } else {
+          Console.printf("[PadBridge] note=%u vel=%u ch=%u -> skipped (from %.15s)\n",
+                         pev.note, pev.velocity, pev.channel, pev.remote_id);
         }
       }
     }
