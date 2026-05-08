@@ -7304,6 +7304,7 @@ void PingTask(void *) {
     struct GroupCoincEntry { char remote_id[16]; uint32_t press_ms; };
     static GroupCoincEntry group_coinc[8] = {};
     static uint32_t group_coinc_last_trigger_ms = 0;
+    static uint32_t group_coinc_first_press_ms  = 0;
 
     if (mesh_pad_queue) {
       MeshPadEvent pev;
@@ -7348,19 +7349,31 @@ void PingTask(void *) {
               strlcpy(group_coinc[target].remote_id, pev.remote_id, 16);
               group_coinc[target].press_ms = nc;
             }
-            // Count distinct active entries in window
-            int cnt = 0;
-            for (int i = 0; i < 8; i++) {
-              if (group_coinc[i].remote_id[0] != '\0' && nc - group_coinc[i].press_ms <= cfg_grp_win_ms) cnt++;
-            }
-            if (cnt >= 2) {
-              group_pattern_pending_n = (uint8_t)(cnt > 8 ? 8 : cnt);
-              group_coinc_last_trigger_ms = nc;
-              memset(group_coinc, 0, sizeof(group_coinc)); // clear so same burst doesn't re-trigger
-              Console.printf("[GroupPat] coincidence N=%d\n", cnt);
-            }
+            // Track time of first entry; fire deferred to post-drain window check below
+            if (group_coinc_first_press_ms == 0) group_coinc_first_press_ms = nc;
           }
         }
+      }
+    }
+
+    // Group pattern window-expiry: after draining all queued presses, fire if window elapsed.
+    if (group_coinc_first_press_ms != 0 && group_pattern_pending_n == 0) {
+      const uint32_t nc2 = (uint32_t)millis();
+      const bool in_cooldown = group_coinc_last_trigger_ms != 0 &&
+                               (nc2 - group_coinc_last_trigger_ms) < cfg_grp_cool_ms;
+      if (nc2 - group_coinc_first_press_ms >= cfg_grp_win_ms || in_cooldown) {
+        if (!in_cooldown) {
+          int cnt = 0;
+          for (int i = 0; i < 8; i++)
+            if (group_coinc[i].remote_id[0] != '\0') cnt++;
+          if (cnt >= 2) {
+            group_pattern_pending_n = (uint8_t)(cnt > 8 ? 8 : cnt);
+            group_coinc_last_trigger_ms = nc2;
+            Console.printf("[GroupPat] window closed N=%d\n", cnt);
+          }
+        }
+        memset(group_coinc, 0, sizeof(group_coinc));
+        group_coinc_first_press_ms = 0;
       }
     }
 
