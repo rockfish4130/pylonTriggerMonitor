@@ -7986,7 +7986,15 @@ void loop() {
       identPhase ^= 1;
       ShowIdentifyScreen(identPhase);
     }
-  } else if (boosh_failsafe_note_until_ms == 0 || now >= boosh_failsafe_note_until_ms) {
+  } else if (boosh_failsafe_note_until_ms > 0 && now < boosh_failsafe_note_until_ms) {
+    // Actively re-render failsafe message every second — defeats any invertDisplay artifact
+    // from the FAF sequence that would otherwise leave a stale inverted page on screen.
+    static unsigned long lastFailsafeNoteMs = 0;
+    if (now - lastFailsafeNoteMs >= 1000) {
+      lastFailsafeNoteMs = now;
+      ShowStatus("Failsafe!", "BooshMain OFF");
+    }
+  } else {
     boosh_failsafe_note_until_ms = 0;
 
     // Barmode WAIT screen: override display while blue held during lockout, or on blocked tap (recovery)
