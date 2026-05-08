@@ -2640,7 +2640,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
             <span style="color:var(--muted);font-size:14px">Route all wireless PYLON commands via RPIBOOSH wired controller</span>
           </div>
         </div>
-        <div id="cfg-grp-group-pat" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:10px">
+        <div id="cfg-grp-group-pat" style="border-top:1px solid var(--line);padding-top:10px;display:grid;gap:10px">
           <span style="color:var(--muted);font-size:13px">Group Remote Pattern</span>
           <div style="display:flex;align-items:flex-start;gap:10px">
             <input type="checkbox" id="cfg-grp-pat-en" style="width:18px;height:18px;margin:2px 0 0;cursor:pointer;accent-color:var(--accent);flex-shrink:0">
@@ -3070,10 +3070,12 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       syncConfigField('cfg-failsafe-s',       data.failsafe_ms != null ? (data.failsafe_ms / 1000).toFixed(1) : '5.0');
       syncConfigField('cfg-dj-timeout-s',     data.dj_timeout_s != null ? data.dj_timeout_s : 10);
       syncConfigField('cfg-index',             data.pylon_index != null ? data.pylon_index : 0);
-      ['cfg-grp-green','cfg-grp-blue','cfg-grp-all4','cfg-grp-routing','cfg-grp-group-pat','cfg-grp-red','cfg-grp-recovery','cfg-btn-disable-wrap'].forEach(id => {
+      ['cfg-grp-green','cfg-grp-blue','cfg-grp-all4','cfg-grp-routing','cfg-grp-red','cfg-grp-recovery','cfg-btn-disable-wrap'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = data.barmode_active ? 'grid' : 'none';
       });
+      const grpPatPanel = document.getElementById('cfg-grp-group-pat');
+      if (grpPatPanel) grpPatPanel.style.display = 'grid';
       syncConfigField('cfg-green-timeout-ms',  data.green_timeout_ms  != null ? data.green_timeout_ms  : 300);
       syncConfigField('cfg-all4-valve-ms',     data.all4_valve_ms     != null ? data.all4_valve_ms     : 3000);
       syncConfigField('cfg-all4-lockout-s',    data.all4_lockout_s    != null ? data.all4_lockout_s    : 300);
