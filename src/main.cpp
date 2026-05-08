@@ -191,7 +191,13 @@ volatile float barmode_temp_multiplier = 1.0f; // current effective multiplier (
 bool cfg_no_thermistor = false;  // when true, temperature is always reported as null/N/A
 bool cfg_no_batt_mon   = false;  // when true, battery V/SOC are always reported as null/N/A
 bool cfg_route_via_rpi = false;  // BARMODE: when true, all pylon commands route via rpiboosh APIs
-bool cfg_group_pattern_en = true; // enable group remote "find-a-friend" fire pattern (NVS)
+bool     cfg_group_pattern_en = true;  // enable group remote "find-a-friend" fire pattern (NVS)
+uint32_t cfg_grp_win_ms      = 2000;  // coincidence detection window (ms)
+uint32_t cfg_grp_cool_ms     = 10000; // cooldown between group triggers (ms)
+uint16_t cfg_grp_qon_ms      = 66;    // quick-pulse on duration (ms)
+uint16_t cfg_grp_qoff_ms     = 66;    // quick-pulse off gap (ms)
+uint32_t cfg_grp_big_ms      = 600;   // big-pulse base duration; N-th burst = N × base (ms)
+uint16_t cfg_grp_gap_ms      = 300;   // gap between big pulses (ms)
 bool    cfg_mesh_en = true;      // enable ESP-NOW mesh
 uint8_t cfg_mesh_ch = 1;         // ESP-NOW channel (1-13)
 bool   cfg_use_dhcp    = true;   // false = use static IP config below
@@ -500,7 +506,13 @@ constexpr const char *kPrefsKeyRedSeqValveMs = "red_seq_vlv_ms"; // uint32 ms; r
 constexpr const char *kPrefsKeyRedSeqStepMs  = "red_seq_stp_ms"; // uint32 ms; red hold-seq step interval
 constexpr const char *kPrefsKeyAll4LockoutS  = "all4_lck_s";  // uint32 s; all-4 lockout countdown duration
 constexpr const char *kPrefsKeyManualPylons  = "man_pylons";  // string; "host|index\n" lines
-constexpr const char *kPrefsKeyGroupPatEn    = "grp_pat_en"; // bool; enable group remote fire pattern
+constexpr const char *kPrefsKeyGroupPatEn    = "grp_pat_en";  // bool; enable group remote fire pattern
+constexpr const char *kPrefsKeyGrpWinMs     = "grp_win_ms";  // uint32 ms; coincidence window
+constexpr const char *kPrefsKeyGrpCoolMs    = "grp_cool_ms"; // uint32 ms; cooldown between triggers
+constexpr const char *kPrefsKeyGrpQOnMs     = "grp_qon_ms";  // uint16 ms; quick-pulse on
+constexpr const char *kPrefsKeyGrpQOffMs    = "grp_qoff_ms"; // uint16 ms; quick-pulse off
+constexpr const char *kPrefsKeyGrpBigMs     = "grp_big_ms";  // uint32 ms; big-pulse base
+constexpr const char *kPrefsKeyGrpGapMs     = "grp_gap_ms";  // uint16 ms; big-pulse gap
 constexpr const char *kPrefsKeyGreenRecovMs  = "grn_rec_ms";  // uint32 ms; green tap recovery period
 constexpr const char *kPrefsKeyBlueRecovMs   = "blu_rec_ms";  // uint32 ms; blue tap recovery period
 constexpr const char *kPrefsKeyOrangeRecovMs = "org_rec_ms";  // uint32 ms; orange tap recovery period
@@ -818,6 +830,12 @@ bool SavePylonConfig() {
   prefs.putBool(kPrefsKeyNoBattMon,     cfg_no_batt_mon);
   prefs.putBool(kPrefsKeyRouteViaRpi,  cfg_route_via_rpi);
   prefs.putBool(kPrefsKeyGroupPatEn,   cfg_group_pattern_en);
+  prefs.putUInt(kPrefsKeyGrpWinMs,    cfg_grp_win_ms);
+  prefs.putUInt(kPrefsKeyGrpCoolMs,   cfg_grp_cool_ms);
+  prefs.putUShort(kPrefsKeyGrpQOnMs,  cfg_grp_qon_ms);
+  prefs.putUShort(kPrefsKeyGrpQOffMs, cfg_grp_qoff_ms);
+  prefs.putUInt(kPrefsKeyGrpBigMs,    cfg_grp_big_ms);
+  prefs.putUShort(kPrefsKeyGrpGapMs,  cfg_grp_gap_ms);
   prefs.putBool(kPrefsKeyUseDhcp,       cfg_use_dhcp);
   prefs.putString(kPrefsKeyStaticIp,    cfg_static_ip);
   prefs.putString(kPrefsKeyStaticGw,    cfg_static_gw);
@@ -931,6 +949,12 @@ void LoadPylonConfig() {
   cfg_no_batt_mon            = prefs.getBool(kPrefsKeyNoBattMon,     false);
   cfg_route_via_rpi          = prefs.getBool(kPrefsKeyRouteViaRpi,  false);
   cfg_group_pattern_en       = prefs.getBool(kPrefsKeyGroupPatEn,   true);
+  cfg_grp_win_ms             = prefs.getUInt(kPrefsKeyGrpWinMs,     2000);
+  cfg_grp_cool_ms            = prefs.getUInt(kPrefsKeyGrpCoolMs,    10000);
+  cfg_grp_qon_ms             = prefs.getUShort(kPrefsKeyGrpQOnMs,   66);
+  cfg_grp_qoff_ms            = prefs.getUShort(kPrefsKeyGrpQOffMs,  66);
+  cfg_grp_big_ms             = prefs.getUInt(kPrefsKeyGrpBigMs,     600);
+  cfg_grp_gap_ms             = prefs.getUShort(kPrefsKeyGrpGapMs,   300);
   cfg_use_dhcp               = prefs.getBool(kPrefsKeyUseDhcp,       true);
   cfg_static_ip              = prefs.getString(kPrefsKeyStaticIp,    "");
   cfg_static_gw              = prefs.getString(kPrefsKeyStaticGw,    "");
@@ -1338,6 +1362,30 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
     cfg_group_pattern_en = (value == "1" || value == "true");
     changed = true;
     if (log_output) Console.printf("[CFG] grp_pat_en set: %s\n", cfg_group_pattern_en ? "true" : "false");
+  } else if (field == "grp_win_ms") {
+    const int ms = (int)value.toInt();
+    if (ms < 500 || ms > 10000) { if (log_output) Console.println("[CFG] grp_win_ms out of range (500-10000)"); return false; }
+    cfg_grp_win_ms = (uint32_t)ms; changed = true;
+  } else if (field == "grp_cool_ms") {
+    const int ms = (int)value.toInt();
+    if (ms < 1000 || ms > 120000) { if (log_output) Console.println("[CFG] grp_cool_ms out of range (1000-120000)"); return false; }
+    cfg_grp_cool_ms = (uint32_t)ms; changed = true;
+  } else if (field == "grp_qon_ms") {
+    const int ms = (int)value.toInt();
+    if (ms < 10 || ms > 500) { if (log_output) Console.println("[CFG] grp_qon_ms out of range (10-500)"); return false; }
+    cfg_grp_qon_ms = (uint16_t)ms; changed = true;
+  } else if (field == "grp_qoff_ms") {
+    const int ms = (int)value.toInt();
+    if (ms < 10 || ms > 500) { if (log_output) Console.println("[CFG] grp_qoff_ms out of range (10-500)"); return false; }
+    cfg_grp_qoff_ms = (uint16_t)ms; changed = true;
+  } else if (field == "grp_big_ms") {
+    const int ms = (int)value.toInt();
+    if (ms < 100 || ms > 5000) { if (log_output) Console.println("[CFG] grp_big_ms out of range (100-5000)"); return false; }
+    cfg_grp_big_ms = (uint32_t)ms; changed = true;
+  } else if (field == "grp_gap_ms") {
+    const int ms = (int)value.toInt();
+    if (ms < 0 || ms > 2000) { if (log_output) Console.println("[CFG] grp_gap_ms out of range (0-2000)"); return false; }
+    cfg_grp_gap_ms = (uint16_t)ms; changed = true;
   } else if (field == "pulse1_dur_ms") {
     const int ms = (int)value.toInt();
     if (ms < 10 || ms > 5000) { if (log_output) Console.println("[CFG] pulse1_dur_ms out of range (10-5000)"); return false; }
@@ -2299,6 +2347,12 @@ String BuildTelemetryApiJson() {
     payload += "\"no_batt_mon\":" + String(cfg_no_batt_mon ? "true" : "false") + ",";
     payload += "\"route_via_rpi\":" + String(cfg_route_via_rpi ? "true" : "false") + ",";
     payload += "\"grp_pat_en\":" + String(cfg_group_pattern_en ? "true" : "false") + ",";
+    payload += "\"grp_win_ms\":"  + String(cfg_grp_win_ms)  + ",";
+    payload += "\"grp_cool_ms\":" + String(cfg_grp_cool_ms) + ",";
+    payload += "\"grp_qon_ms\":"  + String(cfg_grp_qon_ms)  + ",";
+    payload += "\"grp_qoff_ms\":" + String(cfg_grp_qoff_ms) + ",";
+    payload += "\"grp_big_ms\":"  + String(cfg_grp_big_ms)  + ",";
+    payload += "\"grp_gap_ms\":"  + String(cfg_grp_gap_ms)  + ",";
   }
   payload += "\"telemetry\":{";
   payload += "\"ipv4\":\"" + JsonEscape(ip) + "\",";
@@ -2586,13 +2640,41 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
             <span style="color:var(--muted);font-size:14px">Route all wireless PYLON commands via RPIBOOSH wired controller</span>
           </div>
         </div>
-        <div id="cfg-grp-group-pat" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
+        <div id="cfg-grp-group-pat" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:10px">
           <span style="color:var(--muted);font-size:13px">Group Remote Pattern</span>
           <div style="display:flex;align-items:flex-start;gap:10px">
             <input type="checkbox" id="cfg-grp-pat-en" style="width:18px;height:18px;margin:2px 0 0;cursor:pointer;accent-color:var(--accent);flex-shrink:0">
             <span style="font-size:13px"><b>Enable group remote &ldquo;find-a-friend&rdquo; fire pattern</b><br>
-              <span style="color:var(--muted)">When 2 or more ESP-NOW remotes press their <b>yellow button</b> within ~2 seconds of each other, all pylons fire a special synchronized pattern instead of the normal valve-open. N remotes = N quick pulses followed by N escalating long bursts (600&thinsp;ms, 1200&thinsp;ms&hellip;). Suppresses the normal OSC open command for the duration. 10&thinsp;s cooldown between group triggers. Enabled by default.</span>
+              <span style="color:var(--muted)">When 2&thinsp;+ ESP-NOW remotes press their <b>yellow button</b> within the coincidence window, every pylon fires a synchronized reward pattern instead of the normal valve-open: N quick pulses, then N escalating long bursts. Suppresses the normal OSC open for the duration. A cooldown prevents re-triggering from the same press cluster.</span>
             </span>
+          </div>
+          <div style="display:grid;gap:6px;padding-left:4px">
+            <span style="color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em">Detection</span>
+            <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">
+              <label style="font-size:13px">Coincidence window (ms)
+                <input id="cfg-grp-win-ms" name="grp_win_ms" type="number" min="500" max="10000" step="100" style="width:80px;margin-left:6px">
+                <span style="color:var(--muted);font-size:12px;margin-left:4px">How long after the first yellow press to wait for others. Default 2000&thinsp;ms.</span>
+              </label>
+            </div>
+            <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">
+              <label style="font-size:13px">Cooldown (s)
+                <input id="cfg-grp-cool-s" name="grp_cool_s" type="number" min="1" max="120" step="1" style="width:70px;margin-left:6px">
+                <span style="color:var(--muted);font-size:12px;margin-left:4px">Minimum time before another group trigger can fire. Default 10&thinsp;s.</span>
+              </label>
+            </div>
+          </div>
+          <div style="display:grid;gap:6px;padding-left:4px;border-top:1px solid var(--line);padding-top:8px">
+            <span style="color:var(--muted);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em">Pattern Timing</span>
+            <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">
+              <label style="font-size:13px">Quick pulse on (ms) <input id="cfg-grp-qon-ms" name="grp_qon_ms" type="number" min="10" max="500" step="1" style="width:70px;margin-left:6px"></label>
+              <label style="font-size:13px">Quick pulse off (ms) <input id="cfg-grp-qoff-ms" name="grp_qoff_ms" type="number" min="10" max="500" step="1" style="width:70px;margin-left:6px"></label>
+              <span style="color:var(--muted);font-size:12px">N short &ldquo;tap tap&rdquo; pulses at the start (one per remote). Default 66&thinsp;/&thinsp;66&thinsp;ms.</span>
+            </div>
+            <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">
+              <label style="font-size:13px">Big pulse base (ms) <input id="cfg-grp-big-ms" name="grp_big_ms" type="number" min="100" max="5000" step="50" style="width:80px;margin-left:6px"></label>
+              <label style="font-size:13px">Big pulse gap (ms) <input id="cfg-grp-gap-ms" name="grp_gap_ms" type="number" min="0" max="2000" step="50" style="width:70px;margin-left:6px"></label>
+              <span style="color:var(--muted);font-size:12px">N escalating long bursts: 1&times;, 2&times;, 3&times;&hellip; the base. Gap between bursts. Default 600&thinsp;/&thinsp;300&thinsp;ms.</span>
+            </div>
           </div>
         </div>
         <div id="cfg-grp-recovery" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:10px">
@@ -3033,6 +3115,12 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       if (routeViaRpiBox && document.activeElement !== routeViaRpiBox) routeViaRpiBox.checked = !!data.route_via_rpi;
       const grpPatEnBox = document.getElementById('cfg-grp-pat-en');
       if (grpPatEnBox && document.activeElement !== grpPatEnBox) grpPatEnBox.checked = data.grp_pat_en !== false;
+      syncConfigField('cfg-grp-win-ms',  data.grp_win_ms  != null ? data.grp_win_ms  : 2000);
+      syncConfigField('cfg-grp-cool-s',  data.grp_cool_ms != null ? Math.round(data.grp_cool_ms / 1000) : 10);
+      syncConfigField('cfg-grp-qon-ms',  data.grp_qon_ms  != null ? data.grp_qon_ms  : 66);
+      syncConfigField('cfg-grp-qoff-ms', data.grp_qoff_ms != null ? data.grp_qoff_ms : 66);
+      syncConfigField('cfg-grp-big-ms',  data.grp_big_ms  != null ? data.grp_big_ms  : 600);
+      syncConfigField('cfg-grp-gap-ms',  data.grp_gap_ms  != null ? data.grp_gap_ms  : 300);
       const meshEnBox = document.getElementById('cfg-mesh-en');
       if (meshEnBox && document.activeElement !== meshEnBox) meshEnBox.checked = !!(data.mesh && data.mesh.enabled);
       syncConfigField('cfg-mesh-ch', data.mesh ? (data.mesh.channel || 1) : 1);
@@ -3150,7 +3238,9 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       'cfg-steam-ramp', 'cfg-steam-open',
       'cfg-green-recovery-ms', 'cfg-blue-recovery-ms', 'cfg-orange-recovery-ms', 'cfg-red-recovery-ms',
       'cfg-temp-thresh1', 'cfg-temp-mult1', 'cfg-temp-thresh2', 'cfg-temp-mult2',
-      'cfg-route-via-rpi', 'cfg-grp-pat-en', 'cfg-mesh-en', 'cfg-mesh-ch', 'cfg-dj-timeout-s',
+      'cfg-route-via-rpi', 'cfg-grp-pat-en',
+      'cfg-grp-win-ms', 'cfg-grp-cool-s', 'cfg-grp-qon-ms', 'cfg-grp-qoff-ms', 'cfg-grp-big-ms', 'cfg-grp-gap-ms',
+      'cfg-mesh-en', 'cfg-mesh-ch', 'cfg-dj-timeout-s',
       'mesh-ch-sel']
       .map((id) => document.getElementById(id))
       .filter(Boolean);
@@ -3251,6 +3341,18 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       body.set('no_batt_mon',   document.getElementById('cfg-no-batt-mon').checked   ? '1' : '0');
       body.set('route_via_rpi', document.getElementById('cfg-route-via-rpi').checked ? '1' : '0');
       body.set('grp_pat_en', document.getElementById('cfg-grp-pat-en').checked ? '1' : '0');
+      const grpWinVal = document.getElementById('cfg-grp-win-ms').value.trim();
+      if (grpWinVal !== '') body.set('grp_win_ms', grpWinVal);
+      const grpCoolVal = document.getElementById('cfg-grp-cool-s').value.trim();
+      if (grpCoolVal !== '') body.set('grp_cool_ms', String(Math.round(parseFloat(grpCoolVal) * 1000)));
+      const grpQOnVal = document.getElementById('cfg-grp-qon-ms').value.trim();
+      if (grpQOnVal !== '') body.set('grp_qon_ms', grpQOnVal);
+      const grpQOffVal = document.getElementById('cfg-grp-qoff-ms').value.trim();
+      if (grpQOffVal !== '') body.set('grp_qoff_ms', grpQOffVal);
+      const grpBigVal = document.getElementById('cfg-grp-big-ms').value.trim();
+      if (grpBigVal !== '') body.set('grp_big_ms', grpBigVal);
+      const grpGapVal = document.getElementById('cfg-grp-gap-ms').value.trim();
+      if (grpGapVal !== '') body.set('grp_gap_ms', grpGapVal);
       body.set('mesh_en', document.getElementById('cfg-mesh-en').checked ? '1' : '0');
       const meshChVal = document.getElementById('cfg-mesh-ch').value.trim();
       if (meshChVal !== '') body.set('mesh_ch', meshChVal);
@@ -4167,6 +4269,13 @@ void HandleConfigPostApi() {
   const bool has_no_thermistor   = webServer.hasArg("no_thermistor");
   const bool has_no_batt_mon     = webServer.hasArg("no_batt_mon");
   const bool has_route_via_rpi   = webServer.hasArg("route_via_rpi");
+  const bool has_grp_pat_en      = webServer.hasArg("grp_pat_en");
+  const bool has_grp_win_ms      = webServer.hasArg("grp_win_ms");
+  const bool has_grp_cool_ms     = webServer.hasArg("grp_cool_ms");
+  const bool has_grp_qon_ms      = webServer.hasArg("grp_qon_ms");
+  const bool has_grp_qoff_ms     = webServer.hasArg("grp_qoff_ms");
+  const bool has_grp_big_ms      = webServer.hasArg("grp_big_ms");
+  const bool has_grp_gap_ms      = webServer.hasArg("grp_gap_ms");
   const bool has_mesh_en         = webServer.hasArg("mesh_en");
   const bool has_mesh_ch         = webServer.hasArg("mesh_ch");
   const bool has_dj_timeout_s    = webServer.hasArg("dj_timeout_s");
@@ -4179,6 +4288,8 @@ void HandleConfigPostApi() {
       !has_green_rec_ms && !has_blue_rec_ms && !has_orange_rec_ms && !has_red_rec_ms &&
       !has_temp_thresh1 && !has_temp_mult1 && !has_temp_thresh2 && !has_temp_mult2 &&
       !has_no_thermistor && !has_no_batt_mon && !has_route_via_rpi &&
+      !has_grp_pat_en && !has_grp_win_ms && !has_grp_cool_ms && !has_grp_qon_ms &&
+      !has_grp_qoff_ms && !has_grp_big_ms && !has_grp_gap_ms &&
       !has_mesh_en && !has_mesh_ch && !has_dj_timeout_s) {
     SendApiError(400, "no recognized config field");
     return;
@@ -4234,8 +4345,15 @@ void HandleConfigPostApi() {
   if (has_temp_mult2)    ok = ok && SetConfigFieldValue("temp_mult2",         webServer.arg("temp_mult2"));
   if (has_no_thermistor) ok = ok && SetConfigFieldValue("no_thermistor",      webServer.arg("no_thermistor"));
   if (has_no_batt_mon)   ok = ok && SetConfigFieldValue("no_batt_mon",        webServer.arg("no_batt_mon"));
-  if (has_route_via_rpi) ok = ok && SetConfigFieldValue("route_via_rpi",      webServer.arg("route_via_rpi"));
-  if (has_mesh_en)       ok = ok && SetConfigFieldValue("mesh_en",            webServer.arg("mesh_en"));
+  if (has_route_via_rpi) ok = ok && SetConfigFieldValue("route_via_rpi", webServer.arg("route_via_rpi"));
+  if (has_grp_pat_en)    ok = ok && SetConfigFieldValue("grp_pat_en",    webServer.arg("grp_pat_en"));
+  if (has_grp_win_ms)    ok = ok && SetConfigFieldValue("grp_win_ms",    webServer.arg("grp_win_ms"));
+  if (has_grp_cool_ms)   ok = ok && SetConfigFieldValue("grp_cool_ms",   webServer.arg("grp_cool_ms"));
+  if (has_grp_qon_ms)    ok = ok && SetConfigFieldValue("grp_qon_ms",    webServer.arg("grp_qon_ms"));
+  if (has_grp_qoff_ms)   ok = ok && SetConfigFieldValue("grp_qoff_ms",   webServer.arg("grp_qoff_ms"));
+  if (has_grp_big_ms)    ok = ok && SetConfigFieldValue("grp_big_ms",    webServer.arg("grp_big_ms"));
+  if (has_grp_gap_ms)    ok = ok && SetConfigFieldValue("grp_gap_ms",    webServer.arg("grp_gap_ms"));
+  if (has_mesh_en)       ok = ok && SetConfigFieldValue("mesh_en",        webServer.arg("mesh_en"));
   if (has_mesh_ch)       ok = ok && SetConfigFieldValue("mesh_ch",            webServer.arg("mesh_ch"));
   if (has_dj_timeout_s)  ok = ok && SetConfigFieldValue("dj_timeout_s",       webServer.arg("dj_timeout_s"));
   if (has_btn_disabled) {
@@ -5368,12 +5486,12 @@ void StartSequence(SeqType type) {
     group_seq_step_idx   = 0;
     group_pattern_active = true;
     for (int i = 0; i < n; i++) {
-      group_seq_steps[group_seq_step_count++] = {66, true};
-      group_seq_steps[group_seq_step_count++] = {66, false};
+      group_seq_steps[group_seq_step_count++] = {cfg_grp_qon_ms,  true};
+      group_seq_steps[group_seq_step_count++] = {cfg_grp_qoff_ms, false};
     }
     for (int i = 0; i < n; i++) {
-      group_seq_steps[group_seq_step_count++] = {(uint16_t)(600 * (i + 1)), true};
-      if (i < n - 1) group_seq_steps[group_seq_step_count++] = {300, false};
+      group_seq_steps[group_seq_step_count++] = {(uint16_t)(cfg_grp_big_ms * (i + 1)), true};
+      if (i < n - 1) group_seq_steps[group_seq_step_count++] = {cfg_grp_gap_ms, false};
     }
     Console.printf("[SEQ] group start N=%d steps=%d\n", n, group_seq_step_count);
   }
@@ -7210,12 +7328,12 @@ void PingTask(void *) {
             group_pattern_pending_n == 0) {
           const uint32_t nc = (uint32_t)millis();
           const uint32_t cooldown_elapsed = nc - group_coinc_last_trigger_ms;
-          if (group_coinc_last_trigger_ms == 0 || cooldown_elapsed >= 10000) {
+          if (group_coinc_last_trigger_ms == 0 || cooldown_elapsed >= cfg_grp_cool_ms) {
             // Evict stale entries (older than 2s window) and upsert this remote
             int slot = -1, empty_slot = -1;
             for (int i = 0; i < 8; i++) {
               if (group_coinc[i].remote_id[0] != '\0') {
-                if (nc - group_coinc[i].press_ms > 2000) {
+                if (nc - group_coinc[i].press_ms > cfg_grp_win_ms) {
                   group_coinc[i].remote_id[0] = '\0'; // evict stale
                 } else if (strncmp(group_coinc[i].remote_id, pev.remote_id, 16) == 0) {
                   slot = i; // update existing
@@ -7231,7 +7349,7 @@ void PingTask(void *) {
             // Count distinct active entries in window
             int cnt = 0;
             for (int i = 0; i < 8; i++) {
-              if (group_coinc[i].remote_id[0] != '\0' && nc - group_coinc[i].press_ms <= 2000) cnt++;
+              if (group_coinc[i].remote_id[0] != '\0' && nc - group_coinc[i].press_ms <= cfg_grp_win_ms) cnt++;
             }
             if (cnt >= 2) {
               group_pattern_pending_n = (uint8_t)(cnt > 8 ? 8 : cnt);
