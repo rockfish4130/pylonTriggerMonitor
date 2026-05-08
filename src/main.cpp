@@ -191,6 +191,7 @@ volatile float barmode_temp_multiplier = 1.0f; // current effective multiplier (
 bool cfg_no_thermistor = false;  // when true, temperature is always reported as null/N/A
 bool cfg_no_batt_mon   = false;  // when true, battery V/SOC are always reported as null/N/A
 bool cfg_route_via_rpi = false;  // BARMODE: when true, all pylon commands route via rpiboosh APIs
+bool cfg_group_pattern_en = true; // enable group remote "find-a-friend" fire pattern (NVS)
 bool    cfg_mesh_en = true;      // enable ESP-NOW mesh
 uint8_t cfg_mesh_ch = 1;         // ESP-NOW channel (1-13)
 bool   cfg_use_dhcp    = true;   // false = use static IP config below
@@ -411,13 +412,24 @@ volatile unsigned long mesh_ch_apply_at = 0;   // millis() when to apply
 volatile int           mesh_live_peer_count = 0; // updated by MeshExpirePeers every 2s
 
 // ---- Sequence state ---------------------------------------------------------
-enum SeqType { SEQ_NONE, SEQ_PULSE_ONCE, SEQ_PULSE_5X, SEQ_STEAM };
+enum SeqType { SEQ_NONE, SEQ_PULSE_ONCE, SEQ_PULSE_5X, SEQ_STEAM, SEQ_GROUP };
 SeqType active_seq = SEQ_NONE;
 unsigned long seq_step_start_ms = 0;  // start of current on/off phase
 unsigned long seq_start_ms = 0;       // start of whole sequence
 int seq_pulse_idx = 0;                // pulses fired so far
 bool seq_phase_on = false;            // currently in on-phase
 bool seq_abort_flag = false;          // abort requested
+
+// ---- Group remote "find-a-friend" pattern -----------------------------------
+// N remotes pressing yellow simultaneously triggers an N-specific fire sequence.
+// Suppresses the normal OSC valve-open for its duration.
+struct GroupSeqStep { uint16_t ms; bool on; };
+static GroupSeqStep group_seq_steps[32]; // max 4N-1 steps; N≤8 → 31
+static int     group_seq_step_count = 0;
+static int     group_seq_step_idx   = 0;
+static int     group_seq_n_val      = 0; // N used for current/pending sequence
+static bool    group_pattern_active = false; // true while SEQ_GROUP is running
+volatile uint8_t group_pattern_pending_n = 0; // set by PingTask (Core0); read+cleared by loop (Core1)
 volatile bool current_ping_last_ok = false;
 volatile unsigned long last_ping_success_ms = 0;
 String target_ip_string = "";
@@ -488,6 +500,7 @@ constexpr const char *kPrefsKeyRedSeqValveMs = "red_seq_vlv_ms"; // uint32 ms; r
 constexpr const char *kPrefsKeyRedSeqStepMs  = "red_seq_stp_ms"; // uint32 ms; red hold-seq step interval
 constexpr const char *kPrefsKeyAll4LockoutS  = "all4_lck_s";  // uint32 s; all-4 lockout countdown duration
 constexpr const char *kPrefsKeyManualPylons  = "man_pylons";  // string; "host|index\n" lines
+constexpr const char *kPrefsKeyGroupPatEn    = "grp_pat_en"; // bool; enable group remote fire pattern
 constexpr const char *kPrefsKeyGreenRecovMs  = "grn_rec_ms";  // uint32 ms; green tap recovery period
 constexpr const char *kPrefsKeyBlueRecovMs   = "blu_rec_ms";  // uint32 ms; blue tap recovery period
 constexpr const char *kPrefsKeyOrangeRecovMs = "org_rec_ms";  // uint32 ms; orange tap recovery period
@@ -804,6 +817,7 @@ bool SavePylonConfig() {
   prefs.putBool(kPrefsKeyNoThermistor,  cfg_no_thermistor);
   prefs.putBool(kPrefsKeyNoBattMon,     cfg_no_batt_mon);
   prefs.putBool(kPrefsKeyRouteViaRpi,  cfg_route_via_rpi);
+  prefs.putBool(kPrefsKeyGroupPatEn,   cfg_group_pattern_en);
   prefs.putBool(kPrefsKeyUseDhcp,       cfg_use_dhcp);
   prefs.putString(kPrefsKeyStaticIp,    cfg_static_ip);
   prefs.putString(kPrefsKeyStaticGw,    cfg_static_gw);
@@ -916,6 +930,7 @@ void LoadPylonConfig() {
   cfg_no_thermistor          = prefs.getBool(kPrefsKeyNoThermistor,  false);
   cfg_no_batt_mon            = prefs.getBool(kPrefsKeyNoBattMon,     false);
   cfg_route_via_rpi          = prefs.getBool(kPrefsKeyRouteViaRpi,  false);
+  cfg_group_pattern_en       = prefs.getBool(kPrefsKeyGroupPatEn,   true);
   cfg_use_dhcp               = prefs.getBool(kPrefsKeyUseDhcp,       true);
   cfg_static_ip              = prefs.getString(kPrefsKeyStaticIp,    "");
   cfg_static_gw              = prefs.getString(kPrefsKeyStaticGw,    "");
@@ -1319,6 +1334,10 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
     cfg_route_via_rpi = (value == "1" || value == "true");
     changed = true;
     if (log_output) Console.printf("[CFG] route_via_rpi set: %s\n", cfg_route_via_rpi ? "true" : "false");
+  } else if (field == "grp_pat_en") {
+    cfg_group_pattern_en = (value == "1" || value == "true");
+    changed = true;
+    if (log_output) Console.printf("[CFG] grp_pat_en set: %s\n", cfg_group_pattern_en ? "true" : "false");
   } else if (field == "pulse1_dur_ms") {
     const int ms = (int)value.toInt();
     if (ms < 10 || ms > 5000) { if (log_output) Console.println("[CFG] pulse1_dur_ms out of range (10-5000)"); return false; }
@@ -2279,6 +2298,7 @@ String BuildTelemetryApiJson() {
     payload += "\"no_thermistor\":" + String(cfg_no_thermistor ? "true" : "false") + ",";
     payload += "\"no_batt_mon\":" + String(cfg_no_batt_mon ? "true" : "false") + ",";
     payload += "\"route_via_rpi\":" + String(cfg_route_via_rpi ? "true" : "false") + ",";
+    payload += "\"grp_pat_en\":" + String(cfg_group_pattern_en ? "true" : "false") + ",";
   }
   payload += "\"telemetry\":{";
   payload += "\"ipv4\":\"" + JsonEscape(ip) + "\",";
@@ -2564,6 +2584,15 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           <div style="display:flex;align-items:center;gap:10px">
             <input type="checkbox" id="cfg-route-via-rpi" style="width:18px;height:18px;margin:0;cursor:pointer;accent-color:var(--accent)">
             <span style="color:var(--muted);font-size:14px">Route all wireless PYLON commands via RPIBOOSH wired controller</span>
+          </div>
+        </div>
+        <div id="cfg-grp-group-pat" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
+          <span style="color:var(--muted);font-size:13px">Group Remote Pattern</span>
+          <div style="display:flex;align-items:flex-start;gap:10px">
+            <input type="checkbox" id="cfg-grp-pat-en" style="width:18px;height:18px;margin:2px 0 0;cursor:pointer;accent-color:var(--accent);flex-shrink:0">
+            <span style="font-size:13px"><b>Enable group remote &ldquo;find-a-friend&rdquo; fire pattern</b><br>
+              <span style="color:var(--muted)">When 2 or more ESP-NOW remotes press their <b>yellow button</b> within ~2 seconds of each other, all pylons fire a special synchronized pattern instead of the normal valve-open. N remotes = N quick pulses followed by N escalating long bursts (600&thinsp;ms, 1200&thinsp;ms&hellip;). Suppresses the normal OSC open command for the duration. 10&thinsp;s cooldown between group triggers. Enabled by default.</span>
+            </span>
           </div>
         </div>
         <div id="cfg-grp-recovery" style="display:none;border-top:1px solid var(--line);padding-top:10px;display:grid;gap:10px">
@@ -2959,7 +2988,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       syncConfigField('cfg-failsafe-s',       data.failsafe_ms != null ? (data.failsafe_ms / 1000).toFixed(1) : '5.0');
       syncConfigField('cfg-dj-timeout-s',     data.dj_timeout_s != null ? data.dj_timeout_s : 10);
       syncConfigField('cfg-index',             data.pylon_index != null ? data.pylon_index : 0);
-      ['cfg-grp-green','cfg-grp-blue','cfg-grp-all4','cfg-grp-routing','cfg-grp-red','cfg-grp-recovery','cfg-btn-disable-wrap'].forEach(id => {
+      ['cfg-grp-green','cfg-grp-blue','cfg-grp-all4','cfg-grp-routing','cfg-grp-group-pat','cfg-grp-red','cfg-grp-recovery','cfg-btn-disable-wrap'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.display = data.barmode_active ? 'grid' : 'none';
       });
@@ -3002,6 +3031,8 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       if (noBattBox && document.activeElement !== noBattBox) noBattBox.checked = !!data.no_batt_mon;
       const routeViaRpiBox = document.getElementById('cfg-route-via-rpi');
       if (routeViaRpiBox && document.activeElement !== routeViaRpiBox) routeViaRpiBox.checked = !!data.route_via_rpi;
+      const grpPatEnBox = document.getElementById('cfg-grp-pat-en');
+      if (grpPatEnBox && document.activeElement !== grpPatEnBox) grpPatEnBox.checked = data.grp_pat_en !== false;
       const meshEnBox = document.getElementById('cfg-mesh-en');
       if (meshEnBox && document.activeElement !== meshEnBox) meshEnBox.checked = !!(data.mesh && data.mesh.enabled);
       syncConfigField('cfg-mesh-ch', data.mesh ? (data.mesh.channel || 1) : 1);
@@ -3119,7 +3150,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       'cfg-steam-ramp', 'cfg-steam-open',
       'cfg-green-recovery-ms', 'cfg-blue-recovery-ms', 'cfg-orange-recovery-ms', 'cfg-red-recovery-ms',
       'cfg-temp-thresh1', 'cfg-temp-mult1', 'cfg-temp-thresh2', 'cfg-temp-mult2',
-      'cfg-route-via-rpi', 'cfg-mesh-en', 'cfg-mesh-ch', 'cfg-dj-timeout-s',
+      'cfg-route-via-rpi', 'cfg-grp-pat-en', 'cfg-mesh-en', 'cfg-mesh-ch', 'cfg-dj-timeout-s',
       'mesh-ch-sel']
       .map((id) => document.getElementById(id))
       .filter(Boolean);
@@ -3219,6 +3250,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       body.set('no_thermistor', document.getElementById('cfg-no-thermistor').checked ? '1' : '0');
       body.set('no_batt_mon',   document.getElementById('cfg-no-batt-mon').checked   ? '1' : '0');
       body.set('route_via_rpi', document.getElementById('cfg-route-via-rpi').checked ? '1' : '0');
+      body.set('grp_pat_en', document.getElementById('cfg-grp-pat-en').checked ? '1' : '0');
       body.set('mesh_en', document.getElementById('cfg-mesh-en').checked ? '1' : '0');
       const meshChVal = document.getElementById('cfg-mesh-ch').value.trim();
       if (meshChVal !== '') body.set('mesh_ch', meshChVal);
@@ -4441,7 +4473,8 @@ void HandleMeshRelayApi() {
   MeshBroadcastOsc(addr.c_str(), arg_f);
   // Apply locally so this node (e.g. BARBAR) also fires
   if (addr == kOscAddress) {
-    ApplyBooshState(arg_f, "mesh-relay");
+    if (group_pattern_active && arg_f >= 0.5f) Console.println("[GroupPat] suppressed relay open");
+    else ApplyBooshState(arg_f, "mesh-relay");
   } else if (addr == kOscAddrPulseSingle && arg_f >= 0.5f) {
     if (!action_pulse1_dis) StartSequence(SEQ_PULSE_ONCE);
   } else if (addr == kOscAddrPulseTrain && arg_f >= 0.5f) {
@@ -5010,6 +5043,7 @@ void HandleOscMessage(OSCMessage &msg) {
     }
     const float v = msg.getFloat(0);
     Console.printf("OSC BooshMain %.3f\n", v);
+    if (group_pattern_active && v >= 0.5f) { Console.println("[GroupPat] suppressed OSC open"); return; }
     ApplyBooshState(v, "osc");
     // Mesh relay: barmode node forwards received UDP commands to ESP-NOW peers
     if (barmode_active) MeshBroadcastOsc(kOscAddress, v);
@@ -5327,6 +5361,22 @@ void StartSequence(SeqType type) {
   seq_phase_on = false;
   seq_abort_flag = false;
   trigger_event_count += 1;
+  if (type == SEQ_GROUP) {
+    // Build flat step table: N quick pulses (66ms on/off each) then N big pulses (600*i ms, 300ms gap)
+    const int n = max(2, min(group_seq_n_val, 8));
+    group_seq_step_count = 0;
+    group_seq_step_idx   = 0;
+    group_pattern_active = true;
+    for (int i = 0; i < n; i++) {
+      group_seq_steps[group_seq_step_count++] = {66, true};
+      group_seq_steps[group_seq_step_count++] = {66, false};
+    }
+    for (int i = 0; i < n; i++) {
+      group_seq_steps[group_seq_step_count++] = {(uint16_t)(600 * (i + 1)), true};
+      if (i < n - 1) group_seq_steps[group_seq_step_count++] = {300, false};
+    }
+    Console.printf("[SEQ] group start N=%d steps=%d\n", n, group_seq_step_count);
+  }
   Console.printf("[SEQ] start type=%d\n", (int)type);
 }
 
@@ -5344,6 +5394,7 @@ void PollSequence() {
   if (seq_abort_flag) {
     SeqSetSolenoid(false);
     active_seq = SEQ_NONE;
+    group_pattern_active = false;
     Console.println("[SEQ] aborted");
     return;
   }
@@ -5423,6 +5474,27 @@ void PollSequence() {
         seq_step_start_ms = now;
         seq_pulse_idx++;
       }
+    }
+    return;
+  }
+
+  // --- GROUP: table-driven find-a-friend pattern ---
+  if (active_seq == SEQ_GROUP) {
+    if (group_seq_step_idx >= group_seq_step_count) {
+      SeqSetSolenoid(false);
+      active_seq = SEQ_NONE;
+      group_pattern_active = false;
+      Console.println("[SEQ] group done");
+      return;
+    }
+    const GroupSeqStep &step = group_seq_steps[group_seq_step_idx];
+    if (!seq_phase_on) {
+      SeqSetSolenoid(step.on);
+      seq_phase_on = true;
+      seq_step_start_ms = now;
+    } else if (now - seq_step_start_ms >= step.ms) {
+      group_seq_step_idx++;
+      seq_phase_on = false;
     }
     return;
   }
@@ -6820,6 +6892,7 @@ void PollMeshOscQueue() {
     const String addr(ev.osc_addr);
     const float val = ev.osc_arg;
     if (addr == kOscAddress) {
+      if (group_pattern_active && val >= 0.5f) { Console.println("[GroupPat] suppressed mesh open"); continue; }
       ApplyBooshState(val, "mesh");
     } else if (addr == kOscAddrPulseSingle) {
       if (!action_pulse1_dis && val >= 0.5f) StartSequence(SEQ_PULSE_ONCE);
@@ -7107,6 +7180,11 @@ void PingTask(void *) {
 
     // Pad event bridge — drain first, before ping/registry, to minimise latency.
     // Uses cached IP (target_ip_string) to avoid mDNS lookup on every POST.
+    // Coincidence table for group pattern detection (Core 0 only — no mutex).
+    struct GroupCoincEntry { char remote_id[16]; uint32_t press_ms; };
+    static GroupCoincEntry group_coinc[8] = {};
+    static uint32_t group_coinc_last_trigger_ms = 0;
+
     if (mesh_pad_queue) {
       MeshPadEvent pev;
       while (xQueueReceive(mesh_pad_queue, &pev, 0) == pdTRUE) {
@@ -7126,6 +7204,43 @@ void PingTask(void *) {
         http.end();
         Console.printf("[PadBridge] note=%u vel=%u ch=%u -> %d (from %.15s)\n",
                        pev.note, pev.velocity, pev.channel, code, pev.remote_id);
+
+        // Group coincidence detection: yellow press (note=7, vel=0x7D) from distinct remotes
+        if (pev.note == 7 && pev.velocity == 0x7D && cfg_group_pattern_en &&
+            group_pattern_pending_n == 0) {
+          const uint32_t nc = (uint32_t)millis();
+          const uint32_t cooldown_elapsed = nc - group_coinc_last_trigger_ms;
+          if (group_coinc_last_trigger_ms == 0 || cooldown_elapsed >= 10000) {
+            // Evict stale entries (older than 2s window) and upsert this remote
+            int slot = -1, empty_slot = -1;
+            for (int i = 0; i < 8; i++) {
+              if (group_coinc[i].remote_id[0] != '\0') {
+                if (nc - group_coinc[i].press_ms > 2000) {
+                  group_coinc[i].remote_id[0] = '\0'; // evict stale
+                } else if (strncmp(group_coinc[i].remote_id, pev.remote_id, 16) == 0) {
+                  slot = i; // update existing
+                }
+              }
+              if (group_coinc[i].remote_id[0] == '\0' && empty_slot < 0) empty_slot = i;
+            }
+            const int target = (slot >= 0) ? slot : empty_slot;
+            if (target >= 0) {
+              strlcpy(group_coinc[target].remote_id, pev.remote_id, 16);
+              group_coinc[target].press_ms = nc;
+            }
+            // Count distinct active entries in window
+            int cnt = 0;
+            for (int i = 0; i < 8; i++) {
+              if (group_coinc[i].remote_id[0] != '\0' && nc - group_coinc[i].press_ms <= 2000) cnt++;
+            }
+            if (cnt >= 2) {
+              group_pattern_pending_n = (uint8_t)(cnt > 8 ? 8 : cnt);
+              group_coinc_last_trigger_ms = nc;
+              memset(group_coinc, 0, sizeof(group_coinc)); // clear so same burst doesn't re-trigger
+              Console.printf("[GroupPat] coincidence N=%d\n", cnt);
+            }
+          }
+        }
       }
     }
 
@@ -7557,6 +7672,11 @@ void loop() {
   PollSosYellowLed();  // overrides yellow with fast SOS when mesh_en + no WiFi + 0 peers
   PollBarModeButtons();
   PollBarModeBtn0Chase();  // must run last — overwrites all 3 LEDs while btn0 held
+  if (group_pattern_pending_n > 0 && active_seq == SEQ_NONE) {
+    group_seq_n_val = group_pattern_pending_n;
+    group_pattern_pending_n = 0;
+    StartSequence(SEQ_GROUP);
+  }
   PollSequence();
   PollSensors();
   PollSerialCli();
