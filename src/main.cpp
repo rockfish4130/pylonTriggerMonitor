@@ -5507,7 +5507,7 @@ void StartSequence(SeqType type) {
       group_seq_steps[group_seq_step_count++] = {cfg_grp_qoff_ms, false};
     }
     for (int i = 0; i < n; i++) {
-      group_seq_steps[group_seq_step_count++] = {(uint16_t)(cfg_grp_big_ms * (i + 1)), true};
+      group_seq_steps[group_seq_step_count++] = {(uint16_t)(cfg_grp_big_ms * (i + 2)), true};
       if (i < n - 1) group_seq_steps[group_seq_step_count++] = {cfg_grp_gap_ms, false};
     }
     Console.printf("[SEQ] group start N=%d steps=%d\n", n, group_seq_step_count);
