@@ -221,6 +221,17 @@ uint32_t barmode_btn_counts[4]   = {0,0,0,0};   // running press counts: [green,
 // Per-action counters (since boot): [green_pulse, blue_tap, blue_seq, orange_train, red_tap, red_steam, all4_seq]
 uint32_t barmode_act_counts[7]   = {0,0,0,0,0,0,0};
 bool     barmode_btn_disabled[4] = {false,false,false,false}; // NVS-persisted disable flags
+
+// ---- Rpiboosh MIDI routing (barmode) ----------------------------------------
+// Barmode button actions POST to rpiboosh /send_virtual_midi instead of sending
+// OSC directly to pylons, because barbar may not have a route to pylon IPs.
+struct RpiCmd {
+  uint8_t  note;
+  uint8_t  velocity;
+  uint32_t fire_at_ms;  // millis() deadline; fire immediately when 0
+};
+QueueHandle_t rpi_cmd_queue = nullptr;
+
 bool     web_btn_pressed[4]      = {};  // set by /api/barmode/btn; merged into btn_stable
 bool     barmode_btn_state[4]    = {};  // stable state snapshot for telemetry
 // Ring buffer: up to 1024 button press events (ms + btn index), oldest overwritten
@@ -4430,6 +4441,7 @@ void HandleConfigNodeApi() {
 void SetupWebServer();  // forward declaration
 void PingTask(void *);      // forward declaration
 void TempPollTask(void *);  // forward declaration
+void RpiTask(void *);       // forward declaration
 void StartSequence(SeqType type);  // forward declaration
 void AbortSequence();              // forward declaration
 void MeshBroadcastOsc(const char *osc_addr, float osc_arg);          // forward declaration
@@ -4593,7 +4605,7 @@ void HandleMeshRelayApi() {
   MeshBroadcastOsc(addr.c_str(), arg_f);
   // Apply locally so this node (e.g. BARBAR) also fires
   if (addr == kOscAddress) {
-    if (group_pattern_active && arg_f >= 0.5f) Console.println("[GroupPat] suppressed relay open");
+    if (group_pattern_active) { Console.printf("[GroupPat] suppressed relay %.3f\n", arg_f); }
     else ApplyBooshState(arg_f, "mesh-relay");
   } else if (addr == kOscAddrPulseSingle && arg_f >= 0.5f) {
     if (!action_pulse1_dis) StartSequence(SEQ_PULSE_ONCE);
@@ -5150,8 +5162,10 @@ void setup() {
 
   // Ping and hostname resolution run in a background task so the main loop
   // never blocks on network I/O.
+  rpi_cmd_queue = xQueueCreate(32, sizeof(RpiCmd));
   xTaskCreatePinnedToCore(PingTask,     "ping",     4096, nullptr, 1, nullptr, 0);
   xTaskCreatePinnedToCore(TempPollTask, "tmppoll",  4096, nullptr, 0, nullptr, 0);  // lowest priority
+  xTaskCreatePinnedToCore(RpiTask,      "rpitask",  4096, nullptr, 0, nullptr, 0);  // lowest priority
 }
 
 void HandleOscMessage(OSCMessage &msg) {
@@ -5163,7 +5177,7 @@ void HandleOscMessage(OSCMessage &msg) {
     }
     const float v = msg.getFloat(0);
     Console.printf("OSC BooshMain %.3f\n", v);
-    if (group_pattern_active && v >= 0.5f) { Console.println("[GroupPat] suppressed OSC open"); return; }
+    if (group_pattern_active) { Console.println("[GroupPat] suppressed OSC"); return; }
     ApplyBooshState(v, "osc");
     // Mesh relay: barmode node forwards received UDP commands to ESP-NOW peers
     if (barmode_active) MeshBroadcastOsc(kOscAddress, v);
@@ -5887,6 +5901,7 @@ int ExtractRegistryIPs(IPAddress *dest, int maxCount) {
 // Dispatch one OSC command to a single PylonTarget — IP or ESP-NOW unicast.
 void SendOscToPylonTarget(const char *addr, float value, const PylonTarget &t) {
   if (t.is_self) {
+    if (group_pattern_active) { Console.printf("[GroupPat] suppressed self %.3f\n", value); return; }
     ApplyBooshState(value > 0.5f ? 1 : 0, "barmode-self");
   } else if (t.via_mesh) {
     MeshUnicastOsc(t.mesh_mac, addr, value);
@@ -6006,7 +6021,6 @@ void PollBarModeButtons() {
       seq_phase = 4;
       seq_valve_open    = true;
       seq_valve_open_ms = now;
-      SendOscFloatToAllPylons(kOscAddress, 1.0f);
       ApplyBooshState(1.0f, "barmode");
       barmode_all4_midi_held = true;
       barmode_act_counts[6]++;
@@ -6018,7 +6032,6 @@ void PollBarModeButtons() {
     if (seq_phase >= 1 && !btn_stable[1]) {   // BLUE released
       const int next = (seq_phase == 4) ? 5 : 0;
       if (seq_valve_open) {
-        SendOscFloatToAllPylons(kOscAddress, 0.0f);
         ApplyBooshState(0.0f, "barmode");
         seq_valve_open = false;
         barmode_all4_midi_held = false;
@@ -6031,7 +6044,6 @@ void PollBarModeButtons() {
     } else if (seq_phase >= 2 && !btn_stable[0]) {  // GREEN released in phase 2+
       const int next = (seq_phase == 4) ? 5 : 0;
       if (seq_valve_open) {
-        SendOscFloatToAllPylons(kOscAddress, 0.0f);
         ApplyBooshState(0.0f, "barmode");
         seq_valve_open = false;
         barmode_all4_midi_held = false;
@@ -6044,7 +6056,6 @@ void PollBarModeButtons() {
     } else if (seq_phase >= 3 && !btn_stable[2]) {  // ORANGE released in phase 3+
       const int next = (seq_phase == 4) ? 5 : 0;
       if (seq_valve_open) {
-        SendOscFloatToAllPylons(kOscAddress, 0.0f);
         ApplyBooshState(0.0f, "barmode");
         seq_valve_open = false;
         barmode_all4_midi_held = false;
@@ -6056,7 +6067,6 @@ void PollBarModeButtons() {
       Console.printf("[BarMode] Seq %s: orange released\n", next == 0 ? "reset" : "closing");
     } else if (seq_phase == 4 && !btn_stable[3]) {  // RED released in phase 4
       if (seq_valve_open) {
-        SendOscFloatToAllPylons(kOscAddress, 0.0f);
         ApplyBooshState(0.0f, "barmode");
         seq_valve_open = false;
         barmode_all4_midi_held = false;
@@ -6069,7 +6079,6 @@ void PollBarModeButtons() {
 
     // Phase 4: auto-close timeout
     if (seq_phase == 4 && seq_valve_open && now - seq_valve_open_ms >= barmode_all4_valve_ms) {
-      SendOscFloatToAllPylons(kOscAddress, 0.0f);
       ApplyBooshState(0.0f, "barmode");
       seq_valve_open = false;
       barmode_all4_midi_held = false;
@@ -6187,11 +6196,12 @@ void PollBarModeButtons() {
               btn1_seq_last_fire_ms = now - barmode_seq_start_ms;  // fire first group immediately
               btn1_seq_group        = 0;
               barmode_act_counts[2]++;
+              EnqueueRpiNote(0x1e, 127);
               Console.printf("[BarMode] Btn1 seq: %d pylons\n", btn1_seq_count);
             }
           } else {
             // Normal single fire to all pylons simultaneously
-            SendOscFloatToAllPylons(kOscAddrPulseSingle, 1.0f);
+            EnqueueRpiNote(0x26, 127); EnqueueRpiNote(0x26, 0, 50);
             if (!action_pulse1_dis) StartSequence(SEQ_PULSE_ONCE);
             barmode_act_counts[1]++;
             btn1_single_fired = true;
@@ -6203,6 +6213,7 @@ void PollBarModeButtons() {
         btn1_release_ms = now;
         if (btn1_seq_active) {
           btn1_seq_active = false;
+          EnqueueRpiNote(0x1e, 0);
           Console.println("[BarMode] Btn1 seq stopped");
         } else if (btn1_single_fired && barmode_blue_recovery_ms > 0) {
           blue_recovery_until = now + ApplyTempMult(barmode_blue_recovery_ms);
@@ -6214,15 +6225,16 @@ void PollBarModeButtons() {
       if (btn1_seq_active) {
         if (!btn_stable[1] || now - btn1_seq_start_ms >= barmode_seq_max_ms) {
           btn1_seq_active = false;
+          EnqueueRpiNote(0x1e, 0);
           Console.println("[BarMode] Btn1 seq ended");
         } else if (now - btn1_seq_last_fire_ms >= btn1_seq_delay_ms) {
           btn1_seq_last_fire_ms = now;
-          // Fire all targets in current group (same seq_idx)
+          // Fire one MIDI pulse per group tick (rpiboosh routes to pylons)
           const int cur_val = btn1_seq_targets[btn1_seq_group].seq_idx;
+          EnqueueRpiNote(0x26, 127); EnqueueRpiNote(0x26, 0, 50);
           int fired = 0;
           for (int g = btn1_seq_group;
                g < btn1_seq_count && btn1_seq_targets[g].seq_idx == cur_val; g++) {
-            SendOscFloatToIP(kOscAddrPulseSingle, 1.0f, btn1_seq_targets[g].ip);
             fired++;
           }
           Console.printf("[BarMode] Btn1 seq idx=%d fired=%d delay=%lums\n", cur_val, fired, btn1_seq_delay_ms);
@@ -6274,7 +6286,7 @@ void PollBarModeButtons() {
           barmode_btn_event_btn[barmode_btn_event_head] = 2;
           barmode_btn_event_head = (barmode_btn_event_head + 1) % kBtnEventBufSize;
           if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
-          SendOscFloatToAllPylons(kOscAddrPulseTrain, 1.0f);
+          EnqueueRpiNote(0x16, 127); EnqueueRpiNote(0x16, 0, 50);
           if (!action_pt_dis) StartSequence(SEQ_PULSE_5X);
           barmode_act_counts[3]++;
           io35_strobe        = true;
@@ -6395,7 +6407,7 @@ void PollBarModeButtons() {
             Console.println("[BarMode] Red: 2nd tap");
           } else if (red_state == 2 && now - red_press2_ms <= 500) {
             // Third press + hold → steam
-            SendOscFloatToAllPylons(kOscAddrSteam, 1.0f);
+            EnqueueRpiNote(0x0e, 127);
             if (!action_steam_dis) StartSequence(SEQ_STEAM);
             barmode_act_counts[5]++;
             lamp_red_press_ms = now;
@@ -7012,7 +7024,7 @@ void PollMeshOscQueue() {
     const String addr(ev.osc_addr);
     const float val = ev.osc_arg;
     if (addr == kOscAddress) {
-      if (group_pattern_active && val >= 0.5f) { Console.println("[GroupPat] suppressed mesh open"); continue; }
+      if (group_pattern_active) { Console.printf("[GroupPat] suppressed mesh %.3f\n", val); continue; }
       ApplyBooshState(val, "mesh");
     } else if (addr == kOscAddrPulseSingle) {
       if (!action_pulse1_dis && val >= 0.5f) StartSequence(SEQ_PULSE_ONCE);
@@ -7223,6 +7235,39 @@ void TempPollTask(void *) {
 
     // Sleep 2 minutes before next poll cycle
     vTaskDelay(pdMS_TO_TICKS(120000));
+  }
+}
+
+// Enqueue a MIDI note to be POSTed to rpiboosh /send_virtual_midi.
+// delay_ms: how long to wait after enqueue before firing (0 = immediate).
+// Call from any core; non-blocking (drops if queue full).
+void EnqueueRpiNote(uint8_t note, uint8_t velocity, uint32_t delay_ms = 0) {
+  if (!rpi_cmd_queue) return;
+  const RpiCmd cmd = { note, velocity, (uint32_t)(millis() + delay_ms) };
+  xQueueSend(rpi_cmd_queue, &cmd, 0);
+}
+
+// Posts barmode MIDI commands to rpiboosh /send_virtual_midi (Core 0).
+// Dequeues RpiCmd items, waits until fire_at_ms, then POSTs JSON.
+void RpiTask(void *) {
+  for (;;) {
+    RpiCmd cmd;
+    if (!xQueueReceive(rpi_cmd_queue, &cmd, pdMS_TO_TICKS(50))) continue;
+    const int32_t wait_ms = (int32_t)(cmd.fire_at_ms - (uint32_t)millis());
+    if (wait_ms > 0) vTaskDelay(pdMS_TO_TICKS(wait_ms));
+    if (target_ip_string.length() == 0 || WiFi.status() != WL_CONNECTED) {
+      Console.printf("[RpiTask] skip note=%d vel=%d (no route)\n", cmd.note, cmd.velocity);
+      continue;
+    }
+    HTTPClient http;
+    http.begin("http://" + target_ip_string + ":5000/send_virtual_midi");
+    http.addHeader("Content-Type", "application/json");
+    http.setTimeout(200);
+    char body[64];
+    snprintf(body, sizeof(body), "{\"note\":%d,\"velocity\":%d,\"channel\":0}", cmd.note, cmd.velocity);
+    const int code = http.POST(String(body));
+    http.end();
+    Console.printf("[RpiTask] note=%d vel=%d → %d\n", cmd.note, cmd.velocity, code);
   }
 }
 
