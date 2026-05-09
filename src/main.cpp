@@ -5497,8 +5497,22 @@ void StartSequence(SeqType type) {
   seq_abort_flag = false;
   trigger_event_count += 1;
   if (type == SEQ_GROUP) {
-    // Build flat step table: N quick pulses (66ms on/off each) then N big pulses (600*i ms, 300ms gap)
-    const int n = max(2, min(group_seq_n_val, 8));
+    // Hardcoded per-N step table: N quick pairs then descending big pulses, each followed by 50ms OFF.
+    // N=2: [1000,500]         N=3: [1500,1000,500]
+    // N=4: [1800,1300,800]    N=5: [2100,1800,1000,600]    N>5: N quick pairs + N=5 big pulses
+    // trail=true: 50ms OFF after every big pulse (including last).
+    // trail=false: 50ms OFF between big pulses only; last big pulse ends on ON.
+    struct FafPattern { uint8_t cnt; bool trail; uint16_t ms[4]; };
+    static const FafPattern kPat[6] = {
+      {0, false, {0,    0,    0,   0}},  // N=0 unused
+      {0, false, {0,    0,    0,   0}},  // N=1 unused
+      {2, true,  {1000, 500,  0,   0}},  // N=2: trailing OFF
+      {3, true,  {1500, 1000, 500, 0}},  // N=3: trailing OFF
+      {4, false, {1800, 1300, 800, 300}},  // N=4: ends on ON
+      {4, true,  {2100, 1800, 1000, 600}},  // N=5 (also N>5): trailing OFF
+    };
+    const int n  = max(2, min((int)group_seq_n_val, 8));  // actual group size, 2-8
+    const int ni = min(n, 5);                              // table index, cap at 5
     group_seq_step_count = 0;
     group_seq_step_idx   = 0;
     group_pattern_active = true;
@@ -5506,9 +5520,10 @@ void StartSequence(SeqType type) {
       group_seq_steps[group_seq_step_count++] = {cfg_grp_qon_ms,  true};
       group_seq_steps[group_seq_step_count++] = {cfg_grp_qoff_ms, false};
     }
-    for (int i = 0; i < n; i++) {
-      group_seq_steps[group_seq_step_count++] = {(uint16_t)(cfg_grp_big_ms * (i + 2)), true};
-      if (i < n - 1) group_seq_steps[group_seq_step_count++] = {cfg_grp_gap_ms, false};
+    const FafPattern &pat = kPat[ni];
+    for (int i = 0; i < pat.cnt; i++) {
+      group_seq_steps[group_seq_step_count++] = {pat.ms[i], true};
+      if (i < pat.cnt - 1 || pat.trail) group_seq_steps[group_seq_step_count++] = {50, false};
     }
     Console.printf("[SEQ] group start N=%d steps=%d\n", n, group_seq_step_count);
   }
