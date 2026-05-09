@@ -28,13 +28,16 @@ ESP32-S2 (Wemos S2 Pico) firmware for fire-effect pylons. PlatformIO/Arduino fra
 - **Read `memory/MEMORY.md` at the start of every session** before taking any action
 
 ## Key Nodes
-- **testnodex.local** — stress-test board; safe to include in normal OTA deployments
-- **barbar.local** — Bar Mode development board (AP always-on, pylon_index=1)
-- **tiki0.local** — MEGA TIKI Zero, pylon_index=3
-- **tiki1.local** — MEGA TIKI One, pylon_index=2
-- **testredled.local** — unspecified, pylon_index=6
-- **pylon5d90.local** — unspecified, pylon_index=7
-- **booshstriker.local** — High Striker Boosh node (different firmware project)
+mDNS names now use the `fire-pylon-` prefix (set via `esp_netif_set_hostname` in STA_START + `MDNS.begin`).
+- **fire-pylon-testnodex.local** — stress-test board; safe to include in normal OTA deployments
+- **fire-pylon-barbar.local** — Bar Mode development board (AP always-on, pylon_index=1)
+- **fire-pylon-tiki0.local** — MEGA TIKI Zero, pylon_index=3
+- **fire-pylon-tiki1.local** — MEGA TIKI One, pylon_index=2
+- **fire-pylon-testredled.local** — unspecified, pylon_index=6
+- **fire-pylon-pylon5d90.local** — unspecified, pylon_index=7
+- **booshstriker.local** — High Striker Boosh node (different firmware project, no prefix)
+
+Note: the `fire-pylon-` prefix lives in the node ID directly (e.g. pylon_id=`FIRE-PYLON-BARBAR`). The separate `host` NVS key and web UI field have been removed — `pylon_id` is the single source of truth for both identity and network hostname. mDNS lowercases the pylon_id automatically.
 
 ## Web UI Config Inputs — formDirty Anti-Pattern (DO NOT VIOLATE)
 
@@ -61,7 +64,7 @@ Display-only `<span>` elements go OUTSIDE the formDirty block so they always upd
 
 ## AP Soft-Access-Point
 
-- AP SSID: `FIRE_PYLON_<pylon_id>` (e.g. `FIRE_PYLON_BARBAR`). Max 21 chars for current node names, well under the 32-char WiFi limit.
+- AP SSID: `<pylon_id>` directly (e.g. `FIRE-PYLON-BARBAR`). No extra prefix. Max 32-char WiFi limit applies.
 - AP IP: `10.1.2.3`. Captive portal DNS active when in AP mode.
 - AP is auto-enabled when WiFi fails at boot (saved to NVS); barbar has AP permanently on.
 

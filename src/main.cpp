@@ -252,7 +252,6 @@ volatile unsigned long registry_last_success_ms = 0;
 volatile unsigned long registry_next_attempt_ms = 0;
 volatile uint8_t registry_consecutive_failures = 0;
 String pylon_id;
-String pylon_mdns_host;
 String pylon_description;
 String serial_cli_line;
 volatile bool telemetry_ping_last_ok = false;
@@ -492,7 +491,6 @@ unsigned long temp_plot_short_last_ms = 0;
 
 constexpr const char *kPrefsNamespace = "pylon_cfg";
 constexpr const char *kPrefsKeyId = "id";
-constexpr const char *kPrefsKeyHost = "host";
 constexpr const char *kPrefsKeyDesc = "desc";
 constexpr const char *kPrefsKeyAp = "ap_en";
 constexpr const char *kPrefsKeyUserSsid = "usr_ssid";
@@ -781,41 +779,17 @@ String BuildDefaultPylonId() {
   return String(id);
 }
 
-String NormalizeMdnsHost(String host) {
-  host.trim();
-  if (host.length() == 0) {
-    return host;
-  }
-  String lower = ToLowerAscii(host);
-  if (lower.endsWith(".local")) {
-    host = host.substring(0, host.length() - 6);
-  }
-  host.trim();
-  return host;
-}
-
-bool IsValidMdnsHost(const String &host) {
-  if (host.length() == 0 || host.length() > 63) {
-    return false;
-  }
-  if (host.charAt(0) == '-' || host.charAt(host.length() - 1) == '-') {
-    return false;
-  }
-  for (size_t i = 0; i < host.length(); ++i) {
-    const char c = host.charAt(i);
-    const bool is_alpha = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
-    const bool is_digit = (c >= '0' && c <= '9');
-    if (!(is_alpha || is_digit || c == '-')) {
-      return false;
-    }
-  }
-  return true;
-}
-
 String NormalizePylonId(String id) {
   id.trim();
   if (id.length() > 64) {
     id = id.substring(0, 64);
+  }
+  // Strip accidental .local suffix
+  String lower = id;
+  lower.toLowerCase();
+  if (lower.endsWith(".local")) {
+    id = id.substring(0, id.length() - 6);
+    id.trim();
   }
   return id;
 }
@@ -827,7 +801,6 @@ bool SavePylonConfig() {
     return false;
   }
   prefs.putString(kPrefsKeyId, pylon_id);
-  prefs.putString(kPrefsKeyHost, pylon_mdns_host);
   prefs.putString(kPrefsKeyDesc, pylon_description);
   prefs.putBool(kPrefsKeyAp, ap_enabled);
   prefs.putString(kPrefsKeyUserSsid, user_wifi_ssid);
@@ -913,8 +886,6 @@ void PrintPylonConfig() {
   Console.println("[CFG] current values:");
   Console.print("  id: ");
   Console.println(pylon_id);
-  Console.print("  host: ");
-  Console.println(pylon_mdns_host);
   Console.print("  desc: ");
   Console.println(pylon_description);
   Console.print("  ap: ");
@@ -942,13 +913,11 @@ void LoadPylonConfig() {
   if (!prefs.begin(kPrefsNamespace, false)) {
     Console.println("[CFG] failed to open Preferences namespace");
     pylon_id = BuildDefaultPylonId();
-    pylon_mdns_host = pylon_id;
     pylon_description = kPylonDescriptionDefault;
     return;
   }
 
   String stored_id = NormalizePylonId(prefs.getString(kPrefsKeyId, ""));
-  String stored_host = NormalizeMdnsHost(prefs.getString(kPrefsKeyHost, ""));
   String stored_desc = prefs.getString(kPrefsKeyDesc, "");
   ap_enabled = prefs.getBool(kPrefsKeyAp, false);
   user_wifi_ssid = prefs.getString(kPrefsKeyUserSsid, "");
@@ -1014,22 +983,12 @@ void LoadPylonConfig() {
   const bool unprogrammed = stored_id.length() == 0;
   if (unprogrammed) {
     pylon_id = BuildDefaultPylonId();
-    pylon_mdns_host = pylon_id;
     pylon_description = kPylonDescriptionDefault;
     prefs.putString(kPrefsKeyId, pylon_id);
-    prefs.putString(kPrefsKeyHost, pylon_mdns_host);
     prefs.putString(kPrefsKeyDesc, pylon_description);
     Console.println("[CFG] Preferences unprogrammed, wrote defaults.");
   } else {
     pylon_id = stored_id;
-    if (stored_host.length() == 0) {
-      stored_host = pylon_id;
-    }
-    if (!IsValidMdnsHost(stored_host)) {
-      stored_host = pylon_id;
-      Console.println("[CFG] Stored host invalid, using ID as host.");
-    }
-    pylon_mdns_host = stored_host;
     pylon_description = stored_desc.length() > 0 ? stored_desc : String(kPylonDescriptionDefault);
   }
 
@@ -1087,9 +1046,9 @@ void RestartMdnsIfConnected() {
     return;
   }
   MDNS.end();
-  if (MDNS.begin(("fire-pylon-" + pylon_mdns_host).c_str())) {
+  if (MDNS.begin(pylon_id.c_str())) {
     Console.print("[CFG] mDNS updated: ");
-    Console.print(pylon_mdns_host);
+    Console.print(pylon_id);
     Console.println(".local");
   } else {
     Console.println("[CFG] mDNS update failed.");
@@ -1147,20 +1106,6 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
       Console.print("[CFG] id set: ");
       Console.println(pylon_id);
     }
-  } else if (field == "host" || field == "mdns") {
-    const String new_host = NormalizeMdnsHost(value);
-    if (!IsValidMdnsHost(new_host)) {
-      if (log_output) {
-        Console.println("[CFG] invalid host; allowed: letters, digits, '-' (1..63 chars)");
-      }
-      return false;
-    }
-    pylon_mdns_host = new_host;
-    changed = true;
-    if (log_output) {
-      Console.print("[CFG] host set: ");
-      Console.println(pylon_mdns_host);
-    }
   } else if (field == "desc" || field == "description") {
     pylon_description = value;
     changed = true;
@@ -1176,18 +1121,16 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
     }
   } else if (field == "node") {
     const String new_id = NormalizePylonId(value);
-    const String new_host = NormalizeMdnsHost(value);
-    if (new_id.length() == 0 || !IsValidMdnsHost(new_host)) {
+    if (new_id.length() == 0) {
       if (log_output) {
         Console.println("[CFG] invalid node value");
       }
       return false;
     }
     pylon_id = new_id;
-    pylon_mdns_host = new_host;
     changed = true;
     if (log_output) {
-      Console.print("[CFG] node set (id+host): ");
+      Console.print("[CFG] node/id set: ");
       Console.println(pylon_id);
     }
   } else if (field == "ap") {
@@ -1524,8 +1467,8 @@ String BuildConfigApiJson() {
   payload.reserve(256);
   payload += "{";
   payload += "\"id\":\"" + JsonEscape(pylon_id) + "\",";
-  payload += "\"host\":\"" + JsonEscape(pylon_mdns_host) + "\",";
-  payload += "\"hostname\":\"" + JsonEscape("fire-pylon-" + pylon_mdns_host + ".local") + "\",";
+  payload += "\"host\":\"" + JsonEscape(pylon_id) + "\",";
+  payload += "\"hostname\":\"" + JsonEscape(pylon_id + ".local") + "\",";
   payload += "\"description\":\"" + JsonEscape(pylon_description) + "\",";
   payload += "\"ap_enabled\":" + String(ap_enabled ? "true" : "false") + ",";
   payload += "\"ap_active\":" + String(ap_active ? "true" : "false") + ",";
@@ -1625,7 +1568,7 @@ unsigned long RegistryBackoffMs(uint8_t failureCount) {
 }
 
 String BuildRegistryPayload() {
-  const String hostname = pylon_mdns_host + ".local";
+  const String hostname = pylon_id + ".local";
   const String ip = WiFi.localIP().toString();
   const long wifi_rssi_dbm = WiFi.RSSI();
   String payload;
@@ -2276,7 +2219,7 @@ String BuildDisplayPagesJson(unsigned long now_ms) {
 }
 
 String BuildTelemetryApiJson() {
-  const String hostname = pylon_mdns_host + ".local";
+  const String hostname = pylon_id + ".local";
   const String ip = WiFi.localIP().toString();
   const long wifi_rssi_dbm = WiFi.RSSI();
   const unsigned long now = millis();
@@ -2643,10 +2586,8 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     <div class="panel" style="margin-top:16px">
       <h2>Node Config</h2>
       <form id="config-form" class="meta">
-        <label>ID <input id="cfg-id" name="id"></label>
-        <label>Host <input id="cfg-host" name="host"></label>
+        <label>ID <input id="cfg-id" name="id" placeholder="FIRE-PYLON-NAME"></label>
         <label>Description <input id="cfg-description" name="description"></label>
-        <label>Node Alias <input id="cfg-node" name="node" placeholder="sets id + host"></label>
         <div style="border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
           <span style="color:var(--muted);font-size:13px">WiFi Fallback</span>
           <label>SSID <input id="cfg-wifi-ssid" placeholder="leave blank to disable"></label>
@@ -3142,7 +3083,6 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       setPage('oled-firmware', data.display_pages.firmware);
       if (!formDirty) {
       syncConfigField('cfg-id', data.pylon_id || '');
-      syncConfigField('cfg-host', (data.hostname || '').replace(/\.local$/,''));
       syncConfigField('cfg-description', data.description || '');
       syncConfigField('cfg-wifi-ssid', data.wifi_ssid || '');
       syncConfigField('cfg-wifi-conn-s', data.wifi_conn_s != null ? data.wifi_conn_s : 5);
@@ -3312,7 +3252,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     // ║  2. Sync via syncConfigField(id, value) — never bare .value = x      ║
     // ║  2b. Checkboxes: sync inside if (!formDirty) with activeElement check ║
     // ╚══════════════════════════════════════════════════════════════════════╝
-    const configInputs = ['cfg-id', 'cfg-host', 'cfg-description', 'cfg-node', 'cfg-wifi-ssid',
+    const configInputs = ['cfg-id', 'cfg-description', 'cfg-wifi-ssid',
       'cfg-wifi-pass', 'cfg-wifi-conn-s', 'cfg-failsafe-s', 'cfg-index', 'cfg-green-timeout-ms', 'cfg-all4-valve-ms',
       'cfg-all4-lockout-s', 'cfg-seq-max-s', 'cfg-seq-start-ms', 'cfg-seq-dec-ms', 'cfg-seq-floor-ms', 'cfg-seq-exp-pct',
       'cfg-red-seq-max-s', 'cfg-red-seq-valve-ms', 'cfg-red-seq-step-ms',
@@ -3375,13 +3315,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       const status = document.getElementById('config-status');
       status.textContent = 'Saving...';
       const body = new URLSearchParams();
-      const node = document.getElementById('cfg-node').value.trim();
-      if (node) {
-        body.set('node', node);
-      } else {
-        body.set('id', document.getElementById('cfg-id').value.trim());
-        body.set('host', document.getElementById('cfg-host').value.trim());
-      }
+      body.set('id', document.getElementById('cfg-id').value.trim());
       body.set('description', document.getElementById('cfg-description').value.trim());
       const wifiSsid = document.getElementById('cfg-wifi-ssid').value.trim();
       if (wifiSsid) body.set('wifi_ssid', wifiSsid);
@@ -3484,7 +3418,6 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         });
         status.textContent = `Saved ${result.config.hostname}`;
         formDirty = false;
-        document.getElementById('cfg-node').value = '';
         await refreshTelemetry();
         await refreshLogs();
       } catch (error) {
@@ -4315,9 +4248,7 @@ void HandleConfigGetApi() {
 }
 
 void HandleConfigPostApi() {
-  const bool has_node = webServer.hasArg("node");
   const bool has_id = webServer.hasArg("id");
-  const bool has_host = webServer.hasArg("host");
   const bool has_desc = webServer.hasArg("description") || webServer.hasArg("desc");
   const bool has_wifi_ssid   = webServer.hasArg("wifi_ssid");
   const bool has_wifi_pass   = webServer.hasArg("wifi_pass");
@@ -4368,7 +4299,7 @@ void HandleConfigPostApi() {
   const bool has_wifi_conn_s     = webServer.hasArg("wifi_conn_s");
   const bool has_wifi_reconnect_s = webServer.hasArg("wifi_reconnect_s");
 
-  if (!has_node && !has_id && !has_host && !has_desc &&
+  if (!has_id && !has_desc &&
       !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index && !has_seq_max_s && !has_seq_start_ms && !has_seq_dec_ms && !has_seq_floor_ms && !has_seq_exp_pct && !has_btn_disabled && !has_green_timeout && !has_all4_valve_ms && !has_all4_lockout_s &&
       !has_red_seq_max_s && !has_red_seq_valve_ms && !has_red_seq_step_ms &&
       !has_pulse1_dur_ms && !has_pulse1_dis && !has_pt_dur_ms && !has_pt_off_ms && !has_pt_count && !has_pt_dis &&
@@ -4384,15 +4315,8 @@ void HandleConfigPostApi() {
   }
 
   bool ok = true;
-  if (has_node) {
-    ok = ok && SetConfigFieldValue("node", webServer.arg("node"));
-  } else {
-    if (has_id) {
-      ok = ok && SetConfigFieldValue("id", webServer.arg("id"));
-    }
-    if (has_host) {
-      ok = ok && SetConfigFieldValue("host", webServer.arg("host"));
-    }
+  if (has_id) {
+    ok = ok && SetConfigFieldValue("id", webServer.arg("id"));
   }
   if (has_desc) {
     ok = ok && SetConfigFieldValue("desc",
@@ -4476,18 +4400,6 @@ void HandleConfigIdApi() {
                  "{\"ok\":true,\"config\":" + BuildConfigApiJson() + "}");
 }
 
-void HandleConfigHostApi() {
-  if (!webServer.hasArg("value")) {
-    SendApiError(400, "missing value");
-    return;
-  }
-  if (!SetConfigFieldValue("host", webServer.arg("value"))) {
-    SendApiError(400, "invalid host");
-    return;
-  }
-  webServer.send(200, "application/json",
-                 "{\"ok\":true,\"config\":" + BuildConfigApiJson() + "}");
-}
 
 void HandleConfigDescApi() {
   if (!webServer.hasArg("value")) {
@@ -4548,7 +4460,7 @@ void HandleConfigApApi() {
 }
 
 void SetupApMode() {
-  const String ssid = "FIRE_PYLON_" + pylon_id;
+  const String ssid = pylon_id;
   const bool sta_connected = WiFi.status() == WL_CONNECTED;
   // AP channel strategy:
   // - AP+STA mode: radio is shared; AP channel must match the STA channel.
@@ -4965,7 +4877,6 @@ void SetupWebServer() {
   webServer.on("/api/config", HTTP_GET, HandleConfigGetApi);
   webServer.on("/api/config", HTTP_POST, HandleConfigPostApi);
   webServer.on("/api/config/id", HTTP_POST, HandleConfigIdApi);
-  webServer.on("/api/config/host", HTTP_POST, HandleConfigHostApi);
   webServer.on("/api/config/desc", HTTP_POST, HandleConfigDescApi);
   webServer.on("/api/config/node", HTTP_POST, HandleConfigNodeApi);
   webServer.on("/api/config/ap", HTTP_POST, HandleConfigApApi);
@@ -5087,7 +4998,7 @@ void setup() {
         // Set DHCP hostname before any Discover packet goes out.
         // WiFi.setHostname() silently fails at this point (Arduino wrapper has a
         // known timing issue on ESP32-S2). Call esp_netif directly instead.
-        const String hn = "FIRE-PYLON-" + pylon_mdns_host;
+        const String hn = pylon_id;
         esp_netif_t *iface = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
         if (iface) esp_netif_set_hostname(iface, hn.c_str());
         Console.printf("[WiFi] STA_START hostname: %s (%s)\n", hn.c_str(), iface ? "ok" : "no iface");
@@ -5230,9 +5141,9 @@ void setup() {
     Console.println(WiFi.localIP());
     ShowLavaStatus("IP: " + WiFi.localIP().toString());
 
-    if (MDNS.begin(("fire-pylon-" + pylon_mdns_host).c_str())) {
+    if (MDNS.begin(pylon_id.c_str())) {
       Console.print("mDNS: ");
-      Console.print(pylon_mdns_host);
+      Console.print(pylon_id);
       Console.println(".local");
       MDNS.addService("http", "tcp", 80);
     } else {
@@ -8130,7 +8041,7 @@ void loop() {
                      offline_ms / 1000.0f, (int)mesh_live_peer_count, ap_active);
       // Re-assert hostname via esp_netif directly (Arduino wrapper unreliable on ESP32-S2).
       {
-        const String hn = "FIRE-PYLON-" + pylon_mdns_host;
+        const String hn = pylon_id;
         esp_netif_t *iface = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
         if (iface) esp_netif_set_hostname(iface, hn.c_str());
       }
