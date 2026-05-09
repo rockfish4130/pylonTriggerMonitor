@@ -997,6 +997,7 @@ void LoadPylonConfig() {
   cfg_mesh_ch                = (uint8_t)prefs.getUChar(kPrefsKeyMeshCh, 1);
   cfg_dj_timeout_s           = prefs.getFloat(kPrefsKeyDjTimeoutS, 10.0f);
   cfg_wifi_conn_s            = prefs.getInt(kPrefsKeyWifiConnS, 5);
+  if (cfg_wifi_conn_s < 1 || cfg_wifi_conn_s > 30) cfg_wifi_conn_s = 5;  // guard NVS corruption
   {
     const uint8_t mask = prefs.getUChar(kPrefsKeyBtnDisable, 0);
     for (int i = 0; i < 4; i++) barmode_btn_disabled[i] = (mask >> i) & 1;
@@ -5092,10 +5093,13 @@ void setup() {
 
   ShowLavaStatus("Scanning...");
   WiFi.scanNetworks(true, true);  // async — pulse blue while waiting
-  while (WiFi.scanComplete() < 0) {
-    const unsigned long now_s = millis();
-    ledcWrite(1, ((now_s / 125) % 2 == 0) ? 200 : 0);
-    delay(25);
+  {
+    const unsigned long scan_deadline = millis() + 8000UL;  // 8s max; SCAN_FAILED (-2) loops forever without this
+    while (WiFi.scanComplete() < 0 && (long)(millis() - scan_deadline) < 0) {
+      const unsigned long now_s = millis();
+      ledcWrite(1, ((now_s / 125) % 2 == 0) ? 200 : 0);
+      delay(25);
+    }
   }
   ledcWrite(1, 0);
   int networkCount = (int)WiFi.scanComplete();
