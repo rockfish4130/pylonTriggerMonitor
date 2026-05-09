@@ -140,6 +140,7 @@ unsigned long boosh_failsafe_start_ms = 0;
 unsigned long boosh_failsafe_note_until_ms = 0;
 unsigned long boosh_failsafe_timeout_ms = kBooshFailsafeTimeoutMs;  // runtime, persisted in NVS
 float cfg_dj_timeout_s = 10.0f;    // DJ button hold timeout; persisted in NVS; default 10s
+int   cfg_wifi_conn_s  = 5;        // per-SSID WiFi connect timeout at boot; persisted in NVS; default 5s
 bool  dj_btn_held      = false;     // true while DJ button is held down
 unsigned long dj_btn_press_ms = 0;  // millis() when DJ button was pressed
 // Configurable OSC action parameters (NVS-persisted, apply to all pylons)
@@ -275,6 +276,7 @@ volatile float barmode_bpm = 0.0f;  // 0 = no BPM lock; updated by PingTask from
 // all-4 virtual MIDI hold flag: true while phase-4 valve is open.
 // Set by main loop (PollBarModeButtons), read by PingTask which sends press/keepalive/release.
 volatile bool barmode_all4_midi_held = false;
+volatile bool barmode_all4_open_req  = false;  // latch: set on valve open, cleared only by PingTask
 
 // Seen-remote table: written by PingTask (Core 0) when draining mesh_telem_queue;
 // read by web handler (Core 1) under mesh_remote_mutex.
@@ -543,6 +545,7 @@ constexpr const char *kPrefsKeyStaticDns2    = "static_dns2";   // string; secon
 constexpr const char *kPrefsKeyMeshEn        = "mesh_en";        // bool; enable ESP-NOW mesh
 constexpr const char *kPrefsKeyMeshCh        = "mesh_ch";        // uint8; ESP-NOW channel (1-13)
 constexpr const char *kPrefsKeyDjTimeoutS    = "dj_to_s";        // float; DJ button timeout (s)
+constexpr const char *kPrefsKeyWifiConnS     = "wifi_conn_s";    // int; per-SSID WiFi connect timeout (s)
 constexpr uint32_t kBooshFailsafeMinMs  = 1000;
 constexpr uint32_t kBooshFailsafeMaxMs  = 60000;
 
@@ -664,6 +667,24 @@ void SetDisplayInverted(bool inverted) {
   display_inverted = inverted;
   display.invertDisplay(inverted);
   digitalWrite(kIo11Pin, inverted ? HIGH : LOW);
+}
+
+static void DrawLavaHeader() {
+  // "LAVA" size-3: 4 chars × 18px = 72px wide, 24px tall; centered in 128px
+  display.setTextSize(3);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(28, 0);
+  display.print("LAVA");
+}
+
+void ShowLavaStatus(const String &status) {
+  display.clearDisplay();
+  DrawLavaHeader();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 24);
+  display.print(status);
+  display.display();
 }
 
 void ShowStatus(const String &line1, const String &line2 = "") {
@@ -855,6 +876,7 @@ bool SavePylonConfig() {
   prefs.putBool(kPrefsKeyMeshEn,        cfg_mesh_en);
   prefs.putUChar(kPrefsKeyMeshCh,       cfg_mesh_ch);
   prefs.putFloat(kPrefsKeyDjTimeoutS,   cfg_dj_timeout_s);
+  prefs.putInt(kPrefsKeyWifiConnS,      cfg_wifi_conn_s);
   {
     uint8_t mask = 0;
     for (int i = 0; i < 4; i++) if (barmode_btn_disabled[i]) mask |= (1 << i);
@@ -974,6 +996,7 @@ void LoadPylonConfig() {
   cfg_mesh_en                = prefs.getBool(kPrefsKeyMeshEn,        true);
   cfg_mesh_ch                = (uint8_t)prefs.getUChar(kPrefsKeyMeshCh, 1);
   cfg_dj_timeout_s           = prefs.getFloat(kPrefsKeyDjTimeoutS, 10.0f);
+  cfg_wifi_conn_s            = prefs.getInt(kPrefsKeyWifiConnS, 5);
   {
     const uint8_t mask = prefs.getUChar(kPrefsKeyBtnDisable, 0);
     for (int i = 0; i < 4; i++) barmode_btn_disabled[i] = (mask >> i) & 1;
@@ -1452,6 +1475,12 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
     cfg_dj_timeout_s = s;
     changed = true;
     if (log_output) Console.printf("[CFG] dj_timeout_s set: %.1f\n", cfg_dj_timeout_s);
+  } else if (field == "wifi_conn_s") {
+    const int s = value.toInt();
+    if (s < 1 || s > 30) { if (log_output) Console.println("[CFG] wifi_conn_s out of range (1-30s)"); return false; }
+    cfg_wifi_conn_s = s;
+    changed = true;
+    if (log_output) Console.printf("[CFG] wifi_conn_s set: %d\n", cfg_wifi_conn_s);
   } else {
     if (log_output) {
       Console.println("[CFG] unknown set field. use id|host|desc|node|ap|failsafe_s|index|seq_max_s|seq_dec_ms|seq_exp_pct|pulse1_dur_ms|pulse1_dis|pt_dur_ms|pt_off_ms|pt_count|pt_dis|steam_ramp_s|steam_open_s|steam_dis|mesh_en|mesh_ch");
@@ -1487,6 +1516,7 @@ String BuildConfigApiJson() {
   payload += "\"ap_enabled\":" + String(ap_enabled ? "true" : "false") + ",";
   payload += "\"ap_active\":" + String(ap_active ? "true" : "false") + ",";
   payload += "\"wifi_ssid\":\"" + JsonEscape(user_wifi_ssid) + "\",";
+  payload += "\"wifi_conn_s\":" + String(cfg_wifi_conn_s) + ",";
   payload += "\"failsafe_ms\":" + String(boosh_failsafe_timeout_ms) + ",";
   payload += "\"dj_timeout_s\":" + String(cfg_dj_timeout_s, 1) + ",";
   payload += "\"pylon_index\":" + String(pylon_index) + ",";
@@ -2313,6 +2343,7 @@ String BuildTelemetryApiJson() {
     payload += "\"red_steam_ms\":" + String(steam_ms) + ",";
   }
   payload += "\"wifi_ssid\":\"" + JsonEscape(user_wifi_ssid) + "\",";
+  payload += "\"wifi_conn_s\":" + String(cfg_wifi_conn_s) + ",";
   payload += "\"failsafe_ms\":" + String(boosh_failsafe_timeout_ms) + ",";
   payload += "\"dj_timeout_s\":" + String(cfg_dj_timeout_s, 1) + ",";
   payload += "\"target_ip\":\"" + JsonEscape(target_ip_string) + "\",";
@@ -2586,6 +2617,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           <span style="color:var(--muted);font-size:13px">WiFi Fallback</span>
           <label>SSID <input id="cfg-wifi-ssid" placeholder="leave blank to disable"></label>
           <label>Password <input id="cfg-wifi-pass" type="password" placeholder=""></label>
+          <label>Connect timeout (s/SSID) <input id="cfg-wifi-conn-s" name="wifi_conn_s" type="number" min="1" max="30" step="1" style="width:60px"> <span style="color:var(--muted);font-size:12px">(seconds to attempt each SSID at boot)</span></label>
         </div>
         <div style="border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
           <span style="color:var(--muted);font-size:13px">All Buttons</span>
@@ -3078,6 +3110,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       syncConfigField('cfg-host', (data.hostname || '').replace(/\.local$/,''));
       syncConfigField('cfg-description', data.description || '');
       syncConfigField('cfg-wifi-ssid', data.wifi_ssid || '');
+      syncConfigField('cfg-wifi-conn-s', data.wifi_conn_s != null ? data.wifi_conn_s : 5);
       syncConfigField('cfg-failsafe-s',       data.failsafe_ms != null ? (data.failsafe_ms / 1000).toFixed(1) : '5.0');
       syncConfigField('cfg-dj-timeout-s',     data.dj_timeout_s != null ? data.dj_timeout_s : 10);
       syncConfigField('cfg-index',             data.pylon_index != null ? data.pylon_index : 0);
@@ -3244,7 +3277,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
     // ║  2b. Checkboxes: sync inside if (!formDirty) with activeElement check ║
     // ╚══════════════════════════════════════════════════════════════════════╝
     const configInputs = ['cfg-id', 'cfg-host', 'cfg-description', 'cfg-node', 'cfg-wifi-ssid',
-      'cfg-wifi-pass', 'cfg-failsafe-s', 'cfg-index', 'cfg-green-timeout-ms', 'cfg-all4-valve-ms',
+      'cfg-wifi-pass', 'cfg-wifi-conn-s', 'cfg-failsafe-s', 'cfg-index', 'cfg-green-timeout-ms', 'cfg-all4-valve-ms',
       'cfg-all4-lockout-s', 'cfg-seq-max-s', 'cfg-seq-start-ms', 'cfg-seq-dec-ms', 'cfg-seq-floor-ms', 'cfg-seq-exp-pct',
       'cfg-red-seq-max-s', 'cfg-red-seq-valve-ms', 'cfg-red-seq-step-ms',
       'cfg-pulse1-dur', 'cfg-pt-dur', 'cfg-pt-off', 'cfg-pt-count',
@@ -3318,6 +3351,8 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       if (wifiSsid) body.set('wifi_ssid', wifiSsid);
       const wifiPass = document.getElementById('cfg-wifi-pass').value;
       if (wifiPass) body.set('wifi_pass', wifiPass);
+      const wifiConnS = document.getElementById('cfg-wifi-conn-s').value.trim();
+      if (wifiConnS !== '') body.set('wifi_conn_s', wifiConnS);
       const failsafeS = document.getElementById('cfg-failsafe-s').value.trim();
       if (failsafeS) body.set('failsafe_s', failsafeS);
       const idxVal = document.getElementById('cfg-index').value.trim();
@@ -4292,6 +4327,7 @@ void HandleConfigPostApi() {
   const bool has_mesh_en         = webServer.hasArg("mesh_en");
   const bool has_mesh_ch         = webServer.hasArg("mesh_ch");
   const bool has_dj_timeout_s    = webServer.hasArg("dj_timeout_s");
+  const bool has_wifi_conn_s     = webServer.hasArg("wifi_conn_s");
 
   if (!has_node && !has_id && !has_host && !has_desc &&
       !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index && !has_seq_max_s && !has_seq_start_ms && !has_seq_dec_ms && !has_seq_floor_ms && !has_seq_exp_pct && !has_btn_disabled && !has_green_timeout && !has_all4_valve_ms && !has_all4_lockout_s &&
@@ -4303,7 +4339,7 @@ void HandleConfigPostApi() {
       !has_no_thermistor && !has_no_batt_mon && !has_route_via_rpi &&
       !has_grp_pat_en && !has_grp_win_ms && !has_grp_cool_ms && !has_grp_qon_ms &&
       !has_grp_qoff_ms && !has_grp_big_ms && !has_grp_gap_ms &&
-      !has_mesh_en && !has_mesh_ch && !has_dj_timeout_s) {
+      !has_mesh_en && !has_mesh_ch && !has_dj_timeout_s && !has_wifi_conn_s) {
     SendApiError(400, "no recognized config field");
     return;
   }
@@ -4369,6 +4405,7 @@ void HandleConfigPostApi() {
   if (has_mesh_en)       ok = ok && SetConfigFieldValue("mesh_en",        webServer.arg("mesh_en"));
   if (has_mesh_ch)       ok = ok && SetConfigFieldValue("mesh_ch",            webServer.arg("mesh_ch"));
   if (has_dj_timeout_s)  ok = ok && SetConfigFieldValue("dj_timeout_s",       webServer.arg("dj_timeout_s"));
+  if (has_wifi_conn_s)   ok = ok && SetConfigFieldValue("wifi_conn_s",         webServer.arg("wifi_conn_s"));
   if (has_btn_disabled) {
     // Accepts "0101" bitmask string: index 0=green,1=blue,2=orange,3=red; '1'=disabled
     const String v = webServer.arg("btn_disabled");
@@ -4439,8 +4476,9 @@ void HandleConfigNodeApi() {
 }
 
 void SetupWebServer();  // forward declaration
-void PingTask(void *);      // forward declaration
-void TempPollTask(void *);  // forward declaration
+void PingTask(void *);              // forward declaration
+void BarmodeSolenoidTask(void *);   // forward declaration
+void TempPollTask(void *);          // forward declaration
 void RpiTask(void *);       // forward declaration
 void EnqueueRpiNote(uint8_t note, uint8_t velocity, uint32_t delay_ms = 0);  // forward declaration
 void StartSequence(SeqType type);  // forward declaration
@@ -4999,7 +5037,7 @@ void setup() {
     Console.println("SSD1306 init failed.");
   } else {
     display.invertDisplay(false);
-    LogBootStep("Boot: OLED ready", "WEMOS S2 Pico");
+    ShowLavaStatus("Booting...");
   }
 
   Console.println("Boot: register WiFi events");
@@ -5041,7 +5079,7 @@ void setup() {
     }
   });
 
-  LogBootStep("Boot: WiFi STA mode");
+  ShowLavaStatus("WiFi STA mode");
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
   // Disable auto-reconnect when mesh is active: background reconnect scans
@@ -5052,7 +5090,7 @@ void setup() {
   WiFi.disconnect(false, false);
   delay(100);
 
-  LogBootStep("WiFi scan...");
+  ShowLavaStatus("Scanning...");
   WiFi.scanNetworks(true, true);  // async — pulse blue while waiting
   while (WiFi.scanComplete() < 0) {
     const unsigned long now_s = millis();
@@ -5095,20 +5133,32 @@ void setup() {
     { hasLowLatency ? BOOSH_WIFI_SSID_MW : nullptr, hasLowLatency ? BOOSH_WIFI_PASS_MW : nullptr },
     { user_wifi_ssid.length() > 0 ? user_wifi_ssid.c_str() : nullptr, user_wifi_pass.c_str() },
   };
-  const unsigned long kPerNetworkTimeoutMs = 15000;
+  const unsigned long kPerNetworkTimeoutMs = (unsigned long)cfg_wifi_conn_s * 1000UL;
   for (int ni = 0; ni < 3 && WiFi.status() != WL_CONNECTED; ++ni) {
     if (networks[ni].ssid == nullptr) continue;
     Console.print("Connecting to ");
     Console.println(networks[ni].ssid);
-    ShowStatus("Connecting to", String(networks[ni].ssid));
     WiFi.begin(networks[ni].ssid, networks[ni].pass);
     unsigned long start = millis();
     unsigned long last_dot_ms = start;
+    {
+      String ssid_t = String(networks[ni].ssid);
+      if (ssid_t.length() > 15) ssid_t = ssid_t.substring(0, 15);
+      ShowLavaStatus(ssid_t + " " + String(cfg_wifi_conn_s) + "s");
+    }
     while (WiFi.status() != WL_CONNECTED && millis() - start < kPerNetworkTimeoutMs) {
       const unsigned long now_w = millis();
       ledcWrite(1, ((now_w / 125) % 2 == 0) ? 200 : 0);  // blue 4Hz
       delay(25);
-      if (millis() - last_dot_ms >= 500) { last_dot_ms = millis(); Console.print("."); }
+      if (millis() - last_dot_ms >= 500) {
+        last_dot_ms = millis();
+        Console.print(".");
+        const unsigned long elapsed = millis() - start;
+        const int secs_left = max(0, (int)((kPerNetworkTimeoutMs - elapsed + 999) / 1000));
+        String ssid_t = String(networks[ni].ssid);
+        if (ssid_t.length() > 15) ssid_t = ssid_t.substring(0, 15);
+        ShowLavaStatus(ssid_t + " " + String(secs_left) + "s");
+      }
     }
     ledcWrite(1, 0);  // blue off when done searching
     if (WiFi.status() != WL_CONNECTED) {
@@ -5124,7 +5174,7 @@ void setup() {
     Console.println();
     Console.print("Connected. IP: ");
     Console.println(WiFi.localIP());
-    ShowStatus("WiFi connected", WiFi.localIP().toString());
+    ShowLavaStatus("IP: " + WiFi.localIP().toString());
 
     if (MDNS.begin(pylon_mdns_host.c_str())) {
       Console.print("mDNS: ");
@@ -5165,6 +5215,10 @@ void setup() {
   // never blocks on network I/O.
   rpi_cmd_queue = xQueueCreate(32, sizeof(RpiCmd));
   xTaskCreatePinnedToCore(PingTask,     "ping",     4096, nullptr, 1, nullptr, 0);
+  if (barmode_active) {
+    // Higher priority than PingTask (2 > 1) so it preempts PingTask's HTTP work immediately.
+    xTaskCreatePinnedToCore(BarmodeSolenoidTask, "bmsol", 4096, nullptr, 2, nullptr, 0);
+  }
   xTaskCreatePinnedToCore(TempPollTask, "tmppoll",  4096, nullptr, 0, nullptr, 0);  // lowest priority
   xTaskCreatePinnedToCore(RpiTask,      "rpitask",  4096, nullptr, 0, nullptr, 0);  // lowest priority
 }
@@ -5791,12 +5845,34 @@ unsigned long ApplyTempMult(unsigned long base_ms) {
 
 int ExtractRegistryTargets(PylonTarget *dest, int maxCount) {
   if (!barmode_registry_mutex) return 0;  // not a barmode node
+  int count = 0;
+
+  // 1. Mesh peers first — works with or without rpiboosh.
+  if (cfg_mesh_en && mesh_peers_mutex &&
+      xSemaphoreTake(mesh_peers_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+    for (int i = 0; i < kMeshMaxPeers && count < maxCount; i++) {
+      if (!mesh_peers[i].active) continue;
+      dest[count].ip       = IPAddress(0, 0, 0, 0);
+      dest[count].seq_idx  = (int)mesh_peers[i].pylon_index;
+      dest[count].via_mesh = true;
+      dest[count].is_self  = false;
+      memcpy(dest[count].mesh_mac, mesh_peers[i].mac, 6);
+      count++;
+    }
+    xSemaphoreGive(mesh_peers_mutex);
+  }
+
+  // 2. Registry JSON — fallback for pylons not reachable via mesh.
+  //    Skip pylon_index already covered by a mesh peer.
+  //    Detect own IP and mark is_self instead of sending UDP to self.
   String json;
   if (xSemaphoreTake(barmode_registry_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
     json = barmode_registry_json;
     xSemaphoreGive(barmode_registry_mutex);
   }
-  int count = 0, search = 0;
+  const IPAddress sta_ip = WiFi.localIP();
+  const IPAddress ap_ip  = WiFi.softAPIP();
+  int search = 0;
   while (count < maxCount) {
     int ip_pos = json.indexOf("\"ip\":\"", search);
     if (ip_pos < 0) break;
@@ -5819,6 +5895,25 @@ int ExtractRegistryTargets(PylonTarget *dest, int maxCount) {
 
     if (seq_idx < 0) continue;  // negative index = excluded from sequential mode
 
+    // Skip if a mesh peer already covers this pylon_index
+    bool mesh_dup = false;
+    for (int j = 0; j < count; j++) {
+      if (dest[j].via_mesh && dest[j].seq_idx == seq_idx) { mesh_dup = true; break; }
+    }
+    if (mesh_dup) continue;
+
+    // Own IP → self slot: fires ApplyBooshState directly, no UDP loopback
+    if ((sta_ip != IPAddress(0,0,0,0) && addr == sta_ip) ||
+        (ap_ip  != IPAddress(0,0,0,0) && addr == ap_ip)) {
+      dest[count].ip       = addr;
+      dest[count].seq_idx  = seq_idx;
+      dest[count].via_mesh = false;
+      dest[count].is_self  = true;
+      memset(dest[count].mesh_mac, 0, 6);
+      count++;
+      continue;
+    }
+
     dest[count].ip       = addr;
     dest[count].seq_idx  = seq_idx;
     dest[count].via_mesh = false;
@@ -5826,7 +5921,8 @@ int ExtractRegistryTargets(PylonTarget *dest, int maxCount) {
     memset(dest[count].mesh_mac, 0, 6);
     count++;
   }
-  // Append resolved manual pylons (skip if IP already in list)
+
+  // 3. Manual pylons — skip if IP already in list
   for (int i = 0; i < barmode_manual_pylon_count && count < maxCount; i++) {
     if (!barmode_manual_pylons[i].resolved) continue;
     const IPAddress &mp_ip = barmode_manual_pylons[i].ip;
@@ -5841,29 +5937,7 @@ int ExtractRegistryTargets(PylonTarget *dest, int maxCount) {
       count++;
     }
   }
-  // Append active mesh peers not already covered by pylon_index in the IP list.
-  // Prefer the IP path when a peer is reachable both ways (rpiboosh online); fall back
-  // to ESP-NOW unicast when rpiboosh is offline and the peer is mesh-only.
-  if (cfg_mesh_en && mesh_peers_mutex &&
-      xSemaphoreTake(mesh_peers_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-    for (int i = 0; i < kMeshMaxPeers && count < maxCount; i++) {
-      if (!mesh_peers[i].active) continue;
-      const int pidx = (int)mesh_peers[i].pylon_index;
-      bool dup = false;
-      for (int j = 0; j < count; j++) {
-        if (!dest[j].via_mesh && dest[j].seq_idx == pidx) { dup = true; break; }
-      }
-      if (!dup) {
-        dest[count].ip       = IPAddress(0, 0, 0, 0);
-        dest[count].seq_idx  = pidx;
-        dest[count].via_mesh = true;
-        dest[count].is_self  = false;
-        memcpy(dest[count].mesh_mac, mesh_peers[i].mac, 6);
-        count++;
-      }
-    }
-    xSemaphoreGive(mesh_peers_mutex);
-  }
+
   // Insertion sort by seq_idx (N ≤ 16, stable)
   for (int i = 1; i < count; i++) {
     PylonTarget key = dest[i];
@@ -6038,7 +6112,9 @@ void PollBarModeButtons() {
       seq_valve_open    = true;
       seq_valve_open_ms = now;
       ApplyBooshState(1.0f, "barmode");
+      MeshBroadcastOsc(kOscAddress, 1.0f);
       barmode_all4_midi_held = true;
+      barmode_all4_open_req  = true;
       barmode_act_counts[6]++;
       Console.println("[BarMode] Seq phase 4: valve open");
     }
@@ -6049,6 +6125,7 @@ void PollBarModeButtons() {
       const int next = (seq_phase == 4) ? 5 : 0;
       if (seq_valve_open) {
         ApplyBooshState(0.0f, "barmode");
+        MeshBroadcastOsc(kOscAddress, 0.0f);
         seq_valve_open = false;
         barmode_all4_midi_held = false;
         if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
@@ -6061,6 +6138,7 @@ void PollBarModeButtons() {
       const int next = (seq_phase == 4) ? 5 : 0;
       if (seq_valve_open) {
         ApplyBooshState(0.0f, "barmode");
+        MeshBroadcastOsc(kOscAddress, 0.0f);
         seq_valve_open = false;
         barmode_all4_midi_held = false;
         if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
@@ -6073,6 +6151,7 @@ void PollBarModeButtons() {
       const int next = (seq_phase == 4) ? 5 : 0;
       if (seq_valve_open) {
         ApplyBooshState(0.0f, "barmode");
+        MeshBroadcastOsc(kOscAddress, 0.0f);
         seq_valve_open = false;
         barmode_all4_midi_held = false;
         if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
@@ -6084,6 +6163,7 @@ void PollBarModeButtons() {
     } else if (seq_phase == 4 && !btn_stable[3]) {  // RED released in phase 4
       if (seq_valve_open) {
         ApplyBooshState(0.0f, "barmode");
+        MeshBroadcastOsc(kOscAddress, 0.0f);
         seq_valve_open = false;
         barmode_all4_midi_held = false;
         if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
@@ -6096,6 +6176,7 @@ void PollBarModeButtons() {
     // Phase 4: auto-close timeout
     if (seq_phase == 4 && seq_valve_open && now - seq_valve_open_ms >= barmode_all4_valve_ms) {
       ApplyBooshState(0.0f, "barmode");
+      MeshBroadcastOsc(kOscAddress, 0.0f);
       seq_valve_open = false;
       barmode_all4_midi_held = false;
       if (barmode_all4_lockout_s > 0) barmode_all4_lockout_until_ms = now + barmode_all4_lockout_s * 1000UL;
@@ -6219,6 +6300,7 @@ void PollBarModeButtons() {
             // Normal single fire to all pylons simultaneously
             EnqueueRpiNote(0x26, 127); EnqueueRpiNote(0x26, 0, 50);
             if (!action_pulse1_dis) StartSequence(SEQ_PULSE_ONCE);
+            MeshBroadcastOsc(kOscAddrPulseSingle, 1.0f);
             barmode_act_counts[1]++;
             btn1_single_fired = true;
           }
@@ -6304,6 +6386,7 @@ void PollBarModeButtons() {
           if (barmode_btn_event_count < kBtnEventBufSize) barmode_btn_event_count++;
           EnqueueRpiNote(0x16, 127); EnqueueRpiNote(0x16, 0, 50);
           if (!action_pt_dis) StartSequence(SEQ_PULSE_5X);
+          MeshBroadcastOsc(kOscAddrPulseTrain, 1.0f);
           barmode_act_counts[3]++;
           io35_strobe        = true;
           io35_strobe_start  = now;
@@ -6383,7 +6466,7 @@ void PollBarModeButtons() {
         // (e.g. quick-tap → state 1 mid-pass; closes still time out correctly).
         for (auto &c : red_seq_closes) {
           if (c.active && now >= c.close_at) {
-            if (c.target.is_self) SendOscToPylonTarget(kOscAddress, 0.0f, c.target);
+            SendOscToPylonTarget(kOscAddress, 0.0f, c.target);
             c.active = false;
           }
         }
@@ -6426,6 +6509,7 @@ void PollBarModeButtons() {
             // Third press + hold → steam
             EnqueueRpiNote(0x0e, 127);
             if (!action_steam_dis) StartSequence(SEQ_STEAM);
+            MeshBroadcastOsc(kOscAddrSteam, 1.0f);
             barmode_act_counts[5]++;
             lamp_red_press_ms = now;
             lamp_red_on       = false;
@@ -6443,7 +6527,7 @@ void PollBarModeButtons() {
             const bool first_pass_done = (red_seq_fires >= red_seq_count);
             if (held < 400 && now < red_recovery_until) {
               // Recovery active: flush all closes immediately and stop
-              for (auto &c : red_seq_closes) { if (c.active) { if (c.target.is_self) SendOscToPylonTarget(kOscAddress, 0.0f, c.target); c.active = false; } }
+              for (auto &c : red_seq_closes) { if (c.active) { SendOscToPylonTarget(kOscAddress, 0.0f, c.target); c.active = false; } }
               EnqueueRpiNote(0x1e, 0);
               barmode_recovery_wait_until_ms = red_recovery_until;
               red_state = 0;
@@ -6462,7 +6546,7 @@ void PollBarModeButtons() {
               Console.printf("[BarMode] Red: long-hold released early (%d/%d fired), completing pass\n", red_seq_fires, red_seq_count);
             } else {
               // Long hold, pass done: flush and stop
-              for (auto &c : red_seq_closes) { if (c.active) { if (c.target.is_self) SendOscToPylonTarget(kOscAddress, 0.0f, c.target); c.active = false; } }
+              for (auto &c : red_seq_closes) { if (c.active) { SendOscToPylonTarget(kOscAddress, 0.0f, c.target); c.active = false; } }
               EnqueueRpiNote(0x1e, 0);
               red_state = 0;
               Console.printf("[BarMode] Red: seq end (%lums)\n", held);
@@ -6470,6 +6554,7 @@ void PollBarModeButtons() {
           } else if (red_state == 3) {
             EnqueueRpiNote(0x0e, 0);
             if (!action_steam_dis) AbortSequence();
+            MeshBroadcastOsc(kOscAddrSteam, 0.0f);
             red_state = 0;
             if (barmode_red_recovery_ms > 0) red_recovery_until = now + ApplyTempMult(barmode_red_recovery_ms);
             Console.println("[BarMode] Red: steam released");
@@ -6480,7 +6565,7 @@ void PollBarModeButtons() {
         if (red_state == 4) {
           if (now - red_seq_start_ms >= barmode_red_seq_max_ms) {
             // Max time elapsed: stop
-            for (auto &c : red_seq_closes) { if (c.active) { if (c.target.is_self) SendOscToPylonTarget(kOscAddress, 0.0f, c.target); c.active = false; } }
+            for (auto &c : red_seq_closes) { if (c.active) { SendOscToPylonTarget(kOscAddress, 0.0f, c.target); c.active = false; } }
             EnqueueRpiNote(0x1e, 0);
             red_state = 0;
             Console.println("[BarMode] Red: seq max time");
@@ -6502,8 +6587,8 @@ void PollBarModeButtons() {
                 int slot = -1;
                 for (int i = 0; i < 16; i++) { if (!red_seq_closes[i].active) { slot = i; break; } }
                 if (slot < 0) slot = 0;  // all full (shouldn't happen with ≤16 pylons) — reuse slot 0
-                // Fire open to self only; remote pylons handled by rpiboosh via MIDI note 0x1e
-                if (red_seq_targets[red_seq_pos].is_self) SendOscToPylonTarget(kOscAddress, 1.0f, red_seq_targets[red_seq_pos]);
+                // Fire open: self fires locally, mesh peers via unicast
+                SendOscToPylonTarget(kOscAddress, 1.0f, red_seq_targets[red_seq_pos]);
                 red_seq_closes[slot].target   = red_seq_targets[red_seq_pos];
                 red_seq_closes[slot].close_at = now + barmode_red_seq_valve_ms;
                 red_seq_closes[slot].active   = true;
@@ -6735,8 +6820,11 @@ static void MeshUpsertPeer(const uint8_t *mac, const MeshBeaconPkt &pkt) {
   }
   p.active    = true;
   memcpy(p.mac, mac, 6);
-  // Register peer's unicast MAC with ESP-NOW on first discovery so MeshUnicastOsc can target it.
-  if (is_new && !esp_now_is_peer_exist(mac)) {
+  // Register peer's unicast MAC with ESP-NOW. Re-check on every beacon so that
+  // a MeshInit re-run (triggered by WiFi mode changes) doesn't leave peers
+  // in mesh_peers[] but absent from the ESP-NOW peer table — which causes
+  // unicasts to silently fail while broadcasts continue to work.
+  if (!esp_now_is_peer_exist(mac)) {
     esp_now_peer_info_t peer_info;
     memset(&peer_info, 0, sizeof(peer_info));
     memcpy(peer_info.peer_addr, mac, 6);
@@ -7296,6 +7384,68 @@ void RpiTask(void *) {
   }
 }
 
+// Dedicated solenoid task for barmode all-4 sequence.
+// Runs at priority 2 (> PingTask's 1) on Core 0 so it preempts PingTask's HTTP work
+// and fires within one 10ms poll tick of open_req being set — no 8-second loop delay.
+void BarmodeSolenoidTask(void *) {
+  bool          sol_held_prev = false;
+  unsigned long sol_ka_ms     = 0;
+
+  // Use pre-resolved IP directly to avoid per-call mDNS lookup (can take 1-2s each,
+  // blowing the 3s valve window across 4 sequential calls).
+  auto postSolenoid = [](const char *path) {
+    const String base = target_ip_string.length() > 0
+                        ? "http://" + target_ip_string + ":5000"
+                        : String(kRegistryBaseUrlPrimary);
+    HTTPClient http;
+    http.begin(base + path);
+    http.setTimeout(500);
+    const int code = http.POST("");
+    http.end();
+    Console.printf("[BarMode] solenoid %s -> %d\n", path, code);
+  };
+
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    if (WiFi.status() != WL_CONNECTED) {
+      sol_held_prev = false;
+      continue;
+    }
+
+    const bool sol_held_now = barmode_all4_midi_held;
+    const bool open_req     = barmode_all4_open_req;
+
+    if (open_req) {
+      barmode_all4_open_req = false;
+      Console.println("[BarMode] all4 rpiboosh solenoid open (main+ring)");
+      postSolenoid("/api/solenoid/main/open");
+      postSolenoid("/api/solenoid/ring/open");
+      sol_ka_ms = millis();
+      // Re-read midi_held after HTTP delay — valve may have auto-closed during the call
+      if (!barmode_all4_midi_held) {
+        Console.println("[BarMode] all4 rpiboosh solenoid close (immediate)");
+        postSolenoid("/api/solenoid/main/close");
+        postSolenoid("/api/solenoid/ring/close");
+        sol_held_prev = false;
+      } else {
+        sol_held_prev = true;
+      }
+    } else if (!sol_held_now && sol_held_prev) {
+      Console.println("[BarMode] all4 rpiboosh solenoid close (main+ring)");
+      postSolenoid("/api/solenoid/main/close");
+      postSolenoid("/api/solenoid/ring/close");
+      sol_held_prev = false;
+    } else if (sol_held_now && sol_held_prev && millis() - sol_ka_ms >= 3000) {
+      sol_ka_ms = millis();
+      postSolenoid("/api/solenoid/main/open");
+      postSolenoid("/api/solenoid/ring/open");
+    } else {
+      sol_held_prev = sol_held_now;
+    }
+  }
+}
+
 void PingTask(void *) {
   static const char *kTargetHost = kPingTargetHost;
   static const char *kTargetHostMdns = "RPIBOOSH.local";
@@ -7396,6 +7546,7 @@ void PingTask(void *) {
       vTaskDelay(pdMS_TO_TICKS(500));
       continue;
     }
+
 
     // Remote telemetry bridge: drain mesh_telem_queue, publish MQTT + update remote table.
     if (mesh_telem_queue) {
@@ -7755,56 +7906,6 @@ void PingTask(void *) {
       }
     }
 
-    // all-4 rpiboosh solenoid API: open main + ring while phase-4 is active.
-    // POST /api/solenoid/main/open and /api/solenoid/ring/open — no body, no headers.
-    // Each /open auto-closes after 5s; re-calling /open resets the timer, so we
-    // repeat every 3s as keepalive. On release we POST /close immediately.
-    // Runs here (Core 0) so blocking HTTP never touches the main OSC loop.
-    if (barmode_active) {
-      static bool          sol_held_prev = false;
-      static unsigned long sol_ka_ms     = 0;
-      const  bool          sol_held_now  = barmode_all4_midi_held;
-
-      // Try primary URL; fall back to resolved IP on port 5000 if primary fails.
-      auto postSolenoid = [](const char *path) {
-        const String primary = String(kRegistryBaseUrlPrimary) + path;
-        HTTPClient http;
-        http.begin(primary);
-        http.setTimeout(500);
-        const int code = http.POST("");
-        http.end();
-        if (code == 200) return;
-        // Fallback to resolved IP
-        if (target_ip_string.length() > 0) {
-          const String fallback = "http://" + target_ip_string + ":5000" + path;
-          http.begin(fallback);
-          http.setTimeout(500);
-          http.POST("");
-          http.end();
-        }
-      };
-
-      if (sol_held_now && !sol_held_prev) {
-        // Rising edge: open both solenoid groups
-        Console.println("[BarMode] all4 rpiboosh solenoid open (main+ring)");
-        postSolenoid("/api/solenoid/main/open");
-        postSolenoid("/api/solenoid/ring/open");
-        sol_ka_ms = millis();
-      } else if (!sol_held_now && sol_held_prev) {
-        // Falling edge: close both solenoid groups immediately
-        Console.println("[BarMode] all4 rpiboosh solenoid close (main+ring)");
-        postSolenoid("/api/solenoid/main/close");
-        postSolenoid("/api/solenoid/ring/close");
-      } else if (sol_held_now && millis() - sol_ka_ms >= 3000) {
-        // Keepalive: re-open to reset the 5s server-side auto-close timer
-        sol_ka_ms = millis();
-        postSolenoid("/api/solenoid/main/open");
-        postSolenoid("/api/solenoid/ring/open");
-      }
-
-      sol_held_prev = sol_held_now;
-    }
-
     vTaskDelay(pdMS_TO_TICKS(10));  // yield; ping timing is driven by lastPingMs
   }
 }
@@ -7952,6 +8053,21 @@ void loop() {
       Console.printf("[WiFi] Offline %.0fs — reconnect attempt (peers=%d ap=%d).\n",
                      offline_ms / 1000.0f, (int)mesh_live_peer_count, ap_active);
       WiFi.reconnect();
+      // WiFi.reconnect() in WIFI_AP mode switches to WIFI_AP_STA which restarts the
+      // WiFi driver and clears ESP-NOW peer registrations. When we never had a STA
+      // connection (wasConnected==false), the wasConnected→false repair block never
+      // fires. Detect and fix channel drift / ESP-NOW state here immediately after
+      // the attempt, regardless of wasConnected.
+      if (ap_active && cfg_mesh_en) {
+        uint8_t hw_ch = 0;
+        esp_wifi_get_channel(&hw_ch, nullptr);
+        if (hw_ch != (uint8_t)cfg_mesh_ch) {
+          Console.printf("[AP] reconnect drift — restarting AP on mesh ch=%u (was ch=%u)\n",
+                         cfg_mesh_ch, hw_ch);
+          StopApMode();
+          SetupApMode();
+        }
+      }
     }
     if (!ap_active && offline_ms >= 600000UL) {
       Console.println("[WiFi] Offline 10 min — rebooting.");
