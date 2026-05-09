@@ -140,7 +140,8 @@ unsigned long boosh_failsafe_start_ms = 0;
 unsigned long boosh_failsafe_note_until_ms = 0;
 unsigned long boosh_failsafe_timeout_ms = kBooshFailsafeTimeoutMs;  // runtime, persisted in NVS
 float cfg_dj_timeout_s = 10.0f;    // DJ button hold timeout; persisted in NVS; default 10s
-int   cfg_wifi_conn_s  = 5;        // per-SSID WiFi connect timeout at boot; persisted in NVS; default 5s
+int   cfg_wifi_conn_s      = 5;    // per-SSID WiFi connect timeout at boot; persisted in NVS; default 5s
+int   cfg_wifi_reconnect_s = 600;  // WiFi reconnect interval (s) when live mesh peers present; NVS; default 600s
 bool  dj_btn_held      = false;     // true while DJ button is held down
 unsigned long dj_btn_press_ms = 0;  // millis() when DJ button was pressed
 // Configurable OSC action parameters (NVS-persisted, apply to all pylons)
@@ -241,7 +242,9 @@ uint32_t barmode_btn_event_ms[kBtnEventBufSize];
 uint8_t  barmode_btn_event_btn[kBtnEventBufSize];
 int      barmode_btn_event_head  = 0;   // next write slot
 int      barmode_btn_event_count = 0;   // events stored (0–kBtnEventBufSize)
-unsigned long wifi_connected_since_ms = 0;
+unsigned long wifi_connected_since_ms    = 0;
+unsigned long wifi_disconnected_since_ms = 0;  // millis() when WiFi last dropped; 0 if never connected
+unsigned long wifi_last_reconnect_ms     = 0;  // millis() of last WiFi.reconnect() call
 uint8_t last_disconnect_reason = WIFI_REASON_UNSPECIFIED;
 bool wifi_has_ip = false;
 volatile bool registry_announced = false;
@@ -546,6 +549,7 @@ constexpr const char *kPrefsKeyMeshEn        = "mesh_en";        // bool; enable
 constexpr const char *kPrefsKeyMeshCh        = "mesh_ch";        // uint8; ESP-NOW channel (1-13)
 constexpr const char *kPrefsKeyDjTimeoutS    = "dj_to_s";        // float; DJ button timeout (s)
 constexpr const char *kPrefsKeyWifiConnS     = "wifi_conn_s";    // int; per-SSID WiFi connect timeout (s)
+constexpr const char *kPrefsKeyWifiReconnectS = "wifi_rc_s";     // int; WiFi reconnect interval (s) with live mesh peers
 constexpr uint32_t kBooshFailsafeMinMs  = 1000;
 constexpr uint32_t kBooshFailsafeMaxMs  = 60000;
 
@@ -876,7 +880,8 @@ bool SavePylonConfig() {
   prefs.putBool(kPrefsKeyMeshEn,        cfg_mesh_en);
   prefs.putUChar(kPrefsKeyMeshCh,       cfg_mesh_ch);
   prefs.putFloat(kPrefsKeyDjTimeoutS,   cfg_dj_timeout_s);
-  prefs.putInt(kPrefsKeyWifiConnS,      cfg_wifi_conn_s);
+  prefs.putInt(kPrefsKeyWifiConnS,       cfg_wifi_conn_s);
+  prefs.putInt(kPrefsKeyWifiReconnectS,  cfg_wifi_reconnect_s);
   {
     uint8_t mask = 0;
     for (int i = 0; i < 4; i++) if (barmode_btn_disabled[i]) mask |= (1 << i);
@@ -997,7 +1002,9 @@ void LoadPylonConfig() {
   cfg_mesh_ch                = (uint8_t)prefs.getUChar(kPrefsKeyMeshCh, 1);
   cfg_dj_timeout_s           = prefs.getFloat(kPrefsKeyDjTimeoutS, 10.0f);
   cfg_wifi_conn_s            = prefs.getInt(kPrefsKeyWifiConnS, 5);
-  if (cfg_wifi_conn_s < 1 || cfg_wifi_conn_s > 30) cfg_wifi_conn_s = 5;  // guard NVS corruption
+  if (cfg_wifi_conn_s < 1 || cfg_wifi_conn_s > 30) cfg_wifi_conn_s = 5;
+  cfg_wifi_reconnect_s       = prefs.getInt(kPrefsKeyWifiReconnectS, 600);
+  if (cfg_wifi_reconnect_s < 30 || cfg_wifi_reconnect_s > 3600) cfg_wifi_reconnect_s = 600;
   {
     const uint8_t mask = prefs.getUChar(kPrefsKeyBtnDisable, 0);
     for (int i = 0; i < 4; i++) barmode_btn_disabled[i] = (mask >> i) & 1;
@@ -1476,6 +1483,12 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
     cfg_dj_timeout_s = s;
     changed = true;
     if (log_output) Console.printf("[CFG] dj_timeout_s set: %.1f\n", cfg_dj_timeout_s);
+  } else if (field == "wifi_reconnect_s") {
+    const int s = value.toInt();
+    if (s < 30 || s > 3600) { if (log_output) Console.println("[CFG] wifi_reconnect_s out of range (30-3600s)"); return false; }
+    cfg_wifi_reconnect_s = s;
+    changed = true;
+    if (log_output) Console.printf("[CFG] wifi_reconnect_s set: %d\n", cfg_wifi_reconnect_s);
   } else if (field == "wifi_conn_s") {
     const int s = value.toInt();
     if (s < 1 || s > 30) { if (log_output) Console.println("[CFG] wifi_conn_s out of range (1-30s)"); return false; }
@@ -1518,6 +1531,7 @@ String BuildConfigApiJson() {
   payload += "\"ap_active\":" + String(ap_active ? "true" : "false") + ",";
   payload += "\"wifi_ssid\":\"" + JsonEscape(user_wifi_ssid) + "\",";
   payload += "\"wifi_conn_s\":" + String(cfg_wifi_conn_s) + ",";
+  payload += "\"wifi_reconnect_s\":" + String(cfg_wifi_reconnect_s) + ",";
   payload += "\"failsafe_ms\":" + String(boosh_failsafe_timeout_ms) + ",";
   payload += "\"dj_timeout_s\":" + String(cfg_dj_timeout_s, 1) + ",";
   payload += "\"pylon_index\":" + String(pylon_index) + ",";
@@ -1906,18 +1920,36 @@ void ShowPingStats(const String &host, const PingStats &stats, bool last_ok,
   RenderDisplayPage(BuildPingPageLines(host, stats, last_ok, last_success_ms, now_ms));
 }
 
+static String FormatShortDur(unsigned long ms) {
+  const unsigned long s = ms / 1000;
+  if (s >= 3600) return String(s / 3600) + "h" + String((s % 3600) / 60) + "m";
+  if (s >= 60)   return String(s / 60) + "m" + String(s % 60) + "s";
+  return String(s) + "s";
+}
+
 DisplayPageLines BuildWifiMetricsPageLines(uint8_t page, unsigned long connected_since_ms,
                                            uint8_t disconnect_reason) {
   DisplayPageLines lines;
   if (page == 0) {
+    if (connected_since_ms == 0) {
+      // Offline — show countdown to next reconnect attempt
+      const unsigned long now_ms = millis();
+      const unsigned long ri = (cfg_mesh_en && mesh_live_peer_count > 0)
+                               ? (unsigned long)cfg_wifi_reconnect_s * 1000UL : 30000UL;
+      const unsigned long elapsed = (wifi_last_reconnect_ms > 0) ? now_ms - wifi_last_reconnect_ms : ri;
+      const String rc_str = (elapsed >= ri) ? String("now") : FormatShortDur(ri - elapsed);
+      lines.line1 = "WiFi OFFLINE";
+      lines.line2 = (wifi_disconnected_since_ms > 0)
+                    ? "Off " + FormatShortDur(now_ms - wifi_disconnected_since_ms)
+                    : "Off --";
+      lines.line3 = "RC " + rc_str;
+      lines.line4 = "M:" + String(mesh_live_peer_count) + " ev" + FormatShortDur(ri);
+      return lines;
+    }
     lines.line1 = "WiFi " + TrimForDisplay(WiFi.SSID(), 10);          // "WiFi " + 10 = 15 max
     lines.line2 = TrimForDisplay("RSSI " + String(WiFi.RSSI()) + "dBm", 15);
     lines.line3 = TrimForDisplay("IP " + WiFi.localIP().toString(), 15);
-    if (connected_since_ms > 0) {
-      lines.line4 = "UP " + FormatDurationHms(static_cast<uint32_t>((millis() - connected_since_ms) / 1000));
-    } else {
-      lines.line4 = "UP --:--:--";
-    }
+    lines.line4 = "UP " + FormatDurationHms(static_cast<uint32_t>((millis() - connected_since_ms) / 1000));
   } else {
     lines.line1 = TrimForDisplay("RSN " + String(disconnect_reason) + " " + WifiDisconnectReasonToString(disconnect_reason), 15);
     lines.line2 = "SSID " + TrimForDisplay(WiFi.SSID(), 10);          // "SSID " + 10 = 15 max
@@ -2345,6 +2377,7 @@ String BuildTelemetryApiJson() {
   }
   payload += "\"wifi_ssid\":\"" + JsonEscape(user_wifi_ssid) + "\",";
   payload += "\"wifi_conn_s\":" + String(cfg_wifi_conn_s) + ",";
+  payload += "\"wifi_reconnect_s\":" + String(cfg_wifi_reconnect_s) + ",";
   payload += "\"failsafe_ms\":" + String(boosh_failsafe_timeout_ms) + ",";
   payload += "\"dj_timeout_s\":" + String(cfg_dj_timeout_s, 1) + ",";
   payload += "\"target_ip\":\"" + JsonEscape(target_ip_string) + "\",";
@@ -2619,6 +2652,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           <label>SSID <input id="cfg-wifi-ssid" placeholder="leave blank to disable"></label>
           <label>Password <input id="cfg-wifi-pass" type="password" placeholder=""></label>
           <label>Connect timeout (s/SSID) <input id="cfg-wifi-conn-s" name="wifi_conn_s" type="number" min="1" max="30" step="1" style="width:60px"> <span style="color:var(--muted);font-size:12px">(seconds to attempt each SSID at boot)</span></label>
+          <label>Reconnect interval (s) <input id="cfg-wifi-reconnect-s" name="wifi_reconnect_s" type="number" min="30" max="3600" step="30" style="width:80px"> <span style="color:var(--muted);font-size:12px">(how often to retry WiFi when mesh peers are present; 30s if no peers)</span></label>
         </div>
         <div style="border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
           <span style="color:var(--muted);font-size:13px">All Buttons</span>
@@ -3112,6 +3146,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       syncConfigField('cfg-description', data.description || '');
       syncConfigField('cfg-wifi-ssid', data.wifi_ssid || '');
       syncConfigField('cfg-wifi-conn-s', data.wifi_conn_s != null ? data.wifi_conn_s : 5);
+      syncConfigField('cfg-wifi-reconnect-s', data.wifi_reconnect_s != null ? data.wifi_reconnect_s : 600);
       syncConfigField('cfg-failsafe-s',       data.failsafe_ms != null ? (data.failsafe_ms / 1000).toFixed(1) : '5.0');
       syncConfigField('cfg-dj-timeout-s',     data.dj_timeout_s != null ? data.dj_timeout_s : 10);
       syncConfigField('cfg-index',             data.pylon_index != null ? data.pylon_index : 0);
@@ -3287,7 +3322,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       'cfg-temp-thresh1', 'cfg-temp-mult1', 'cfg-temp-thresh2', 'cfg-temp-mult2',
       'cfg-route-via-rpi', 'cfg-grp-pat-en',
       'cfg-grp-win-ms', 'cfg-grp-cool-s', 'cfg-grp-qon-ms', 'cfg-grp-qoff-ms', 'cfg-grp-big-ms', 'cfg-grp-gap-ms',
-      'cfg-mesh-en', 'cfg-mesh-ch', 'cfg-dj-timeout-s',
+      'cfg-mesh-en', 'cfg-mesh-ch', 'cfg-dj-timeout-s', 'cfg-wifi-reconnect-s',
       'mesh-ch-sel']
       .map((id) => document.getElementById(id))
       .filter(Boolean);
@@ -3354,6 +3389,8 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       if (wifiPass) body.set('wifi_pass', wifiPass);
       const wifiConnS = document.getElementById('cfg-wifi-conn-s').value.trim();
       if (wifiConnS !== '') body.set('wifi_conn_s', wifiConnS);
+      const wifiReconnectS = document.getElementById('cfg-wifi-reconnect-s').value.trim();
+      if (wifiReconnectS !== '') body.set('wifi_reconnect_s', wifiReconnectS);
       const failsafeS = document.getElementById('cfg-failsafe-s').value.trim();
       if (failsafeS) body.set('failsafe_s', failsafeS);
       const idxVal = document.getElementById('cfg-index').value.trim();
@@ -4329,6 +4366,7 @@ void HandleConfigPostApi() {
   const bool has_mesh_ch         = webServer.hasArg("mesh_ch");
   const bool has_dj_timeout_s    = webServer.hasArg("dj_timeout_s");
   const bool has_wifi_conn_s     = webServer.hasArg("wifi_conn_s");
+  const bool has_wifi_reconnect_s = webServer.hasArg("wifi_reconnect_s");
 
   if (!has_node && !has_id && !has_host && !has_desc &&
       !has_wifi_ssid && !has_wifi_pass && !has_failsafe_s && !has_index && !has_seq_max_s && !has_seq_start_ms && !has_seq_dec_ms && !has_seq_floor_ms && !has_seq_exp_pct && !has_btn_disabled && !has_green_timeout && !has_all4_valve_ms && !has_all4_lockout_s &&
@@ -4340,7 +4378,7 @@ void HandleConfigPostApi() {
       !has_no_thermistor && !has_no_batt_mon && !has_route_via_rpi &&
       !has_grp_pat_en && !has_grp_win_ms && !has_grp_cool_ms && !has_grp_qon_ms &&
       !has_grp_qoff_ms && !has_grp_big_ms && !has_grp_gap_ms &&
-      !has_mesh_en && !has_mesh_ch && !has_dj_timeout_s && !has_wifi_conn_s) {
+      !has_mesh_en && !has_mesh_ch && !has_dj_timeout_s && !has_wifi_conn_s && !has_wifi_reconnect_s) {
     SendApiError(400, "no recognized config field");
     return;
   }
@@ -4406,7 +4444,8 @@ void HandleConfigPostApi() {
   if (has_mesh_en)       ok = ok && SetConfigFieldValue("mesh_en",        webServer.arg("mesh_en"));
   if (has_mesh_ch)       ok = ok && SetConfigFieldValue("mesh_ch",            webServer.arg("mesh_ch"));
   if (has_dj_timeout_s)  ok = ok && SetConfigFieldValue("dj_timeout_s",       webServer.arg("dj_timeout_s"));
-  if (has_wifi_conn_s)   ok = ok && SetConfigFieldValue("wifi_conn_s",         webServer.arg("wifi_conn_s"));
+  if (has_wifi_conn_s)      ok = ok && SetConfigFieldValue("wifi_conn_s",      webServer.arg("wifi_conn_s"));
+  if (has_wifi_reconnect_s) ok = ok && SetConfigFieldValue("wifi_reconnect_s", webServer.arg("wifi_reconnect_s"));
   if (has_btn_disabled) {
     // Accepts "0101" bitmask string: index 0=green,1=blue,2=orange,3=red; '1'=disabled
     const String v = webServer.arg("btn_disabled");
@@ -5083,6 +5122,7 @@ void setup() {
   ShowLavaStatus("WiFi STA mode");
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
+  WiFi.setHostname(pylon_mdns_host.c_str());  // use mDNS name as DHCP hostname instead of ESP default
   // Disable auto-reconnect when mesh is active: background reconnect scans
   // change the WiFi channel asynchronously, disrupting ESP-NOW. The manual
   // reconnect watchdog in loop() handles recovery instead.
@@ -8013,13 +8053,13 @@ void loop() {
   const bool wifi_up = (WiFi.status() == WL_CONNECTED);
 
   if (!wifi_up) {
-    static unsigned long disconnected_since_ms = 0;
-    static unsigned long last_reconnect_attempt_ms = 0;
+    // wifi_disconnected_since_ms and wifi_last_reconnect_ms are file-scope globals
+    // so BuildWifiMetricsPageLines can read them for the offline OLED countdown.
 
     if (wasConnected) {
       wasConnected = false;
-      disconnected_since_ms = now;
-      last_reconnect_attempt_ms = 0;
+      wifi_disconnected_since_ms = now;
+      wifi_last_reconnect_ms = 0;
       target_ip_string = "";
       registry_announced = false;
       registry_next_attempt_ms = 0;
@@ -8038,24 +8078,26 @@ void loop() {
         }
       }
     }
-    if (disconnected_since_ms == 0) {
-      disconnected_since_ms = now;  // boot with no WiFi
+    if (wifi_disconnected_since_ms == 0) {
+      wifi_disconnected_since_ms = now;  // boot with no WiFi
     }
 
-    const unsigned long offline_ms = now - disconnected_since_ms;
+    const unsigned long offline_ms = now - wifi_disconnected_since_ms;
 
-    // Reconnect watchdog: every 30s without live mesh peers; every 10 min with them.
+    // Reconnect watchdog: every 30s without live mesh peers; every cfg_wifi_reconnect_s with them.
     // With live peers the radio is pinned to cfg_mesh_ch for ESP-NOW. WiFi.reconnect()
     // temporarily disrupts that channel (~5-10s) but the DISCONNECTED handler re-pins
     // it if the attempt fails, so the disruption is bounded and infrequent.
     // The 10-min reboot is suppressed in AP mode (AP mode is intentional).
     // With setAutoReconnect(false), failed attempts fire DISCONNECTED again.
     const unsigned long reconnect_interval_ms =
-        (cfg_mesh_en && mesh_live_peer_count > 0) ? 600000UL : 30000UL;
-    if (now - last_reconnect_attempt_ms >= reconnect_interval_ms) {
-      last_reconnect_attempt_ms = now;
+        (cfg_mesh_en && mesh_live_peer_count > 0)
+        ? (unsigned long)cfg_wifi_reconnect_s * 1000UL : 30000UL;
+    if (now - wifi_last_reconnect_ms >= reconnect_interval_ms) {
+      wifi_last_reconnect_ms = now;
       Console.printf("[WiFi] Offline %.0fs — reconnect attempt (peers=%d ap=%d).\n",
                      offline_ms / 1000.0f, (int)mesh_live_peer_count, ap_active);
+      WiFi.setHostname(pylon_mdns_host.c_str());  // re-assert; WiFi driver restart may clear it
       WiFi.reconnect();
       // WiFi.reconnect() restarts the WiFi driver and clears ALL ESP-NOW peer
       // registrations — including the broadcast peer. This silently breaks
