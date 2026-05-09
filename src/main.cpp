@@ -1087,7 +1087,7 @@ void RestartMdnsIfConnected() {
     return;
   }
   MDNS.end();
-  if (MDNS.begin(("fire-" + pylon_mdns_host).c_str())) {
+  if (MDNS.begin(("fire-pylon-" + pylon_mdns_host).c_str())) {
     Console.print("[CFG] mDNS updated: ");
     Console.print(pylon_mdns_host);
     Console.println(".local");
@@ -1525,7 +1525,7 @@ String BuildConfigApiJson() {
   payload += "{";
   payload += "\"id\":\"" + JsonEscape(pylon_id) + "\",";
   payload += "\"host\":\"" + JsonEscape(pylon_mdns_host) + "\",";
-  payload += "\"hostname\":\"" + JsonEscape("fire-" + pylon_mdns_host + ".local") + "\",";
+  payload += "\"hostname\":\"" + JsonEscape("fire-pylon-" + pylon_mdns_host + ".local") + "\",";
   payload += "\"description\":\"" + JsonEscape(pylon_description) + "\",";
   payload += "\"ap_enabled\":" + String(ap_enabled ? "true" : "false") + ",";
   payload += "\"ap_active\":" + String(ap_active ? "true" : "false") + ",";
@@ -5083,12 +5083,16 @@ void setup() {
   Console.println("Boot: register WiFi events");
   WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
     switch (event) {
-      case ARDUINO_EVENT_WIFI_STA_START:
-        // sta_netif is now ready — set hostname before any DHCP discover goes out.
-        // Calling setHostname() earlier (e.g. right after WiFi.mode()) races against
-        // the async STA_START event and silently fails because sta_netif is still null.
-        WiFi.setHostname(("FIRE-" + pylon_mdns_host).c_str());
+      case ARDUINO_EVENT_WIFI_STA_START: {
+        // Set DHCP hostname before any Discover packet goes out.
+        // WiFi.setHostname() silently fails at this point (Arduino wrapper has a
+        // known timing issue on ESP32-S2). Call esp_netif directly instead.
+        const String hn = "FIRE-PYLON-" + pylon_mdns_host;
+        esp_netif_t *iface = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        if (iface) esp_netif_set_hostname(iface, hn.c_str());
+        Console.printf("[WiFi] STA_START hostname: %s (%s)\n", hn.c_str(), iface ? "ok" : "no iface");
         break;
+      }
       case ARDUINO_EVENT_WIFI_STA_GOT_IP:
         wifi_connected_since_ms = millis();
         wifi_has_ip = true;
@@ -5226,7 +5230,7 @@ void setup() {
     Console.println(WiFi.localIP());
     ShowLavaStatus("IP: " + WiFi.localIP().toString());
 
-    if (MDNS.begin(("fire-" + pylon_mdns_host).c_str())) {
+    if (MDNS.begin(("fire-pylon-" + pylon_mdns_host).c_str())) {
       Console.print("mDNS: ");
       Console.print(pylon_mdns_host);
       Console.println(".local");
@@ -5248,14 +5252,29 @@ void setup() {
     ShowStatus("WiFi failed", "Starting AP");
     if (!ap_enabled) {
       ap_enabled = true;
-      SavePylonConfig();
-      Console.println("[AP] auto-enabled: no WiFi network found");
+      // Do NOT call SavePylonConfig() here — auto-enable is ephemeral (RAM only).
+      // Saving stale ap_enabled=true to NVS causes SetupApMode() to run after
+      // a later successful WiFi connection, triggering a mid-boot mode change and
+      // RSN-8 ASSOC_LEAVE disconnect.
+      Console.println("[AP] auto-enabled (RAM only): no WiFi network found");
     }
     ap_auto_enabled = true;  // remember this was automatic, not user-requested
   }
 
+  // Start AP if enabled by the user (barmode) OR if auto-enabled because WiFi failed.
+  // Guard: if WiFi connected AND ap_enabled=true but ap_auto_enabled=false AND
+  // barmode is inactive, this is a stale NVS value from a prior WiFi failure.
+  // Clear it instead of calling SetupApMode() — calling SetupApMode() while the
+  // STA is connected fires WiFi.mode(WIFI_AP_STA) which triggers a STA disconnect
+  // (RSN 8 ASSOC_LEAVE) and races with the DISCONNECTED handler's esp_wifi_set_channel().
   if (ap_enabled) {
-    SetupApMode();
+    if (ap_auto_enabled || barmode_active) {
+      SetupApMode();
+    } else {
+      ap_enabled = false;
+      SavePylonConfig();
+      Console.println("[AP] cleared stale NVS ap_enabled — WiFi connected, not barmode");
+    }
   }
 
   // Initialise ESP-NOW mesh (no-op if cfg_mesh_en is false)
@@ -7539,19 +7558,22 @@ void PingTask(void *) {
     }
 
     // ---- Mesh channel mismatch detection ----------------------------------------
-    // If WiFi is connected but we see 0 live mesh peers for >20 s, the STA radio
-    // is locked to the AP's channel which likely differs from cfg_mesh_ch.
-    // Force-disconnect WiFi so the DISCONNECTED event re-pins the radio to
-    // cfg_mesh_ch and the rest of the mesh can be heard again.
-    // This timer resets whenever peers are visible or WiFi is not connected.
+    // If WiFi is connected but we see 0 live mesh peers for >60 s, AND the node
+    // has been connected for >30 s (boot grace period so staggered nodes have
+    // time to beacon each other), the radio may be locked to a WAP channel that
+    // differs from cfg_mesh_ch.  Force-disconnect so the DISCONNECTED handler
+    // re-pins the radio to cfg_mesh_ch and the rest of the mesh can be heard.
     {
       static unsigned long wifi_no_peer_since_ms = 0;
-      if (cfg_mesh_en && wifi_has_ip && mesh_live_peer_count == 0) {
+      const unsigned long connected_for_ms = (wifi_connected_since_ms > 0)
+                                             ? (now - wifi_connected_since_ms) : 0UL;
+      if (cfg_mesh_en && wifi_has_ip && mesh_live_peer_count == 0
+          && connected_for_ms >= 30000UL) {
         if (wifi_no_peer_since_ms == 0) wifi_no_peer_since_ms = now;
-        else if (now - wifi_no_peer_since_ms >= 20000UL) {
-          Console.printf("[Mesh] WiFi connected but 0 peers for 20s — channel mismatch suspected "
-                         "(WiFi ch vs cfg_mesh_ch=%u). Disconnecting WiFi to restore mesh channel.\n",
-                         cfg_mesh_ch);
+        else if (now - wifi_no_peer_since_ms >= 60000UL) {
+          Console.printf("[Mesh] WiFi connected %lus but 0 peers for 60s — channel mismatch "
+                         "suspected (WiFi ch vs cfg_mesh_ch=%u). Disconnecting.\n",
+                         connected_for_ms / 1000UL, cfg_mesh_ch);
           wifi_no_peer_since_ms = 0;
           WiFi.disconnect(false, false);
         }
@@ -8071,14 +8093,17 @@ void loop() {
       registry_next_attempt_ms = 0;
       registry_consecutive_failures = 0;
       Console.println("WiFi disconnected: registry state reset.");
-      // If AP is active and was started on the STA channel (e.g. LavaLounge ch 6),
-      // restart it on cfg_mesh_ch now so ESP-NOW peers can find us.
-      if (ap_active && cfg_mesh_en) {
+      // Restart AP on cfg_mesh_ch only for EXTERNAL disconnects (beacon timeout,
+      // WAP kicked us, etc.).  Self-initiated disconnects (RSN 8 ASSOC_LEAVE from
+      // our own WiFi.disconnect()) mean we immediately want to reconnect on the
+      // same channel — restarting the AP to ch 11 here would leave us in
+      // WIFI_AP-only mode where esp_wifi_connect() fails silently.
+      if (ap_active && cfg_mesh_en && last_disconnect_reason != WIFI_REASON_ASSOC_LEAVE) {
         uint8_t hw_ch = 0;
         esp_wifi_get_channel(&hw_ch, nullptr);
         if (hw_ch != (uint8_t)cfg_mesh_ch) {
-          Console.printf("[AP] STA lost — restarting AP on mesh ch=%u (was ch=%u)\n",
-                         cfg_mesh_ch, hw_ch);
+          Console.printf("[AP] STA lost (reason=%u) — restarting AP on mesh ch=%u (was ch=%u)\n",
+                         last_disconnect_reason, cfg_mesh_ch, hw_ch);
           StopApMode();
           SetupApMode();
         }
@@ -8103,29 +8128,22 @@ void loop() {
       wifi_last_reconnect_ms = now;
       Console.printf("[WiFi] Offline %.0fs — reconnect attempt (peers=%d ap=%d).\n",
                      offline_ms / 1000.0f, (int)mesh_live_peer_count, ap_active);
-      WiFi.setHostname(("FIRE-" + pylon_mdns_host).c_str());  // re-assert; WiFi driver restart may clear it
+      // Re-assert hostname via esp_netif directly (Arduino wrapper unreliable on ESP32-S2).
+      {
+        const String hn = "FIRE-PYLON-" + pylon_mdns_host;
+        esp_netif_t *iface = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        if (iface) esp_netif_set_hostname(iface, hn.c_str());
+      }
       WiFi.reconnect();
-      // WiFi.reconnect() restarts the WiFi driver and clears ALL ESP-NOW peer
-      // registrations — including the broadcast peer. This silently breaks
-      // MeshBroadcastOsc (esp_now_send returns NOT_FOUND) while receive still
-      // works (callback needs no registration). Re-init ESP-NOW unconditionally
-      // when AP+mesh are active. If the channel also drifted, restart the AP
-      // first (SetupApMode calls MeshInit internally); otherwise call MeshInit
-      // directly so only the ESP-NOW state is restored without touching the AP.
+      // Re-init ESP-NOW so the broadcast peer is registered after any WiFi.reconnect().
+      // Do NOT call StopApMode/SetupApMode here — changing the WiFi mode while a
+      // reconnect attempt is in flight (esp_wifi_connect is async) can abort the
+      // attempt and trap nodes in WIFI_AP-only mode where esp_wifi_connect fails.
+      // Channel management is handled by: (a) DISCONNECTED handler for non-AP nodes,
+      // (b) wasConnected→false for external WAP drops, (c) mismatch detection timer.
       if (ap_active && cfg_mesh_en) {
-        uint8_t hw_ch = 0;
-        esp_wifi_get_channel(&hw_ch, nullptr);
-        if (hw_ch != (uint8_t)cfg_mesh_ch) {
-          Console.printf("[AP] reconnect drift — restarting AP on mesh ch=%u (was ch=%u)\n",
-                         cfg_mesh_ch, hw_ch);
-          StopApMode();
-          SetupApMode();
-          // SetupApMode calls MeshInit internally — do not call again.
-        } else {
-          // Channel is correct; just restore the broadcast peer + recv callback.
-          Console.println("[Mesh] reconnect cleared ESP-NOW peers — re-init");
-          MeshInit();
-        }
+        Console.println("[Mesh] reconnect — re-init ESP-NOW (no AP restart)");
+        MeshInit();
       }
     }
     if (!ap_active && offline_ms >= 600000UL) {
