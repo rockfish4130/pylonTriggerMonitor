@@ -5083,6 +5083,12 @@ void setup() {
   Console.println("Boot: register WiFi events");
   WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
     switch (event) {
+      case ARDUINO_EVENT_WIFI_STA_START:
+        // sta_netif is now ready — set hostname before any DHCP discover goes out.
+        // Calling setHostname() earlier (e.g. right after WiFi.mode()) races against
+        // the async STA_START event and silently fails because sta_netif is still null.
+        WiFi.setHostname(pylon_mdns_host.c_str());
+        break;
       case ARDUINO_EVENT_WIFI_STA_GOT_IP:
         wifi_connected_since_ms = millis();
         wifi_has_ip = true;
@@ -5122,7 +5128,7 @@ void setup() {
   ShowLavaStatus("WiFi STA mode");
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
-  WiFi.setHostname(pylon_mdns_host.c_str());  // use mDNS name as DHCP hostname instead of ESP default
+  // Hostname is set in ARDUINO_EVENT_WIFI_STA_START handler (sta_netif not ready here).
   // Disable auto-reconnect when mesh is active: background reconnect scans
   // change the WiFi channel asynchronously, disrupting ESP-NOW. The manual
   // reconnect watchdog in loop() handles recovery instead.
