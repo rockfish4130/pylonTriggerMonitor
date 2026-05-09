@@ -8053,11 +8053,13 @@ void loop() {
       Console.printf("[WiFi] Offline %.0fs — reconnect attempt (peers=%d ap=%d).\n",
                      offline_ms / 1000.0f, (int)mesh_live_peer_count, ap_active);
       WiFi.reconnect();
-      // WiFi.reconnect() in WIFI_AP mode switches to WIFI_AP_STA which restarts the
-      // WiFi driver and clears ESP-NOW peer registrations. When we never had a STA
-      // connection (wasConnected==false), the wasConnected→false repair block never
-      // fires. Detect and fix channel drift / ESP-NOW state here immediately after
-      // the attempt, regardless of wasConnected.
+      // WiFi.reconnect() restarts the WiFi driver and clears ALL ESP-NOW peer
+      // registrations — including the broadcast peer. This silently breaks
+      // MeshBroadcastOsc (esp_now_send returns NOT_FOUND) while receive still
+      // works (callback needs no registration). Re-init ESP-NOW unconditionally
+      // when AP+mesh are active. If the channel also drifted, restart the AP
+      // first (SetupApMode calls MeshInit internally); otherwise call MeshInit
+      // directly so only the ESP-NOW state is restored without touching the AP.
       if (ap_active && cfg_mesh_en) {
         uint8_t hw_ch = 0;
         esp_wifi_get_channel(&hw_ch, nullptr);
@@ -8066,6 +8068,11 @@ void loop() {
                          cfg_mesh_ch, hw_ch);
           StopApMode();
           SetupApMode();
+          // SetupApMode calls MeshInit internally — do not call again.
+        } else {
+          // Channel is correct; just restore the broadcast peer + recv callback.
+          Console.println("[Mesh] reconnect cleared ESP-NOW peers — re-init");
+          MeshInit();
         }
       }
     }
