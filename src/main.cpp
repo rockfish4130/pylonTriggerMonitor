@@ -1087,7 +1087,7 @@ void RestartMdnsIfConnected() {
     return;
   }
   MDNS.end();
-  if (MDNS.begin(pylon_mdns_host.c_str())) {
+  if (MDNS.begin(("fire-" + pylon_mdns_host).c_str())) {
     Console.print("[CFG] mDNS updated: ");
     Console.print(pylon_mdns_host);
     Console.println(".local");
@@ -1525,7 +1525,7 @@ String BuildConfigApiJson() {
   payload += "{";
   payload += "\"id\":\"" + JsonEscape(pylon_id) + "\",";
   payload += "\"host\":\"" + JsonEscape(pylon_mdns_host) + "\",";
-  payload += "\"hostname\":\"" + JsonEscape(pylon_mdns_host + ".local") + "\",";
+  payload += "\"hostname\":\"" + JsonEscape("fire-" + pylon_mdns_host + ".local") + "\",";
   payload += "\"description\":\"" + JsonEscape(pylon_description) + "\",";
   payload += "\"ap_enabled\":" + String(ap_enabled ? "true" : "false") + ",";
   payload += "\"ap_active\":" + String(ap_active ? "true" : "false") + ",";
@@ -5087,7 +5087,7 @@ void setup() {
         // sta_netif is now ready — set hostname before any DHCP discover goes out.
         // Calling setHostname() earlier (e.g. right after WiFi.mode()) races against
         // the async STA_START event and silently fails because sta_netif is still null.
-        WiFi.setHostname(pylon_mdns_host.c_str());
+        WiFi.setHostname(("FIRE-" + pylon_mdns_host).c_str());
         break;
       case ARDUINO_EVENT_WIFI_STA_GOT_IP:
         wifi_connected_since_ms = millis();
@@ -5226,7 +5226,7 @@ void setup() {
     Console.println(WiFi.localIP());
     ShowLavaStatus("IP: " + WiFi.localIP().toString());
 
-    if (MDNS.begin(pylon_mdns_host.c_str())) {
+    if (MDNS.begin(("fire-" + pylon_mdns_host).c_str())) {
       Console.print("mDNS: ");
       Console.print(pylon_mdns_host);
       Console.println(".local");
@@ -8103,7 +8103,7 @@ void loop() {
       wifi_last_reconnect_ms = now;
       Console.printf("[WiFi] Offline %.0fs — reconnect attempt (peers=%d ap=%d).\n",
                      offline_ms / 1000.0f, (int)mesh_live_peer_count, ap_active);
-      WiFi.setHostname(pylon_mdns_host.c_str());  // re-assert; WiFi driver restart may clear it
+      WiFi.setHostname(("FIRE-" + pylon_mdns_host).c_str());  // re-assert; WiFi driver restart may clear it
       WiFi.reconnect();
       // WiFi.reconnect() restarts the WiFi driver and clears ALL ESP-NOW peer
       // registrations — including the broadcast peer. This silently breaks
