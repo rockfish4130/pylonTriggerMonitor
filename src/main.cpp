@@ -2415,6 +2415,9 @@ String BuildTelemetryApiJson() {
     payload += "\"battery_time_remaining_h\":" + fmtOrNull(sensor_battery_time_remaining_h) + ",";
   }
   payload += "\"wifi_rssi_dbm\":" + String(wifi_rssi_dbm) + ",";
+  payload += "\"wifi_channel\":" + String(WiFi.channel()) + ",";
+  payload += "\"mesh_ch_cfg\":" + String(cfg_mesh_ch) + ",";
+  payload += "\"mesh_ch_hw\":" + String(WiFi.channel()) + ",";
   payload += "\"uptime_s\":" + String(static_cast<uint32_t>(now / 1000)) + ",";
   payload += "\"uptime\":\"" + JsonEscape(FormatDurationHms(static_cast<uint32_t>(now / 1000))) + "\",";
   payload += "\"uptime_hms\":\"" + JsonEscape(FormatDurationHms(static_cast<uint32_t>(now / 1000))) + "\",";
@@ -3049,6 +3052,8 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         ['Battery V', data.telemetry.battery_voltage || data.telemetry.battery_voltage_v || 'N/A'],
         ['Battery %', data.telemetry.battery_charge || data.telemetry.battery_charge_pct || 'N/A'],
         ['RSSI', `${data.telemetry.wifi_rssi_dbm} dBm`],
+        ['WiFi ch (hw)', data.telemetry.wifi_channel != null ? String(data.telemetry.wifi_channel) : '--'],
+        ['Mesh ch (cfg)', data.telemetry.mesh_ch_cfg != null ? String(data.telemetry.mesh_ch_cfg) : '--'],
         ['Ping', `${data.telemetry.ping.last_ok ? 'OK' : 'FAIL'} / ${data.telemetry.ping.last_ms} ms`],
         ['Target IP', data.target_ip || '--'],
         ['Triggers', String(data.trigger_event_count)],
