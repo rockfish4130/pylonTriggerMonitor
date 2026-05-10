@@ -648,6 +648,17 @@ static void DrawMeshBadge(int by, uint8_t text_size = 2) {
   display.setTextSize(1);
   display.setCursor(128 - ch_w, by + text_size * 8);
   display.print(ch_buf);
+
+  // WiFi state token — right-aligned at y=24 (below Ch:N), size=1.
+  // W=STA only, W+A=STA+AP, AP=AP only, ---=neither
+  const bool sta_up = (WiFi.status() == WL_CONNECTED);
+  const char *wifi_tok = sta_up && ap_active ? "W+A"
+                       : sta_up              ? "W"
+                       : ap_active           ? "AP"
+                       :                       "---";
+  const int wt_w = static_cast<int>(strlen(wifi_tok)) * 6;
+  display.setCursor(128 - wt_w, by + text_size * 8 + 8);
+  display.print(wifi_tok);
 }
 
 void RenderDisplayPage(const DisplayPageLines &page) {
@@ -2804,6 +2815,21 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           </div>
         </div>
       </div>
+    </div>
+    <div class="panel" style="margin-top:16px">
+      <h2>OLED Persistent Overlay</h2>
+      <p style="color:var(--muted);font-size:13px;margin:0 0 10px">These elements are drawn on top of every OLED page in the top-right corner:</p>
+      <table style="font-size:13px;border-collapse:collapse;width:100%">
+        <tr style="border-bottom:1px solid var(--line)"><th style="text-align:left;padding:4px 12px 4px 0;color:var(--accent);white-space:nowrap">Element</th><th style="text-align:left;padding:4px 0;color:var(--accent)">Meaning</th></tr>
+        <tr style="border-bottom:1px solid var(--line)"><td style="padding:5px 12px 5px 0;font-family:monospace;white-space:nowrap">M:<em>n</em></td><td style="padding:5px 0;color:var(--muted)">ESP-NOW mesh peer count. M:0 = mesh enabled but no peers found.</td></tr>
+        <tr style="border-bottom:1px solid var(--line)"><td style="padding:5px 12px 5px 0;font-family:monospace;white-space:nowrap">Ch:<em>n</em></td><td style="padding:5px 0;color:var(--muted)">Active hardware WiFi channel matches configured mesh channel.</td></tr>
+        <tr style="border-bottom:1px solid var(--line)"><td style="padding:5px 12px 5px 0;font-family:monospace;white-space:nowrap">C<em>hw</em>*<em>cfg</em></td><td style="padding:5px 0;color:var(--muted)">Hardware channel differs from configured mesh channel — expected while connected to a router (STA mode). Resolves automatically if the router drops.</td></tr>
+        <tr style="border-bottom:1px solid var(--line)"><td style="padding:5px 12px 5px 0;font-family:monospace;white-space:nowrap">W</td><td style="padding:5px 0;color:var(--muted)">WiFi STA connected to router only (normal operating state).</td></tr>
+        <tr style="border-bottom:1px solid var(--line)"><td style="padding:5px 12px 5px 0;font-family:monospace;white-space:nowrap">W+A</td><td style="padding:5px 0;color:var(--muted)">WiFi STA connected <em>and</em> AP active (e.g. BARBAR, or auto-AP triggered).</td></tr>
+        <tr style="border-bottom:1px solid var(--line)"><td style="padding:5px 12px 5px 0;font-family:monospace;white-space:nowrap">AP</td><td style="padding:5px 0;color:var(--muted)">AP-only mode — no router connection. Node is its own access point.</td></tr>
+        <tr><td style="padding:5px 12px 5px 0;font-family:monospace;white-space:nowrap">---</td><td style="padding:5px 0;color:var(--muted)">No WiFi — neither STA nor AP active. Node may be reconnecting in background.</td></tr>
+      </table>
+      <p style="color:var(--muted);font-size:12px;margin:8px 0 0">The M:N badge is absent entirely when mesh is disabled.</p>
     </div>
     <div class="grid">
       <section class="panel oled"><h2>OLED Status</h2><pre id="oled-status"></pre></section>

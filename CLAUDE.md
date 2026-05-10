@@ -77,7 +77,7 @@ Display-only `<span>` elements go OUTSIDE the formDirty block so they always upd
 
 **Deployed mesh channel: 11.** Ch 11 is within the 1–11 regulatory range, so `softAP()` always succeeds on ch 11 without the ch-1 fallback. Do not change `cfg_mesh_ch` to 12 or 13 — `softAP()` will fail silently, restoring the `ESP_Fxxxxxx` SSID regression.
 
-**OLED channel badge:** `Ch:11` when hardware matches config. `C6*11` means hardware is on ch 6 (router's channel) while config is 11 — expected in AP+STA mode, resolves automatically when the router drops.
+**OLED channel badge:** `Ch:11` when hardware matches config. `C6*11` means hardware is on ch 6 (router's channel) while config is 11 — expected in AP+STA mode, resolves automatically when the router drops. Below the channel badge: WiFi state token — `W` (STA only), `W+A` (STA+AP), `AP` (AP only), `---` (neither).
 
 ## ESP-NOW Mesh Protocol
 
@@ -127,7 +127,7 @@ In AP-only mode `WIFI_IF_STA` is unassociated — ESP-NOW through it is silently
 
 ## OLED Display
 
-128×32px SSD1306, text size 1 = 6×8px per char (21 chars/line, 4 lines). Lines 1–3 share space with the mesh badge drawn at x=92, leaving ~15 usable chars. Line 4 is free (21 chars).
+128×32px SSD1306, text size 1 = 6×8px per char (21 chars/line, 4 lines). Lines 1–3 share space with the mesh badge drawn at x=92, leaving ~15 usable chars. Line 4 shares the right ~3 chars with the WiFi state token (`W`, `AP`, `W+A`, `---`); keep line 4 content to ~18 chars.
 
 **`AbbrevNodeId(id)`** — helper that collapses `FIRE-PYLON-` prefix to `:FP:` so long node IDs fit on screen. Must be applied at every OLED site that renders own or peer node IDs. Current sites:
 
