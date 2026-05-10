@@ -1639,6 +1639,9 @@ String BuildRegistryPayload() {
     payload += "\"route_via_rpi\":" + String(cfg_route_via_rpi ? "true" : "false") + ",";
   }
   payload += "\"wifi_rssi_dbm\":" + String(wifi_rssi_dbm) + ",";
+  payload += "\"wifi_channel\":" + String(WiFi.channel()) + ",";
+  payload += "\"mesh_ch_cfg\":" + String(cfg_mesh_ch) + ",";
+  payload += "\"mesh_ch_hw\":" + String(WiFi.channel()) + ",";
   payload += "\"uptime_s\":" + String(static_cast<uint32_t>(millis() / 1000)) + ",";
   payload += "\"uptime\":\"" + JsonEscape(FormatDurationHms(static_cast<uint32_t>(millis() / 1000))) + "\",";
   payload += "\"uptime_hms\":\"" + JsonEscape(FormatDurationHms(static_cast<uint32_t>(millis() / 1000))) + "\",";
