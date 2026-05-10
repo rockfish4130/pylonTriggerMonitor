@@ -1972,8 +1972,8 @@ void ShowPylonPingPage() {
     page.line2 = TrimForDisplay("avg " + String(overall_avg) + "ms N=" + String(n) +
                  (lost_count ? " " + String(lost_count) + "x!" : " ok"), 15);
   }
-  page.line3 = TrimForDisplay((issue_n > 0) ? (String("!") + issue_ids[0] + " timeout") : "", 15);
-  page.line4 = (issue_n > 1) ? (String("!") + issue_ids[1] + " timeout") : "";  // line4 free
+  page.line3 = TrimForDisplay((issue_n > 0) ? (String("!") + AbbrevNodeId(String(issue_ids[0])) + " timeout") : "", 15);
+  page.line4 = (issue_n > 1) ? TrimForDisplay(String("!") + AbbrevNodeId(String(issue_ids[1])) + " timeout", 21) : "";  // line4 free, 21 max
   RenderDisplayPage(page);
 }
 
