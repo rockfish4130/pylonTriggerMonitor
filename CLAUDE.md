@@ -29,11 +29,10 @@ ESP32-S2 (Wemos S2 Pico) firmware for fire-effect pylons. PlatformIO/Arduino fra
 
 ## Key Nodes
 mDNS names now use the `fire-pylon-` prefix (set via `esp_netif_set_hostname` in STA_START + `MDNS.begin`).
-- **fire-pylon-testnodex.local** — stress-test board; safe to include in normal OTA deployments
 - **fire-pylon-barbar.local** — Bar Mode development board (AP always-on, pylon_index=1)
 - **fire-pylon-tiki0.local** — MEGA TIKI Zero, pylon_index=3
 - **fire-pylon-tiki1.local** — MEGA TIKI One, pylon_index=2
-- **fire-pylon-testredled.local** — unspecified, pylon_index=6
+- **fire-pylon-redtest.local** — FIRE-PYLON-REDTEST, pylon_index=6
 - **fire-pylon-pylon5d90.local** — unspecified, pylon_index=7
 - **booshstriker.local** — High Striker Boosh node (different firmware project, no prefix)
 
