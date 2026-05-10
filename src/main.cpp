@@ -3648,10 +3648,11 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         ${td(fmt(p.wifi_rssi_dbm,' dBm',0))}
         ${td(p.ping_avg_ms != null ? p.ping_avg_ms+'ms' : '-')}
         <td style="padding:4px 10px;font-size:13px;white-space:nowrap">${fmtLocalPing(p.ip||'')}</td>
+        ${(()=>{const cfg=p.mesh_ch_cfg,hw=p.mesh_ch_hw; if(cfg==null&&hw==null)return td('-','color:var(--muted)'); const match=cfg===hw; return td(`${hw!=null?hw:'?'}/${cfg!=null?cfg:'?'}`, match?'color:#4caf50':'color:#e57373;font-weight:600');})()}
         ${td(esc(p.fw_version||'-'),'color:var(--muted);font-size:11px')}
       </tr>`).join('');
       el.innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr>
-        ${th('ID')}${th('Idx')}${th('Host')}${th('IP')}${th('Status')}${th('Seen')}${th('Bat%')}${th('BatV')}${th('Temp')}${th('RSSI')}${th('RPI Ping')}${th('Local Ping')}${th('FW')}
+        ${th('ID')}${th('Idx')}${th('Host')}${th('IP')}${th('Status')}${th('Seen')}${th('Bat%')}${th('BatV')}${th('Temp')}${th('RSSI')}${th('RPI Ping')}${th('Local Ping')}${th('Ch hw/cfg')}${th('FW')}
       </tr></thead><tbody>${rows}</tbody></table>
       <div style="color:var(--muted);font-size:11px;margin-top:6px">${entries.length} online, ${offline.length} recently offline \u2014 ${esc((data.data&&data.data.server_time)||'')}</div>`;
     }
