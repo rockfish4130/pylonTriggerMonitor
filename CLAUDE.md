@@ -126,6 +126,20 @@ In AP-only mode `WIFI_IF_STA` is unassociated — ESP-NOW through it is silently
 
 **Remote telemetry (type 5):** ESP-NOW-only remotes broadcast `MeshRemoteTelemPkt` periodically. `MeshOnRecv` on all nodes enqueues raw packet to `mesh_telem_queue`. PingTask drains it: publishes retained JSON to MQTT topic `boosh/remote/<remoteID>/telemetry` and updates `mesh_remote_table[8]` (keyed by remote_id; stale after 90 s, expired after 300 s; protected by `mesh_remote_mutex`). `/api/mesh_remotes` (GET) returns a JSON array of non-expired entries. Bar-mode web UI shows the table, polled every 10 s; stale rows render at opacity 0.5.
 
+## OLED Display
+
+128×32px SSD1306, text size 1 = 6×8px per char (21 chars/line, 4 lines). Lines 1–3 share space with the mesh badge drawn at x=92, leaving ~15 usable chars. Line 4 is free (21 chars).
+
+**`AbbrevNodeId(id)`** — helper that collapses `FIRE-PYLON-` prefix to `:FP:` so long node IDs fit on screen. Must be applied at every OLED site that renders own or peer node IDs. Current sites:
+
+| Page / function | Node ID shown | Uses AbbrevNodeId? |
+|---|---|---|
+| Sensor Status (`BuildSensorStatusPageLines`) | own `pylon_id` on line 1 | ✓ |
+| Node Config (`BuildNodeConfigPageLines`) | own `pylon_id` on line 2 | ✓ |
+| Mesh peers (`ShowMeshPage`) | each peer's `node_id` | ✓ |
+| Pylon Ping issues (`ShowPylonPingPage`) | peer `pylon_id` from registry on lines 3–4 | ✓ |
+| Ping / WiFi / Firmware / OTA / WAIT | no node IDs | n/a |
+
 ## OSC Addresses
 - `/pylon/BooshMain` — raw solenoid open/close (1.0/0.0)
 - `/pylon/BooshPulseSingle` — single 50ms pulse (1.0)
