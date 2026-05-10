@@ -3243,7 +3243,14 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
           const badge = document.getElementById('mesh-status-badge');
           if (badge) badge.textContent = mesh.active ? '\u25cf ACTIVE' : '\u25cb INACTIVE';
           const chDisp = document.getElementById('mesh-ch-display');
-          if (chDisp) chDisp.textContent = mesh.channel;
+          if (chDisp) {
+            const hw = (data.telemetry && data.telemetry.wifi_channel != null) ? data.telemetry.wifi_channel : null;
+            const cfg = mesh.channel;
+            const match = (hw === null || hw === cfg);
+            chDisp.innerHTML = match
+              ? String(cfg)
+              : `<span style="color:#e57373;font-weight:600">${hw} hw</span> / ${cfg} cfg`;
+          }
           if (mesh.channel) syncConfigField('mesh-ch-sel', mesh.channel);
           const pcDisp = document.getElementById('mesh-peer-count');
           if (pcDisp) pcDisp.textContent = mesh.peer_count;
