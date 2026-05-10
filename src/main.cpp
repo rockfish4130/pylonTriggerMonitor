@@ -3609,7 +3609,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         ${td('<b>'+esc(p.pylon_id||'?')+'</b>')}
         ${td(p.pylon_index != null ? p.pylon_index : '-','color:var(--muted);text-align:center')}
         ${td(p.hostname ? `<a href="http://${esc(p.hostname)}" target="_blank" style="color:var(--accent)">${esc(p.hostname)}</a>` : '-')}
-        ${td(esc(p.ip||'-'),'color:var(--muted)')}
+        ${td(p.ip ? `<a href="http://${esc(p.ip)}" target="_blank" style="color:var(--muted)">${esc(p.ip)}</a>` : '-')}
         ${td(badge(p.active))}
         ${td(p.seconds_since_seen != null ? p.seconds_since_seen+'s ago' : '-','color:var(--muted)')}
         ${td(fmt(p.battery_charge_pct,'%',0))}
