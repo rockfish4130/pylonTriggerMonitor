@@ -246,6 +246,8 @@ int      barmode_btn_event_count = 0;   // events stored (0–kBtnEventBufSize)
 unsigned long wifi_connected_since_ms    = 0;
 unsigned long wifi_disconnected_since_ms = 0;  // millis() when WiFi last dropped; 0 if never connected
 unsigned long wifi_last_reconnect_ms     = 0;  // millis() of last WiFi.reconnect() call
+bool          wifi_ap_probe_active       = false; // true while auto-AP is stopped for a reconnect probe
+unsigned long wifi_ap_probe_start_ms    = 0;    // millis() when the probe was started
 uint8_t last_disconnect_reason = WIFI_REASON_UNSPECIFIED;
 bool wifi_has_ip = false;
 volatile bool registry_announced = false;
@@ -8121,19 +8123,35 @@ void loop() {
         esp_netif_t *iface = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
         if (iface) esp_netif_set_hostname(iface, hn.c_str());
       }
-      WiFi.reconnect();
-      // Re-init ESP-NOW so the broadcast peer is registered after any WiFi.reconnect().
-      // Do NOT call StopApMode/SetupApMode here — changing the WiFi mode while a
-      // reconnect attempt is in flight (esp_wifi_connect is async) can abort the
-      // attempt and trap nodes in WIFI_AP-only mode where esp_wifi_connect fails.
-      // Channel management is handled by: (a) DISCONNECTED handler for non-AP nodes,
-      // (b) wasConnected→false for external WAP drops, (c) mismatch detection timer.
-      if (ap_active && cfg_mesh_en) {
-        Console.println("[Mesh] reconnect — re-init ESP-NOW (no AP restart)");
-        MeshInit();
+      if (ap_active && ap_auto_enabled) {
+        // Auto-AP is pinning the radio to cfg_mesh_ch, preventing cross-channel scans.
+        // Stop it briefly so STA can scan all channels. If not connected within 15s,
+        // the probe-timeout block below restores AP on cfg_mesh_ch.
+        Console.println("[WiFi] Probe: stopping auto-AP for cross-channel scan");
+        StopApMode();
+        ap_enabled = false;
+        WiFi.disconnect(false);
+        WiFi.begin(BOOSH_WIFI_SSID_LL, BOOSH_WIFI_PASS_LL);
+        wifi_ap_probe_active    = true;
+        wifi_ap_probe_start_ms  = now;
+      } else {
+        WiFi.reconnect();
+        // Re-init ESP-NOW so the broadcast peer is registered after any WiFi.reconnect().
+        if (ap_active && cfg_mesh_en) {
+          Console.println("[Mesh] reconnect — re-init ESP-NOW (no AP restart)");
+          MeshInit();
+        }
       }
     }
-    if (!ap_active && offline_ms >= 600000UL) {
+    // Probe timeout: STA didn't connect within 15s — restore auto-AP on cfg_mesh_ch.
+    if (wifi_ap_probe_active && (now - wifi_ap_probe_start_ms >= 15000UL)) {
+      Console.println("[WiFi] Probe: timed out — restoring auto-AP on mesh ch");
+      wifi_ap_probe_active = false;
+      ap_enabled      = true;
+      ap_auto_enabled = true;
+      // ap_enabled=true && !ap_active → main loop SetupApMode() → AP on cfg_mesh_ch
+    }
+    if (!ap_active && !wifi_ap_probe_active && offline_ms >= 600000UL) {
       Console.println("[WiFi] Offline 10 min — rebooting.");
       ESP.restart();
     }
@@ -8143,6 +8161,12 @@ void loop() {
     PollOsc();
     if (!wasConnected) {
       wasConnected = true;
+      if (wifi_ap_probe_active) {
+        // Probe succeeded — STA connected, auto-AP no longer needed.
+        wifi_ap_probe_active = false;
+        ap_auto_enabled      = false;
+        Console.println("[WiFi] Probe: connected — auto-AP cleared");
+      }
       registry_announced = false;
       registry_next_attempt_ms = now;
       registry_consecutive_failures = 0;
