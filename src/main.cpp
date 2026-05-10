@@ -78,7 +78,7 @@ constexpr const char *kOscAddrSteam       = "/pylon/BooshSteam";
 
 // ---- Mesh (ESP-NOW) constants -----------------------------------------------
 constexpr uint32_t kMeshMagic            = 0x4D455348UL; // "MESH"
-constexpr uint8_t  kMeshVersion          = 3;  // bump when beacon struct changes
+constexpr uint8_t  kMeshVersion          = 4;  // bump when beacon struct changes
 constexpr uint8_t  kMeshPktBeacon        = 1;
 constexpr uint8_t  kMeshPktCommand       = 2;
 constexpr uint8_t  kMeshPktChanChange    = 3;
@@ -339,7 +339,7 @@ struct __attribute__((packed)) MeshBeaconPkt {
   uint32_t magic;
   uint8_t  version;
   uint8_t  type;       // kMeshPktBeacon
-  char     node_id[16];
+  char     node_id[32];
   uint8_t  pylon_index;
   uint8_t  role;       // 0=normal, 1=barmode
   uint32_t uptime_s;
@@ -399,7 +399,7 @@ struct __attribute__((packed)) MeshRemoteTelemPkt {
 struct MeshPeerInfo {
   bool     active;
   uint8_t  mac[6];
-  char     node_id[16];
+  char     node_id[32];
   uint8_t  pylon_index;
   uint8_t  role;
   uint32_t last_seen_ms;
@@ -768,6 +768,11 @@ String ToLowerAscii(String value) {
     }
   }
   return value;
+}
+
+String AbbrevNodeId(const String &id) {
+  if (id.startsWith("FIRE-PYLON-")) return ":FP:" + id.substring(11);
+  return id;
 }
 
 String BuildDefaultPylonId() {
@@ -1909,7 +1914,7 @@ void ShowWifiMetricsPage(uint8_t page, unsigned long connected_since_ms, uint8_t
 DisplayPageLines BuildNodeConfigPageLines() {
   DisplayPageLines page;
   page.line1 = "NODE CONFIG";                                  // 11 chars, fits
-  page.line2 = "ID: " + TrimForDisplay(pylon_id, 11);        // "ID: " + 11 = 15 max
+  page.line2 = "ID: " + TrimForDisplay(AbbrevNodeId(pylon_id), 11);  // "ID: " + 11 = 15 max
   page.line3 = TrimForDisplay("TRIG: " + String(trigger_event_count), 15);
   page.line4 = "FW " + String(kFirmwareSemver);
   return page;
@@ -1974,7 +1979,7 @@ void ShowPylonPingPage() {
 
 DisplayPageLines BuildSensorStatusPageLines() {
   DisplayPageLines page;
-  page.line1 = TrimForDisplay(pylon_id, 15);
+  page.line1 = TrimForDisplay(AbbrevNodeId(pylon_id), 15);
 
   if (isfinite(sensor_temp_f)) {
     float tempC = (sensor_temp_f - 32.0f) * 5.0f / 9.0f;
@@ -7182,14 +7187,15 @@ void MeshInit() {
 // Each call advances to the next page; wraps when peer count changes.
 void ShowMeshPage() {
   // Collect ALL active peers (up to kMeshMaxPeers)
-  struct { char id[17]; uint8_t qual_pct; } peers[kMeshMaxPeers];
+  struct { char id[15]; uint8_t qual_pct; } peers[kMeshMaxPeers];
   int filled = 0;
 
   if (mesh_peers_mutex && xSemaphoreTake(mesh_peers_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
     for (int i = 0; i < kMeshMaxPeers; i++) {
       if (!mesh_peers[i].active) continue;
-      strncpy(peers[filled].id, mesh_peers[i].node_id, 16);
-      peers[filled].id[16] = '\0';
+      const String abbrev = AbbrevNodeId(String(mesh_peers[i].node_id));
+      strncpy(peers[filled].id, abbrev.c_str(), 14);
+      peers[filled].id[14] = '\0';
       peers[filled].qual_pct = mesh_peers[i].qual_pct;
       filled++;
     }
@@ -7255,8 +7261,8 @@ void ShowMeshPage() {
     const int pi = page_start + i;
     if (pi >= filled) break;
     display.setCursor(0, 16 + i * 8);
-    char pbuf[14];  // 13 chars max — stays left of Ch:N badge at x=92
-    snprintf(pbuf, sizeof(pbuf), "%-8s %3u%%", peers[pi].id, peers[pi].qual_pct);
+    char pbuf[16];  // "%-10.10s%3u%%" = 10 + 4 = 14 chars, stays left of Ch:N badge
+    snprintf(pbuf, sizeof(pbuf), "%-10.10s%3u%%", peers[pi].id, peers[pi].qual_pct);
     display.print(pbuf);
   }
 

@@ -86,7 +86,7 @@ All nodes participate in a peer-to-peer ESP-NOW mesh on a configurable channel (
 
 **Constants:**
 - `kMeshMagic = 0x4D455348UL` ("MESH") — first 4 bytes of every packet; quick sanity check
-- `kMeshVersion = 3` — bump whenever a packet struct layout changes; mismatched nodes are dropped
+- `kMeshVersion = 4` — bump whenever a packet struct layout changes; mismatched nodes are dropped
 - `kMeshPktBeacon = 1`, `kMeshPktCommand = 2`, `kMeshPktChanChange = 3`, `kMeshPktPadEvent = 4`, `kMeshPktRemoteTelem = 5`
 - Beacon interval: 2000 ms. Peer timeout: 8000 ms. Max peers: 10.
 - Quality metric: 16-slot rolling bitmap, one slot per beacon interval (32s window); `qual_pct = popcount(qual_bits) * 100 / 16`
