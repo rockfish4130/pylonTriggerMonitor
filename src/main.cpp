@@ -2593,6 +2593,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       <form id="config-form" class="meta">
         <label>ID <input id="cfg-id" name="id" placeholder="FIRE-PYLON-NAME"></label>
         <label>Description <input id="cfg-description" name="description"></label>
+        <span style="color:var(--muted);font-size:12px">Include <code>BARMODE ENABLED</code> anywhere in description to activate bar-mode hardware and UI</span>
         <div style="border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
           <span style="color:var(--muted);font-size:13px">WiFi Fallback</span>
           <label>SSID <input id="cfg-wifi-ssid" placeholder="leave blank to disable"></label>
@@ -2752,7 +2753,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         </div>
         <div style="border-top:1px solid var(--line);padding-top:10px;display:flex;align-items:center;gap:10px">
           <input type="checkbox" id="cfg-ap" style="width:18px;height:18px;margin:0;cursor:pointer;accent-color:var(--accent)">
-          <span style="color:var(--muted);font-size:14px">Enable WiFi AP &mdash; SSID: <code>PYLON_<em>id</em></code>, IP <code>10.1.2.3</code></span>
+          <span style="color:var(--muted);font-size:14px">Enable WiFi AP &mdash; SSID: <code><em>node-id</em></code> (e.g. <code>FIRE-PYLON-BARBAR</code>), IP <code>10.1.2.3</code></span>
         </div>
         <div style="border-top:1px solid var(--line);padding-top:10px;display:grid;gap:8px">
           <div style="font-weight:600;color:var(--accent)">MESH (ESP-NOW)</div>
