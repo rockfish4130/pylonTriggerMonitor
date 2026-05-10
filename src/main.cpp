@@ -2765,6 +2765,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
         </div>
         <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
           <button type="submit">Save Config</button>
+          <button type="button" id="reboot-btn" style="background:#5a1a1a;border-color:#8a2a2a;color:#ffaaaa">Reboot</button>
           <span id="config-status"></span>
         </div>
       </form>
@@ -3429,6 +3430,15 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       } catch (error) {
         status.innerHTML = `Save failed: ${esc(error.message)}`;
       }
+    });
+    // ---- Reboot -------------------------------------------------------------
+    document.getElementById('reboot-btn').addEventListener('click', async () => {
+      if (!confirm('Reboot this pylon now?')) return;
+      const status = document.getElementById('config-status');
+      try {
+        await fetch('/api/reboot', {method:'POST'});
+        status.textContent = 'Rebooting…';
+      } catch(e) { status.textContent = 'Rebooting…'; }
     });
     // ---- Identify -----------------------------------------------------------
     const identifyBtn    = document.getElementById('identify-btn');
@@ -4873,6 +4883,12 @@ void HandleOtaApi() {
   ESP.restart();
 }
 
+void HandleRebootApi() {
+  webServer.send(200, "application/json", "{\"ok\":true,\"rebooting\":true}");
+  delay(100);
+  ESP.restart();
+}
+
 void SetupWebServer() {
   if (web_server_started) {
     return;
@@ -4898,6 +4914,7 @@ void SetupWebServer() {
   webServer.on("/api/pylons/manual", HTTP_POST, HandleManualPylonsPostApi);
   webServer.on("/api/events",   HTTP_GET, HandleBtnEventsApi);
   webServer.on("/api/ota", HTTP_POST, HandleOtaApi, HandleOtaUploadBody);
+  webServer.on("/api/reboot",   HTTP_POST, HandleRebootApi);
   webServer.on("/api/identify", HTTP_POST, HandleIdentifyApi);
   webServer.on("/api/sequence/pulse_once", HTTP_POST, HandleSeqPulseOnceApi);
   webServer.on("/api/sequence/pulse_5x", HTTP_POST, HandleSeqPulse5xApi);
