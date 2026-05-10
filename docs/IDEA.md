@@ -1,10 +1,75 @@
 # Ideas
 
 Speculative features and directions — not committed to the roadmap.
+####
+
+Node config has ID and host fields......
+do we really need both? answer carefully.
+
+makes sense to just consolidate into 1 field?
+
+--
+add hint text that the field should begin w FIRE-PYLON-
+
+#####
+
+-------------
+This should be obvious, but ALWAYS REMEMBER to not "bite the hand that feeds you" meaning watch for conditions and code that could impair an otherwise perfectly usable wifi link.
+
+any questions?
+
+## FAF pattern bug
+is there an error in the FAF pattern?
+
+if 2 remotes trigger FAF, I want 2 of the short valve pulses, then 2 of the long open pulses that get longer in time.
+
+I think for N==2, I currenrtly see 3 short pulses and then just one long open pulse.
+
+any questions?
+undestand?
 
 ## Remote Find-a-Friend Mode
 
 N people each hold an ESP-NOW remote. When multiple people press their buttons at approximately the same time, the pylons recognize the synchronized press and trigger a secret "reward" fire pattern not available through any other means. The more people in sync, the cooler the pattern.
+for N remotes pressing the yellow button (roughly) simultaneously: 
+if N==2
+66 ms valve open
+66 ms closed
+66 ms valve open
+66 ms closed
+600 ms valve open
+300 ms closed
+1200 ms valve open
+valve closes, sequence done.
+
+
+
+if N==3
+66 ms valve open
+66 ms closed
+66 ms valve open
+66 ms closed
+66 ms valve open
+66 ms closed
+600 ms valve open
+300 ms closed
+1200 ms valve open
+300 ms closed
+1800 ms valve open
+valve closes, sequence done.
+
+
+etc.
+
+
+
+also all a web UI NVS toggle, enabled by default "enable group remote secret pattern" with ample explainer text.
+
+any questions?
+how will you handle the "roughly" simult button press timing given human factors and mesh factors?
+do we have room for this added code?
+
+
 
 ## Choreography Protocol
 
