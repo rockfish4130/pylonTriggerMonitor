@@ -200,8 +200,9 @@ uint16_t cfg_grp_qon_ms      = 66;    // quick-pulse on duration (ms)
 uint16_t cfg_grp_qoff_ms     = 66;    // quick-pulse off gap (ms)
 uint32_t cfg_grp_big_ms      = 600;   // big-pulse base duration; N-th burst = N × base (ms)
 uint16_t cfg_grp_gap_ms      = 300;   // gap between big pulses (ms)
-bool    cfg_mesh_en = true;      // enable ESP-NOW mesh
-uint8_t cfg_mesh_ch = 1;         // ESP-NOW channel (1-13)
+bool     cfg_mesh_en             = true;   // enable ESP-NOW mesh
+uint8_t  cfg_mesh_ch             = 1;      // ESP-NOW channel (1-13)
+uint32_t cfg_mesh_peer_timeout_ms = 8000;  // drop peer after N ms of silence
 bool   cfg_use_dhcp    = true;   // false = use static IP config below
 String cfg_static_ip   = "";     // static IPv4 address (e.g. "192.168.4.100")
 String cfg_static_gw   = "";     // default gateway
@@ -545,6 +546,7 @@ constexpr const char *kPrefsKeyStaticDns1    = "static_dns1";   // string; prima
 constexpr const char *kPrefsKeyStaticDns2    = "static_dns2";   // string; secondary DNS
 constexpr const char *kPrefsKeyMeshEn        = "mesh_en";        // bool; enable ESP-NOW mesh
 constexpr const char *kPrefsKeyMeshCh        = "mesh_ch";        // uint8; ESP-NOW channel (1-13)
+constexpr const char *kPrefsKeyMeshPeerToMs  = "mesh_peer_to_ms"; // uint32; peer timeout ms
 constexpr const char *kPrefsKeyDjTimeoutS    = "dj_to_s";        // float; DJ button timeout (s)
 constexpr const char *kPrefsKeyWifiConnS     = "wifi_conn_s";    // int; per-SSID WiFi connect timeout (s)
 constexpr const char *kPrefsKeyWifiReconnectS = "wifi_rc_s";     // int; WiFi reconnect interval (s) with live mesh peers
@@ -857,6 +859,7 @@ bool SavePylonConfig() {
   prefs.putString(kPrefsKeyStaticDns2,  cfg_static_dns2);
   prefs.putBool(kPrefsKeyMeshEn,        cfg_mesh_en);
   prefs.putUChar(kPrefsKeyMeshCh,       cfg_mesh_ch);
+  prefs.putUInt(kPrefsKeyMeshPeerToMs,  cfg_mesh_peer_timeout_ms);
   prefs.putFloat(kPrefsKeyDjTimeoutS,   cfg_dj_timeout_s);
   prefs.putInt(kPrefsKeyWifiConnS,       cfg_wifi_conn_s);
   prefs.putInt(kPrefsKeyWifiReconnectS,  cfg_wifi_reconnect_s);
@@ -974,6 +977,7 @@ void LoadPylonConfig() {
   cfg_static_dns2            = prefs.getString(kPrefsKeyStaticDns2,  "");
   cfg_mesh_en                = prefs.getBool(kPrefsKeyMeshEn,        true);
   cfg_mesh_ch                = (uint8_t)prefs.getUChar(kPrefsKeyMeshCh, 1);
+  cfg_mesh_peer_timeout_ms   = prefs.getUInt(kPrefsKeyMeshPeerToMs,  8000);
   cfg_dj_timeout_s           = prefs.getFloat(kPrefsKeyDjTimeoutS, 10.0f);
   cfg_wifi_conn_s            = prefs.getInt(kPrefsKeyWifiConnS, 5);
   if (cfg_wifi_conn_s < 1 || cfg_wifi_conn_s > 30) cfg_wifi_conn_s = 5;
@@ -1425,6 +1429,12 @@ bool SetConfigFieldValue(const String &field_in, const String &value_in, bool lo
     cfg_mesh_ch = (uint8_t)ch;
     changed = true;
     if (log_output) Console.printf("[CFG] mesh_ch set: %u (reboot to apply)\n", cfg_mesh_ch);
+  } else if (field == "mesh_peer_timeout_s") {
+    const float s = value.toFloat();
+    if (s < 4.0f || s > 120.0f) { if (log_output) Console.println("[CFG] mesh_peer_timeout_s out of range (4-120)"); return false; }
+    cfg_mesh_peer_timeout_ms = (uint32_t)(s * 1000.0f);
+    changed = true;
+    if (log_output) Console.printf("[CFG] mesh_peer_timeout_ms set: %u\n", cfg_mesh_peer_timeout_ms);
   } else if (field == "dj_timeout_s") {
     const float s = value.toFloat();
     if (s < 1.0f || s > 120.0f) { if (log_output) Console.println("[CFG] dj_timeout_s out of range (1-120s)"); return false; }
@@ -2465,6 +2475,7 @@ String BuildTelemetryApiJson() {
     payload += "\"enabled\":" + String(cfg_mesh_en ? "true" : "false") + ",";
     payload += "\"active\":" + String(mesh_initialized ? "true" : "false") + ",";
     payload += "\"channel\":" + String(cfg_mesh_ch) + ",";
+    payload += "\"peer_timeout_ms\":" + String(cfg_mesh_peer_timeout_ms) + ",";
     payload += "\"peer_count\":" + String(mesh_peer_count) + ",";
     payload += "\"beacons_sent\":" + String(mesh_beacons_sent) + ",";
     payload += "\"cmds_sent\":" + String(mesh_cmds_sent) + ",";
@@ -2762,6 +2773,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
             <span style="color:var(--muted);font-size:14px">Enable MESH &mdash; ESP-NOW peer-to-peer, no router required. Reboot to apply.</span>
           </div>
           <label style="font-size:14px">Channel (1&ndash;13) <input id="cfg-mesh-ch" type="number" min="1" max="13" step="1" style="width:60px"> <span style="color:var(--muted);font-size:12px">all nodes must match; avoid overlapping your AP channel</span></label>
+          <label style="font-size:14px">Peer timeout (s) <input id="cfg-mesh-peer-timeout-s" type="number" min="4" max="120" step="1" style="width:60px"> <span style="color:var(--muted);font-size:12px">drop a peer after this many seconds of silence; beacon interval is 2 s, so 8 s = 4 missed beacons (default)</span></label>
         </div>
         <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
           <button type="submit">Save Config</button>
@@ -3153,6 +3165,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       const meshEnBox = document.getElementById('cfg-mesh-en');
       if (meshEnBox && document.activeElement !== meshEnBox) meshEnBox.checked = !!(data.mesh && data.mesh.enabled);
       syncConfigField('cfg-mesh-ch', data.mesh ? (data.mesh.channel || 1) : 1);
+      syncConfigField('cfg-mesh-peer-timeout-s', data.mesh ? Math.round((data.mesh.peer_timeout_ms || 8000) / 1000) : 8);
       const disWrap = document.getElementById('cfg-btn-disable-wrap');
       if (disWrap) disWrap.style.display = barmodeActive ? 'flex' : 'none';
       if (barmodeActive && Array.isArray(data.btn_disabled)) {
@@ -3269,7 +3282,7 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       'cfg-temp-thresh1', 'cfg-temp-mult1', 'cfg-temp-thresh2', 'cfg-temp-mult2',
       'cfg-route-via-rpi', 'cfg-grp-pat-en',
       'cfg-grp-win-ms', 'cfg-grp-cool-s', 'cfg-grp-qon-ms', 'cfg-grp-qoff-ms', 'cfg-grp-big-ms', 'cfg-grp-gap-ms',
-      'cfg-mesh-en', 'cfg-mesh-ch', 'cfg-dj-timeout-s', 'cfg-wifi-reconnect-s',
+      'cfg-mesh-en', 'cfg-mesh-ch', 'cfg-mesh-peer-timeout-s', 'cfg-dj-timeout-s', 'cfg-wifi-reconnect-s',
       'mesh-ch-sel']
       .map((id) => document.getElementById(id))
       .filter(Boolean);
@@ -3383,6 +3396,8 @@ const char kWebUiHtml[] PROGMEM = R"HTML(
       body.set('mesh_en', document.getElementById('cfg-mesh-en').checked ? '1' : '0');
       const meshChVal = document.getElementById('cfg-mesh-ch').value.trim();
       if (meshChVal !== '') body.set('mesh_ch', meshChVal);
+      const meshPeerToVal = document.getElementById('cfg-mesh-peer-timeout-s').value.trim();
+      if (meshPeerToVal !== '') body.set('mesh_peer_timeout_s', meshPeerToVal);
       const seqMaxVal   = document.getElementById('cfg-seq-max-s').value.trim();
       if (seqMaxVal   !== '') body.set('seq_max_s',   seqMaxVal);
       const seqStartVal = document.getElementById('cfg-seq-start-ms').value.trim();
@@ -4309,8 +4324,9 @@ void HandleConfigPostApi() {
   const bool has_grp_qoff_ms     = webServer.hasArg("grp_qoff_ms");
   const bool has_grp_big_ms      = webServer.hasArg("grp_big_ms");
   const bool has_grp_gap_ms      = webServer.hasArg("grp_gap_ms");
-  const bool has_mesh_en         = webServer.hasArg("mesh_en");
-  const bool has_mesh_ch         = webServer.hasArg("mesh_ch");
+  const bool has_mesh_en              = webServer.hasArg("mesh_en");
+  const bool has_mesh_ch              = webServer.hasArg("mesh_ch");
+  const bool has_mesh_peer_timeout_s  = webServer.hasArg("mesh_peer_timeout_s");
   const bool has_dj_timeout_s    = webServer.hasArg("dj_timeout_s");
   const bool has_wifi_conn_s     = webServer.hasArg("wifi_conn_s");
   const bool has_wifi_reconnect_s = webServer.hasArg("wifi_reconnect_s");
@@ -4325,7 +4341,7 @@ void HandleConfigPostApi() {
       !has_no_thermistor && !has_no_batt_mon && !has_route_via_rpi &&
       !has_grp_pat_en && !has_grp_win_ms && !has_grp_cool_ms && !has_grp_qon_ms &&
       !has_grp_qoff_ms && !has_grp_big_ms && !has_grp_gap_ms &&
-      !has_mesh_en && !has_mesh_ch && !has_dj_timeout_s && !has_wifi_conn_s && !has_wifi_reconnect_s) {
+      !has_mesh_en && !has_mesh_ch && !has_mesh_peer_timeout_s && !has_dj_timeout_s && !has_wifi_conn_s && !has_wifi_reconnect_s) {
     SendApiError(400, "no recognized config field");
     return;
   }
@@ -4381,8 +4397,9 @@ void HandleConfigPostApi() {
   if (has_grp_qoff_ms)   ok = ok && SetConfigFieldValue("grp_qoff_ms",   webServer.arg("grp_qoff_ms"));
   if (has_grp_big_ms)    ok = ok && SetConfigFieldValue("grp_big_ms",    webServer.arg("grp_big_ms"));
   if (has_grp_gap_ms)    ok = ok && SetConfigFieldValue("grp_gap_ms",    webServer.arg("grp_gap_ms"));
-  if (has_mesh_en)       ok = ok && SetConfigFieldValue("mesh_en",        webServer.arg("mesh_en"));
-  if (has_mesh_ch)       ok = ok && SetConfigFieldValue("mesh_ch",            webServer.arg("mesh_ch"));
+  if (has_mesh_en)              ok = ok && SetConfigFieldValue("mesh_en",             webServer.arg("mesh_en"));
+  if (has_mesh_ch)              ok = ok && SetConfigFieldValue("mesh_ch",             webServer.arg("mesh_ch"));
+  if (has_mesh_peer_timeout_s)  ok = ok && SetConfigFieldValue("mesh_peer_timeout_s", webServer.arg("mesh_peer_timeout_s"));
   if (has_dj_timeout_s)  ok = ok && SetConfigFieldValue("dj_timeout_s",       webServer.arg("dj_timeout_s"));
   if (has_wifi_conn_s)      ok = ok && SetConfigFieldValue("wifi_conn_s",      webServer.arg("wifi_conn_s"));
   if (has_wifi_reconnect_s) ok = ok && SetConfigFieldValue("wifi_reconnect_s", webServer.arg("wifi_reconnect_s"));
@@ -7094,7 +7111,7 @@ static void MeshExpirePeers() {
   if (xSemaphoreTake(mesh_peers_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return;
   int live = 0;
   for (int i = 0; i < kMeshMaxPeers; i++) {
-    if (mesh_peers[i].active && now - mesh_peers[i].last_seen_ms > kMeshPeerTimeoutMs) {
+    if (mesh_peers[i].active && now - mesh_peers[i].last_seen_ms > cfg_mesh_peer_timeout_ms) {
       Console.printf("[Mesh] peer expired: %s\n", mesh_peers[i].node_id);
       mesh_peers[i].active = false;
     }
