@@ -8130,7 +8130,7 @@ void loop() {
         esp_netif_t *iface = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
         if (iface) esp_netif_set_hostname(iface, hn.c_str());
       }
-      if (ap_active && ap_auto_enabled) {
+      if (ap_active && ap_auto_enabled && !barmode_active) {
         // Auto-AP is pinning the radio to cfg_mesh_ch, preventing cross-channel scans.
         // Stop it briefly so STA can scan all channels. If not connected within 15s,
         // the probe-timeout block below restores AP on cfg_mesh_ch.
