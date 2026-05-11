@@ -115,6 +115,10 @@ In AP-only mode `WIFI_IF_STA` is unassociated — ESP-NOW through it is silently
 - Main loop watchdog: `WiFi.reconnect()` every 30 s when no live peers; every **10 minutes** when live peers are present (brief ~5–10 s ESP-NOW disruption is acceptable vs. permanent WiFi loss).
 - After 10 min offline with AP inactive: hard reboot. AP-active nodes (barbar) never auto-reboot.
 
+**WiFi probe (non-barmode nodes only):** When `ap_auto_enabled && ap_active && !barmode_active` at reconnect time, the node stops the AP temporarily, calls `WiFi.begin()`, and waits 15 s. On success: `ap_auto_enabled` cleared, node stays on WiFi. On timeout: AP restored on `cfg_mesh_ch`. Probe fires at every reconnect interval until WAP is found.
+
+**Barmode reconnect (BARBAR):** Barmode nodes skip the probe — their AP must never go down. Instead the watchdog calls `WiFi.mode(WIFI_AP_STA)` + `WiFi.begin()` to re-enable the STA interface without stopping the AP (`SetupApMode()` sets `WIFI_MODE_AP` when STA is not connected, which disables STA — so `WiFi.reconnect()` alone is a no-op). The `GOT_IP` handler has a `!barmode_active` guard so the AP is not torn down on successful rejoin. Validated in hardware: `GOT_IP — auto_ap=1 active=1` with `ap_active=1` confirmed post-rejoin (commit `2aa7ee6`, test log in `docs/TEST_WIFI_REJOIN.md`).
+
 **Receive callback** `MeshOnRecv` runs in WiFi task (Core 0). OSC commands are queued via `mesh_osc_queue` (FreeRTOS queue) for processing on Core 1. Do not block in the callback.
 
 **Peer registration:** `esp_now_add_peer()` must be called before unicast. Broadcast peer uses MAC `FF:FF:FF:FF:FF:FF` with `channel=0`. Done in `MeshUpsertPeer` and mesh init.
