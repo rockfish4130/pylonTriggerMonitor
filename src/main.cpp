@@ -5095,7 +5095,8 @@ void setup() {
         Console.printf("[WiFi] GOT_IP — auto_ap=%d active=%d\n", ap_auto_enabled, ap_active);
         // If AP was auto-started because WiFi was unavailable, tear it down now
         // that STA has an IP. Manually-enabled AP (ap_auto_enabled==false) is left alone.
-        if (ap_auto_enabled && ap_active) {
+        // Barmode nodes keep their AP permanently; skip teardown for them.
+        if (ap_auto_enabled && ap_active && !barmode_active) {
           ap_auto_enabled = false;
           ap_enabled = false;
           // StopApMode() touches WiFi mode — call from main loop via flag instead.
@@ -8142,8 +8143,15 @@ void loop() {
         wifi_ap_probe_active    = true;
         wifi_ap_probe_start_ms  = now;
       } else {
-        WiFi.reconnect();
-        // Re-init ESP-NOW so the broadcast peer is registered after any WiFi.reconnect().
+        if (ap_active) {
+          // SetupApMode() uses WIFI_AP when STA is not connected, disabling the STA
+          // interface. WiFi.reconnect() is a no-op in that state. Switch to AP+STA
+          // and call WiFi.begin() to re-enable STA without tearing down the AP.
+          WiFi.mode(WIFI_AP_STA);
+          WiFi.begin(BOOSH_WIFI_SSID_LL, BOOSH_WIFI_PASS_LL);
+        } else {
+          WiFi.reconnect();
+        }
         if (ap_active && cfg_mesh_en) {
           Console.println("[Mesh] reconnect — re-init ESP-NOW (no AP restart)");
           MeshInit();
