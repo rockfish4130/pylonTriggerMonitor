@@ -74,6 +74,46 @@ Fix: added `&& !barmode_active` guard to probe condition (`8120680`).
 
 ---
 
+## Test Performed — 2026-05-10 (Round 2) — Barmode AP Preservation
+
+### Firmware Under Test
+
+| Commit | Description |
+|---|---|
+| `8120680` | Barmode probe guard |
+| `2aa7ee6` | Reconnect watchdog: `WIFI_AP_STA`+`WiFi.begin()` for AP-active nodes; `!barmode_active` guard in GOT_IP handler |
+
+### What Was Tested
+
+BARBAR-specific path: boot with WAP down → auto-AP starts → reconnect watchdog fires repeatedly
+→ WAP comes back → `GOT_IP — auto_ap=1 active=1` → AP must survive.
+
+Two bugs were discovered and fixed iteratively during this session:
+
+**Bug 1** (`8120680` → `2aa7ee6`): Reconnect watchdog called `WiFi.reconnect()` for barmode nodes.
+`SetupApMode()` sets `WIFI_AP` (not `WIFI_AP_STA`) when STA is disconnected, disabling the STA
+interface entirely. `WiFi.reconnect()` is a no-op with no STA. Fix: switch to `WIFI_AP_STA` +
+`WiFi.begin()` when `ap_active`.
+
+**Bug 2** (`2aa7ee6`): `ARDUINO_EVENT_WIFI_STA_GOT_IP` handler cleared `ap_enabled` when
+`ap_auto_enabled && ap_active` — correct for regular nodes, wrong for barmode. Fix: added
+`!barmode_active` guard.
+
+### Results
+
+```
+[WiFi] Offline 463s — reconnect attempt (peers=4 ap=1).
+[WiFi] GOT_IP — auto_ap=1 active=1
+WiFi connected: mDNS/OSC/web restarted (ap_active=1 ap_auto=1)
+```
+
+`ap_active=1` confirmed after rejoin with `auto_ap=1` at GOT_IP — the exact previously-failing
+path. BARBAR reachable on LavaLounge at uptime 8:08 with `ap=true`.
+
+**PASS** — Gap #1 fully closed.
+
+---
+
 ## Test Capabilities — What Claude Can Do
 
 During a structured hardware/firmware test, Claude can perform the following without prompting:
